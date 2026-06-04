@@ -5,12 +5,13 @@
 This repository is a Rust workspace with a Next.js BI dashboard and mdBook docs.
 Keep code in the crate or package that owns the concern:
 
-- `crates/liquid-cli`: process startup and CLI binary (`liquid`).
-- `crates/liquid-api`: Axum routes, API state, HTTP server composition.
-- `crates/liquid-config`: environment-backed configuration.
-- `crates/liquid-core`: shared domain and transport types.
-- `crates/liquid-agent`: SQL AI audit agent traits and implementations.
-- `crates/liquid-storage`: Postgres and SQLx storage integration.
+- `liquid-cli`: process startup and CLI binary (`liquid`).
+- `liquid-api`: Axum routes, API state, HTTP server composition.
+- `liquid-config`: environment-backed configuration.
+- `liquid-core`: shared domain and transport types.
+- `liquid-agent`: SQL AI audit agent traits and implementations.
+- `liquid-llm`: OpenAI-compatible LLM client abstractions.
+- `liquid-storage`: Postgres and SQLx storage integration.
 - `liquid-ui/`: Bun-managed Next.js + TypeScript + Tailwind + shadcn/ui + Recharts frontend.
 - `docs/`: mdBook sources under `docs/src`.
 
