@@ -1,0 +1,17 @@
+[package]
+name = "liquid-cli"
+version.workspace = true
+edition.workspace = true
+
+[[bin]]
+name = "liquid"
+path = "src/main.rs"
+
+[dependencies]
+anyhow.workspace = true
+liquid-agent = { path = "../liquid-agent" }
+liquid-api = { path = "../liquid-api" }
+liquid-config = { path = "../liquid-config" }
+tokio.workspace = true
+tracing.workspace = true
+tracing-subscriber.workspace = true

@@ -1,0 +1,17 @@
+[package]
+name = "liquid-api"
+version.workspace = true
+edition.workspace = true
+
+[dependencies]
+anyhow.workspace = true
+axum.workspace = true
+liquid-agent = { path = "../liquid-agent" }
+liquid-config = { path = "../liquid-config" }
+liquid-core = { path = "../liquid-core" }
+serde.workspace = true
+tokio.workspace = true
+
+[dev-dependencies]
+serde_json.workspace = true
+tower = { workspace = true, features = ["util"] }
