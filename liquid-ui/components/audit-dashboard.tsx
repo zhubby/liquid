@@ -1,8 +1,10 @@
 "use client";
 
-import { useCallback, useEffect, useMemo, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import LiquidGlass from "liquid-glass-react";
 import {
   AlertTriangle,
+  CalendarDays,
   Clock3,
   Database,
   Gauge,
@@ -79,16 +81,27 @@ const fallbackSummary: AuditSummary = {
 };
 
 const riskColors: Record<RiskSeverity, string> = {
-  low: "#4d7c57",
-  medium: "#d19a35",
-  high: "#c85d38",
-  critical: "#a83232",
+  low: "var(--accent-mint)",
+  medium: "var(--warning)",
+  high: "var(--danger)",
+  critical: "var(--critical)",
+};
+
+const chartColors = {
+  audited: "var(--primary)",
+  flagged: "var(--danger)",
+  grid: "var(--border)",
+  text: "var(--muted-foreground)",
+  tooltipBackground: "var(--glass-fill-strong)",
+  tooltipBorder: "var(--glass-border)",
+  tooltipText: "var(--foreground)",
 };
 
 const apiBaseUrl =
   process.env.NEXT_PUBLIC_API_BASE_URL ?? "http://localhost:3001";
 
 export function AuditDashboard() {
+  const [nativeGlassReady, setNativeGlassReady] = useState(false);
   const [summary, setSummary] = useState<AuditSummary>(fallbackSummary);
   const [status, setStatus] = useState<"loading" | "live" | "offline">(
     "loading",
@@ -121,6 +134,10 @@ export function AuditDashboard() {
     void loadSummary();
   }, [loadSummary]);
 
+  useEffect(() => {
+    setNativeGlassReady(true);
+  }, []);
+
   const flaggedRate = useMemo(
     () =>
       summary.total_queries === 0
@@ -130,39 +147,50 @@ export function AuditDashboard() {
   );
 
   return (
-    <main className="min-h-screen px-4 py-6 sm:px-6 lg:px-8">
-      <div className="mx-auto flex max-w-7xl flex-col gap-6">
-        <header className="flex flex-col gap-4 border-b pb-5 sm:flex-row sm:items-center sm:justify-between">
-          <div>
-            <div className="flex items-center gap-2">
-              <ShieldCheck className="h-7 w-7 text-primary" aria-hidden />
-              <h1 className="text-2xl font-semibold tracking-normal">
-                Liquid SQL Audit
-              </h1>
-            </div>
-            <p className="mt-2 max-w-3xl text-sm text-muted-foreground">
-              AI audit telemetry and BI controls for SQL governance.
-            </p>
+    <main className="liquid-environment min-h-screen px-4 py-4 sm:px-6 lg:px-8">
+      <div className="mx-auto flex max-w-7xl flex-col gap-5 pb-8">
+        <header className="sticky top-4 z-20 rounded-2xl">
+          <div
+            className="invisible flex flex-col gap-3 px-4 py-3 sm:flex-row sm:items-center sm:justify-between"
+            aria-hidden
+          >
+            <DashboardHeaderContent
+              handleRefresh={handleRefresh}
+              status={status}
+            />
           </div>
-          <div className="flex items-center gap-2">
-            <Badge
-              className={
-                status === "live"
-                  ? "border-primary/30 bg-primary/10 text-primary"
-                  : "border-secondary/40 bg-secondary/20 text-secondary-foreground"
-              }
+
+          {nativeGlassReady ? (
+            <LiquidGlass
+              className="native-liquid-header w-full"
+              style={{
+                position: "absolute",
+                top: "50%",
+                left: "50%",
+                width: "100%",
+              }}
+              padding="12px 16px"
+              cornerRadius={20}
+              displacementScale={46}
+              blurAmount={0.03}
+              saturation={155}
+              aberrationIntensity={1.8}
+              elasticity={0.18}
+              mode="prominent"
             >
-              {status === "live"
-                ? "Live API"
-                : status === "loading"
-                  ? "Loading"
-                  : "Mock data"}
-            </Badge>
-            <Button variant="outline" onClick={handleRefresh}>
-              <RefreshCcw className="h-4 w-4" aria-hidden />
-              Refresh
-            </Button>
-          </div>
+              <DashboardHeaderContent
+                handleRefresh={handleRefresh}
+                status={status}
+              />
+            </LiquidGlass>
+          ) : (
+            <div className="liquid-bar absolute inset-0 rounded-2xl px-4 py-3">
+              <DashboardHeaderContent
+                handleRefresh={handleRefresh}
+                status={status}
+              />
+            </div>
+          )}
         </header>
 
         <section className="grid gap-4 md:grid-cols-2 xl:grid-cols-4">
@@ -171,6 +199,7 @@ export function AuditDashboard() {
             label="Audited queries"
             value={summary.total_queries.toLocaleString()}
             tone="primary"
+            nativeGlassReady={nativeGlassReady}
           />
           <MetricCard
             icon={<AlertTriangle className="h-5 w-5" aria-hidden />}
@@ -178,12 +207,14 @@ export function AuditDashboard() {
             value={summary.flagged_queries.toLocaleString()}
             detail={`${flaggedRate.toFixed(1)}% flag rate`}
             tone="warning"
+            nativeGlassReady={nativeGlassReady}
           />
           <MetricCard
             icon={<Gauge className="h-5 w-5" aria-hidden />}
             label="Audit score"
             value={`${summary.audit_score}/100`}
             tone="success"
+            nativeGlassReady={nativeGlassReady}
           />
           <MetricCard
             icon={<Clock3 className="h-5 w-5" aria-hidden />}
@@ -191,72 +222,77 @@ export function AuditDashboard() {
             value={`${summary.average_latency_ms.toFixed(1)} ms`}
             detail={`${summary.high_risk_queries} high risk`}
             tone="danger"
+            nativeGlassReady={nativeGlassReady}
           />
         </section>
 
         <section className="grid gap-4 xl:grid-cols-[1.6fr_1fr]">
-          <Card>
+          <NativeGlassCard nativeGlassReady={nativeGlassReady}>
             <CardHeader>
-              <CardTitle>Audit Volume</CardTitle>
+              <CardTitle className="text-foreground">Audit Volume</CardTitle>
             </CardHeader>
             <CardContent>
               <div className="h-72">
                 <ResponsiveContainer width="100%" height="100%">
                   <LineChart data={summary.trend}>
-                    <CartesianGrid stroke="#ded7cc" vertical={false} />
+                    <CartesianGrid stroke={chartColors.grid} vertical={false} />
                     <XAxis
                       dataKey="day"
                       tickLine={false}
                       axisLine={false}
-                      tick={{ fill: "#6e675e", fontSize: 12 }}
+                      tick={{ fill: chartColors.text, fontSize: 12 }}
                     />
                     <YAxis
                       tickLine={false}
                       axisLine={false}
-                      tick={{ fill: "#6e675e", fontSize: 12 }}
+                      tick={{ fill: chartColors.text, fontSize: 12 }}
                       width={48}
                     />
                     <Tooltip
                       contentStyle={{
                         borderRadius: 8,
-                        borderColor: "#ded7cc",
-                        color: "#1d1b18",
+                        background: chartColors.tooltipBackground,
+                        borderColor: chartColors.tooltipBorder,
+                        boxShadow: "var(--glass-shadow)",
+                        color: chartColors.tooltipText,
                       }}
+                      labelStyle={{ color: chartColors.tooltipText }}
+                      itemStyle={{ color: chartColors.tooltipText }}
                     />
                     <Line
                       type="monotone"
                       dataKey="audited"
-                      stroke="#2f5d50"
-                      strokeWidth={3}
+                      stroke={chartColors.audited}
+                      strokeWidth={2.5}
                       dot={false}
                     />
                     <Line
                       type="monotone"
                       dataKey="flagged"
-                      stroke="#b6403a"
-                      strokeWidth={3}
+                      stroke={chartColors.flagged}
+                      strokeWidth={2.5}
                       dot={false}
                     />
                   </LineChart>
                 </ResponsiveContainer>
               </div>
             </CardContent>
-          </Card>
+          </NativeGlassCard>
 
-          <Card>
+          <NativeGlassCard nativeGlassReady={nativeGlassReady}>
             <CardHeader>
-              <CardTitle>Risk Breakdown</CardTitle>
+              <CardTitle className="text-foreground">Risk Breakdown</CardTitle>
             </CardHeader>
             <CardContent>
               <div className="h-72">
                 <ResponsiveContainer width="100%" height="100%">
                   <BarChart data={summary.risk_breakdown} layout="vertical">
-                    <CartesianGrid stroke="#ded7cc" horizontal={false} />
+                    <CartesianGrid stroke={chartColors.grid} horizontal={false} />
                     <XAxis
                       type="number"
                       tickLine={false}
                       axisLine={false}
-                      tick={{ fill: "#6e675e", fontSize: 12 }}
+                      tick={{ fill: chartColors.text, fontSize: 12 }}
                     />
                     <YAxis
                       dataKey="label"
@@ -264,14 +300,18 @@ export function AuditDashboard() {
                       width={118}
                       tickLine={false}
                       axisLine={false}
-                      tick={{ fill: "#6e675e", fontSize: 12 }}
+                      tick={{ fill: chartColors.text, fontSize: 12 }}
                     />
                     <Tooltip
                       contentStyle={{
                         borderRadius: 8,
-                        borderColor: "#ded7cc",
-                        color: "#1d1b18",
+                        background: chartColors.tooltipBackground,
+                        borderColor: chartColors.tooltipBorder,
+                        boxShadow: "var(--glass-shadow)",
+                        color: chartColors.tooltipText,
                       }}
+                      labelStyle={{ color: chartColors.tooltipText }}
+                      itemStyle={{ color: chartColors.tooltipText }}
                     />
                     <Bar dataKey="count" radius={[0, 6, 6, 0]}>
                       {summary.risk_breakdown.map((entry) => (
@@ -285,10 +325,77 @@ export function AuditDashboard() {
                 </ResponsiveContainer>
               </div>
             </CardContent>
-          </Card>
+          </NativeGlassCard>
         </section>
       </div>
     </main>
+  );
+}
+
+function DashboardHeaderContent({
+  handleRefresh,
+  status,
+}: {
+  handleRefresh: () => void;
+  status: "loading" | "live" | "offline";
+}) {
+  return (
+    <div className="flex w-full flex-col gap-3 text-foreground sm:flex-row sm:items-center sm:justify-between">
+      <div className="flex min-w-0 items-center gap-3">
+        <div className="metric-icon metric-primary shrink-0">
+          <ShieldCheck className="h-5 w-5" aria-hidden />
+        </div>
+        <div className="min-w-0">
+          <h1 className="truncate text-2xl font-semibold tracking-normal">
+            Liquid SQL Audit
+          </h1>
+          <p className="truncate text-sm text-muted-foreground">
+            SQL governance telemetry and BI controls
+          </p>
+        </div>
+      </div>
+      <div className="flex flex-wrap items-center gap-2">
+        <div className="liquid-button inline-flex h-9 items-center gap-2 rounded-full px-3 text-sm text-muted-foreground">
+          <CalendarDays className="h-4 w-4 text-primary" aria-hidden />
+          Last 7 days
+        </div>
+        <StatusBadge status={status} />
+        <Button
+          variant="liquid"
+          size="icon"
+          onClick={handleRefresh}
+          aria-label="Refresh audit summary"
+        >
+          <RefreshCcw
+            className={`h-4 w-4 ${status === "loading" ? "animate-spin" : ""}`}
+            aria-hidden
+          />
+        </Button>
+      </div>
+    </div>
+  );
+}
+
+function StatusBadge({
+  status,
+}: {
+  status: "loading" | "live" | "offline";
+}) {
+  const statusClass = {
+    live: "status-live",
+    loading: "status-loading",
+    offline: "status-offline",
+  }[status];
+
+  return (
+    <Badge className={`status-badge ${statusClass}`}>
+      <span className="h-1.5 w-1.5 rounded-full bg-current" aria-hidden />
+      {status === "live"
+        ? "Live API"
+        : status === "loading"
+          ? "Loading"
+          : "Mock data"}
+    </Badge>
   );
 }
 
@@ -298,21 +405,29 @@ type MetricCardProps = {
   value: string;
   detail?: string;
   tone: "primary" | "warning" | "success" | "danger";
+  nativeGlassReady: boolean;
 };
 
-function MetricCard({ icon, label, value, detail, tone }: MetricCardProps) {
+function MetricCard({
+  icon,
+  label,
+  value,
+  detail,
+  tone,
+  nativeGlassReady,
+}: MetricCardProps) {
   const tones = {
-    primary: "bg-primary/10 text-primary",
-    warning: "bg-secondary/30 text-secondary-foreground",
-    success: "bg-emerald-100 text-emerald-800",
-    danger: "bg-red-100 text-red-800",
+    primary: "metric-primary",
+    warning: "metric-warning",
+    success: "metric-success",
+    danger: "metric-danger",
   };
 
   return (
-    <Card>
+    <NativeGlassCard nativeGlassReady={nativeGlassReady}>
       <CardHeader className="flex-row items-center justify-between gap-4">
         <CardTitle>{label}</CardTitle>
-        <div className={`rounded-md p-2 ${tones[tone]}`}>{icon}</div>
+        <div className={`metric-icon ${tones[tone]}`}>{icon}</div>
       </CardHeader>
       <CardContent>
         <div className="text-3xl font-semibold tracking-normal">{value}</div>
@@ -320,6 +435,45 @@ function MetricCard({ icon, label, value, detail, tone }: MetricCardProps) {
           <div className="mt-2 text-sm text-muted-foreground">{detail}</div>
         ) : null}
       </CardContent>
-    </Card>
+    </NativeGlassCard>
+  );
+}
+
+function NativeGlassCard({
+  children,
+  nativeGlassReady,
+}: {
+  children: React.ReactNode;
+  nativeGlassReady: boolean;
+}) {
+  const containerRef = useRef<HTMLDivElement>(null);
+
+  return (
+    <div ref={containerRef} className="native-glass-card-shell relative">
+      {nativeGlassReady ? (
+        <LiquidGlass
+          className="native-liquid-card pointer-events-none absolute h-full w-full"
+          style={{
+            position: "absolute",
+            top: "50%",
+            left: "50%",
+            width: "100%",
+            height: "100%",
+          }}
+          mouseContainer={containerRef}
+          padding="0"
+          cornerRadius={8}
+          displacementScale={32}
+          blurAmount={0.025}
+          saturation={150}
+          aberrationIntensity={1.35}
+          elasticity={0.08}
+          mode="standard"
+        >
+          <span aria-hidden />
+        </LiquidGlass>
+      ) : null}
+      <Card className="glass-data-card relative z-10">{children}</Card>
+    </div>
   );
 }
