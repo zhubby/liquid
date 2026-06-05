@@ -1,0 +1,8 @@
+[package]
+name = "liquid-sql"
+version.workspace = true
+edition.workspace = true
+
+[dependencies]
+pg_query.workspace = true
+serde.workspace = true

@@ -6,14 +6,16 @@ use async_trait::async_trait;
 use futures_core::Stream;
 use liquid_core::{AuditSummary, RiskSeverity};
 use liquid_llm::{LlmClient, LlmMessage, LlmProtocol, LlmRequest, ToolCall, ToolDefinition};
+use liquid_sql::{PgSqlAnalysisRequest, PgSqlFinding, PgSqlRiskSeverity, analyze_postgres_sql};
 use serde::{Deserialize, Serialize};
 use serde_json::{Value, json};
 
 const DEFAULT_MAX_TOOL_ROUNDS: usize = 6;
 
 const SQL_AUDIT_SYSTEM_PROMPT: &str = r#"You are Liquid's SQL audit agent.
-Audit SQL for data safety, governance, operational risk, and performance risk.
-Use available tools when they can improve the audit.
+Audit PostgreSQL for data safety, governance, operational risk, and performance risk.
+Use inspect_sql_risk for deterministic PostgreSQL parser and AST rule findings.
+Treat tool output as factual evidence: do not override parse errors, statement classifications, missing WHERE checks, destructive DDL classifications, or other deterministic rule results.
 Return the final answer as JSON only with this shape:
 {
   "summary": "short operational summary",
@@ -172,13 +174,13 @@ impl AgentTool for SqlRiskInspectionTool {
     fn definition(&self) -> ToolDefinition {
         ToolDefinition::new(
             "inspect_sql_risk",
-            "Inspect SQL text for static audit risk signals.",
+            "Inspect PostgreSQL SQL text for deterministic parser and AST risk findings.",
             json!({
                 "type": "object",
                 "properties": {
                     "sql": {
                         "type": "string",
-                        "description": "The SQL statement or script to inspect."
+                        "description": "The PostgreSQL statement or script to inspect."
                     }
                 },
                 "required": ["sql"],
@@ -194,67 +196,16 @@ impl AgentTool for SqlRiskInspectionTool {
             .map(str::trim)
             .filter(|sql| !sql.is_empty())
             .ok_or_else(|| anyhow!("inspect_sql_risk requires a non-empty sql argument"))?;
-        let lowered = sql.to_ascii_lowercase();
-        let mut signals = Vec::new();
-        let mut score = 0_u8;
-
-        if contains_any(&lowered, &[" drop ", " drop\n", "truncate ", " alter "]) {
-            score = score.max(95);
-            signals.push(json!({
-                "label": "destructive_ddl",
-                "severity": "critical",
-                "detail": "SQL appears to include DDL or destructive table operations."
-            }));
-        }
-
-        if starts_with_keyword(&lowered, "delete") && !lowered.contains(" where ") {
-            score = score.max(85);
-            signals.push(json!({
-                "label": "delete_without_where",
-                "severity": "critical",
-                "detail": "DELETE statement does not appear to include a WHERE clause."
-            }));
-        }
-
-        if starts_with_keyword(&lowered, "update") && !lowered.contains(" where ") {
-            score = score.max(80);
-            signals.push(json!({
-                "label": "update_without_where",
-                "severity": "high",
-                "detail": "UPDATE statement does not appear to include a WHERE clause."
-            }));
-        }
-
-        if lowered.contains("select *") {
-            score = score.max(45);
-            signals.push(json!({
-                "label": "select_all",
-                "severity": "medium",
-                "detail": "SELECT * can expose unnecessary columns and increase scan cost."
-            }));
-        }
-
-        if starts_with_keyword(&lowered, "select") && !lowered.contains(" where ") {
-            score = score.max(35);
-            signals.push(json!({
-                "label": "unbounded_scan",
-                "severity": "low",
-                "detail": "SELECT statement does not appear to include a WHERE clause."
-            }));
-        }
-
-        if lowered.contains(" join ") && !lowered.contains(" on ") && !lowered.contains(" using ") {
-            score = score.max(60);
-            signals.push(json!({
-                "label": "join_without_predicate",
-                "severity": "medium",
-                "detail": "JOIN does not appear to include ON or USING."
-            }));
-        }
+        let analysis = analyze_postgres_sql(PgSqlAnalysisRequest::new(sql));
 
         Ok(ToolOutput::json(json!({
-            "risk_score": score,
-            "signals": signals,
+            "dialect": "postgresql",
+            "parse_ok": analysis.parse_ok(),
+            "statement_count": analysis.statements.len(),
+            "statements": analysis.statements,
+            "findings": analysis.findings,
+            "parse_error": analysis.parse_error,
+            "risk_floor": analysis.risk_floor(),
         })))
     }
 }
@@ -391,31 +342,9 @@ impl SqlAuditAgent for MockSqlAuditAgent {
     }
 
     async fn audit_sql(&self, request: SqlAuditRequest) -> Result<SqlAuditReport> {
-        let lowered = request.sql.to_ascii_lowercase();
-        let mut findings = Vec::new();
-        let mut risk_score = 10;
-
-        if lowered.contains("select *") {
-            risk_score = risk_score.max(40);
-            findings.push(SqlAuditFinding {
-                title: "Broad column selection".to_owned(),
-                severity: RiskSeverity::Medium,
-                explanation: "The query selects all columns, which can expose unnecessary data."
-                    .to_owned(),
-                recommendation: "Select only the columns required by the BI workflow.".to_owned(),
-            });
-        }
-
-        if contains_any(&lowered, &[" drop ", "truncate ", "delete "]) {
-            risk_score = risk_score.max(85);
-            findings.push(SqlAuditFinding {
-                title: "Potential destructive operation".to_owned(),
-                severity: RiskSeverity::High,
-                explanation: "The SQL includes a mutation or destructive keyword.".to_owned(),
-                recommendation: "Require explicit approval and confirm the target scope."
-                    .to_owned(),
-            });
-        }
+        let analysis = analyze_postgres_sql(PgSqlAnalysisRequest::new(request.sql));
+        let risk_score = analysis.risk_floor().max(10);
+        let findings = analysis.findings.iter().map(mock_finding_from_pg).collect();
 
         Ok(SqlAuditReport {
             summary: "Mock SQL audit completed.".to_owned(),
@@ -499,15 +428,38 @@ fn fenced_json(content: &str) -> Option<&str> {
     Some(json_start[..end].trim())
 }
 
-fn contains_any(value: &str, needles: &[&str]) -> bool {
-    let padded = format!(" {value} ");
-    needles.iter().any(|needle| padded.contains(needle))
+fn mock_finding_from_pg(finding: &PgSqlFinding) -> SqlAuditFinding {
+    SqlAuditFinding {
+        title: finding.title.clone(),
+        severity: risk_severity_from_pg(&finding.severity),
+        explanation: finding.detail.clone(),
+        recommendation: recommendation_for_rule(&finding.rule_id).to_owned(),
+    }
 }
 
-fn starts_with_keyword(value: &str, keyword: &str) -> bool {
-    value
-        .trim_start_matches(|character: char| character.is_ascii_whitespace() || character == '(')
-        .starts_with(keyword)
+fn risk_severity_from_pg(severity: &PgSqlRiskSeverity) -> RiskSeverity {
+    match severity {
+        PgSqlRiskSeverity::Low => RiskSeverity::Low,
+        PgSqlRiskSeverity::Medium => RiskSeverity::Medium,
+        PgSqlRiskSeverity::High => RiskSeverity::High,
+        PgSqlRiskSeverity::Critical => RiskSeverity::Critical,
+    }
+}
+
+fn recommendation_for_rule(rule_id: &str) -> &'static str {
+    match rule_id {
+        "parse_error" => "Fix the PostgreSQL syntax before risk review.",
+        "delete_without_where" | "update_without_where" | "tautological_where" => {
+            "Add a selective predicate or split the write into a reviewed migration."
+        }
+        "destructive_drop" | "destructive_truncate" | "dangerous_alter_table" => {
+            "Require explicit approval, maintenance timing, and rollback planning."
+        }
+        "select_star" => "Select only the columns required by the workflow.",
+        "join_without_qualification" => "Add an explicit ON or USING condition.",
+        "insert_values_row_limit" => "Batch the insert or use a controlled bulk-load path.",
+        _ => "Review this deterministic PostgreSQL risk finding before execution.",
+    }
 }
 
 #[cfg(test)]
@@ -653,6 +605,35 @@ mod tests {
             .unwrap_err();
 
         assert!(error.to_string().contains("maximum tool rounds"));
+    }
+
+    #[tokio::test]
+    async fn inspect_sql_risk_returns_postgresql_deterministic_findings() {
+        let output = SqlRiskInspectionTool
+            .execute(json!({
+                "sql": "delete from users"
+            }))
+            .await
+            .unwrap();
+        let payload: Value = serde_json::from_str(&output.content).unwrap();
+
+        assert_eq!(payload["dialect"], "postgresql");
+        assert_eq!(payload["parse_ok"], true);
+        assert_eq!(payload["statement_count"], 1);
+        assert_eq!(payload["risk_floor"], 95);
+        assert_eq!(payload["findings"][0]["rule_id"], "delete_without_where");
+    }
+
+    #[tokio::test]
+    async fn mock_agent_uses_deterministic_sql_findings() {
+        let report = MockSqlAuditAgent
+            .audit_sql(SqlAuditRequest::new("select * from users"))
+            .await
+            .unwrap();
+
+        assert_eq!(report.risk_score, 50);
+        assert_eq!(report.findings[0].title, "Broad column projection");
+        assert_eq!(report.findings[0].severity, RiskSeverity::Medium);
     }
 
     #[test]
