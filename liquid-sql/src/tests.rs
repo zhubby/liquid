@@ -381,6 +381,43 @@ async fn metadata_flags_plan_cost_and_rows() {
 }
 
 #[tokio::test]
+async fn metadata_flags_high_estimated_write_rows_only_for_write_statements() {
+    let mut statement = PgSqlStatementMetadata::new(0);
+    statement.plan = Some(PgSqlPlanMetadata {
+        statement_index: 0,
+        total_cost: 10_000.0,
+        plan_rows: 250_000,
+        nodes: Vec::new(),
+    });
+
+    let update = analyze_with_statement_metadata(
+        "update users set role = 'member' where active",
+        statement.clone(),
+    )
+    .await;
+    let delete =
+        analyze_with_statement_metadata("delete from users where inactive", statement.clone())
+            .await;
+    let insert_select = analyze_with_statement_metadata(
+        "insert into archived_users select * from users",
+        statement.clone(),
+    )
+    .await;
+    let insert_values = analyze_with_statement_metadata(
+        "insert into users(id) values (1), (2), (3)",
+        statement.clone(),
+    )
+    .await;
+    let select = analyze_with_statement_metadata("select id from users", statement).await;
+
+    assert!(has_rule(&update, "high_estimated_write_rows"));
+    assert!(has_rule(&delete, "high_estimated_write_rows"));
+    assert!(has_rule(&insert_select, "high_estimated_write_rows"));
+    assert!(!has_rule(&insert_values, "high_estimated_write_rows"));
+    assert!(!has_rule(&select, "high_estimated_write_rows"));
+}
+
+#[tokio::test]
 async fn metadata_flags_duplicate_and_invalid_indexes() {
     let mut statement = PgSqlStatementMetadata::new(0);
     statement.relations.push(relation(42, "public", "users"));
@@ -406,6 +443,89 @@ async fn metadata_flags_duplicate_and_invalid_indexes() {
 
     assert!(has_rule(&analysis, "duplicate_index"));
     assert!(has_rule(&analysis, "index_not_ready"));
+}
+
+#[tokio::test]
+async fn metadata_flags_protective_constraint_drops_and_large_table_validation() {
+    let mut statement = PgSqlStatementMetadata::new(0);
+    statement.relations.push(relation(42, "public", "users"));
+    statement.constraints.push(PgSqlConstraintMetadata {
+        relation_oid: 42,
+        name: "users_org_id_fkey".to_owned(),
+        kind: "f".to_owned(),
+        columns: vec!["org_id".to_owned()],
+        is_validated: true,
+        definition: Some("FOREIGN KEY (org_id) REFERENCES orgs(id)".to_owned()),
+    });
+
+    let drop = analyze_with_statement_metadata(
+        "alter table users drop constraint users_org_id_fkey",
+        statement.clone(),
+    )
+    .await;
+    let validate = analyze_with_statement_metadata(
+        "alter table users validate constraint users_org_id_fkey",
+        statement.clone(),
+    )
+    .await;
+    let set_not_null = analyze_with_statement_metadata(
+        "alter table users alter column org_id set not null",
+        statement,
+    )
+    .await;
+
+    assert!(has_rule(&drop, "drop_protective_constraint"));
+    assert!(has_rule(&validate, "large_table_schema_validation"));
+    assert!(has_rule(&set_not_null, "large_table_schema_validation"));
+}
+
+#[tokio::test]
+async fn metadata_flags_foreign_key_without_covering_index_on_large_tables() {
+    let mut statement = PgSqlStatementMetadata::new(0);
+    statement.relations.push(relation(42, "public", "users"));
+    statement.constraints.push(PgSqlConstraintMetadata {
+        relation_oid: 42,
+        name: "users_org_id_fkey".to_owned(),
+        kind: "f".to_owned(),
+        columns: vec!["org_id".to_owned(), "team_id".to_owned()],
+        is_validated: true,
+        definition: Some("FOREIGN KEY (org_id, team_id) REFERENCES teams(org_id, id)".to_owned()),
+    });
+
+    let missing =
+        analyze_with_statement_metadata("select id from users where org_id = 1", statement.clone())
+            .await;
+
+    statement.indexes.push(PgSqlIndexMetadata {
+        relation_oid: 42,
+        index_oid: 100,
+        schema: "public".to_owned(),
+        name: "idx_users_org_team".to_owned(),
+        columns: vec!["org_id".to_owned(), "team_id".to_owned()],
+        is_unique: false,
+        is_primary: false,
+        is_valid: true,
+        is_ready: true,
+        predicate: None,
+        definition: "CREATE INDEX idx_users_org_team ON users(org_id, team_id)".to_owned(),
+    });
+    let covered =
+        analyze_with_statement_metadata("select id from users where org_id = 1", statement).await;
+
+    assert!(has_rule(&missing, "foreign_key_without_index"));
+    assert!(!has_rule(&covered, "foreign_key_without_index"));
+}
+
+#[test]
+fn insert_on_conflict_update_is_flagged_but_do_nothing_is_not() {
+    let update = analyze(
+        "insert into users(id, email) values (1, 'a@b.test') on conflict (id) do update set email = excluded.email where users.email is distinct from excluded.email",
+    );
+    let nothing =
+        analyze("insert into users(id, email) values (1, 'a@b.test') on conflict (id) do nothing");
+
+    assert!(has_rule(&update, "insert_on_conflict_update"));
+    assert!(!has_rule(&nothing, "insert_on_conflict_update"));
 }
 
 #[tokio::test]

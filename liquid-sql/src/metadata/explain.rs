@@ -6,7 +6,7 @@ use crate::types::{
 
 pub(crate) fn inspect_explain(
     statement_index: usize,
-    _node: &NodeEnum,
+    node: &NodeEnum,
     metadata: &PgSqlStatementMetadata,
     options: &PgSqlMetadataOptions,
     analysis: &mut PgSqlAnalysis,
@@ -36,6 +36,17 @@ pub(crate) fn inspect_explain(
             Some(statement_index),
             Some(format!("plan_rows={}", plan.plan_rows)),
         ));
+
+        if is_write_statement(node) {
+            analysis.findings.push(PgSqlFinding::new(
+                "high_estimated_write_rows",
+                PgSqlRiskSeverity::High,
+                "High estimated write row count",
+                "PostgreSQL estimates this write statement will affect or process more rows than the configured threshold.",
+                Some(statement_index),
+                Some(format!("plan_rows={}", plan.plan_rows)),
+            ));
+        }
     }
 
     if plan.total_cost >= options.high_total_cost_threshold as f64 {
@@ -87,5 +98,17 @@ pub(crate) fn inspect_explain(
             }
             _ => {}
         }
+    }
+}
+
+fn is_write_statement(node: &NodeEnum) -> bool {
+    match node {
+        NodeEnum::InsertStmt(stmt) => stmt
+            .select_stmt
+            .as_deref()
+            .and_then(|node| node.node.as_ref())
+            .is_some_and(|node| matches!(node, NodeEnum::SelectStmt(select) if select.values_lists.is_empty())),
+        NodeEnum::UpdateStmt(_) | NodeEnum::DeleteStmt(_) | NodeEnum::MergeStmt(_) => true,
+        _ => false,
     }
 }

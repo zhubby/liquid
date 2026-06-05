@@ -1,6 +1,9 @@
 use pg_query::{
     NodeEnum,
-    protobuf::{CmdType, DeleteStmt, InsertStmt, MergeStmt, MergeWhenClause, Node, UpdateStmt},
+    protobuf::{
+        CmdType, DeleteStmt, InsertStmt, MergeStmt, MergeWhenClause, Node, OnConflictAction,
+        OnConflictClause, UpdateStmt,
+    },
 };
 
 use crate::{
@@ -16,6 +19,8 @@ pub(crate) fn inspect_insert(
     options: &PgSqlRuleOptions,
     analysis: &mut PgSqlAnalysis,
 ) {
+    inspect_on_conflict(index, stmt, analysis);
+
     let Some(select_node) = stmt
         .select_stmt
         .as_deref()
@@ -58,6 +63,36 @@ pub(crate) fn inspect_insert(
             Some(format!("{row_count} rows")),
         ));
     }
+}
+
+fn inspect_on_conflict(index: usize, stmt: &InsertStmt, analysis: &mut PgSqlAnalysis) {
+    let Some(on_conflict) = stmt.on_conflict_clause.as_deref() else {
+        return;
+    };
+
+    if !matches!(
+        OnConflictAction::try_from(on_conflict.action),
+        Ok(OnConflictAction::OnconflictUpdate)
+    ) {
+        return;
+    }
+
+    analysis.findings.push(PgSqlFinding::new(
+        "insert_on_conflict_update",
+        PgSqlRiskSeverity::High,
+        "INSERT ON CONFLICT DO UPDATE",
+        "The INSERT statement can update existing rows when a conflict is found.",
+        Some(index),
+        Some(on_conflict_evidence(on_conflict)),
+    ));
+}
+
+fn on_conflict_evidence(on_conflict: &OnConflictClause) -> String {
+    format!(
+        "target_updates={}, has_where={}",
+        on_conflict.target_list.len(),
+        on_conflict.where_clause.is_some()
+    )
 }
 
 pub(crate) fn inspect_update(
