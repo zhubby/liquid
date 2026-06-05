@@ -1,11 +1,13 @@
 use async_trait::async_trait;
 use serde::{Deserialize, Serialize};
 use time::OffsetDateTime;
+use ts_rs::TS;
 
 use crate::{ManagedDatabaseEngine, ManagedDatabaseSslMode};
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, TS)]
 #[serde(rename_all = "snake_case")]
+#[ts(export)]
 pub enum DatabaseBackupStatus {
     Queued,
     Running,
@@ -26,8 +28,9 @@ impl DatabaseBackupStatus {
     }
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, TS)]
 #[serde(rename_all = "snake_case")]
+#[ts(export)]
 pub enum DatabaseBackupFormat {
     PostgresCustom,
 }
@@ -40,7 +43,8 @@ impl DatabaseBackupFormat {
     }
 }
 
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, TS)]
+#[ts(export)]
 pub struct ManagedDatabaseSnapshot {
     pub id: String,
     pub name: String,
@@ -52,21 +56,27 @@ pub struct ManagedDatabaseSnapshot {
     pub ssl_mode: ManagedDatabaseSslMode,
 }
 
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, TS)]
+#[ts(export)]
 pub struct DatabaseBackupObjectMetadata {
     pub bucket: String,
     pub key: String,
     #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[ts(optional)]
     pub version_id: Option<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[ts(optional)]
     pub etag: Option<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[ts(optional)]
     pub size_bytes: Option<i64>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[ts(optional)]
     pub checksum_sha256: Option<String>,
 }
 
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, TS)]
+#[ts(export)]
 pub struct DatabaseBackupRecord {
     pub id: String,
     pub owner_user_id: String,
@@ -76,42 +86,54 @@ pub struct DatabaseBackupRecord {
     pub phase: String,
     pub progress_percent: i32,
     #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[ts(optional)]
     pub object: Option<DatabaseBackupObjectMetadata>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[ts(optional)]
     pub postgres_server_version: Option<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[ts(optional)]
     pub pg_dump_version: Option<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[ts(optional)]
     pub error: Option<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[ts(optional)]
     pub purpose: Option<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[ts(optional)]
     pub worker_id: Option<String>,
     #[serde(
         default,
         with = "time::serde::rfc3339::option",
         skip_serializing_if = "Option::is_none"
     )]
+    #[ts(optional, type = "string")]
     pub heartbeat_at: Option<OffsetDateTime>,
     #[serde(
         default,
         with = "time::serde::rfc3339::option",
         skip_serializing_if = "Option::is_none"
     )]
+    #[ts(optional, type = "string")]
     pub started_at: Option<OffsetDateTime>,
     #[serde(
         default,
         with = "time::serde::rfc3339::option",
         skip_serializing_if = "Option::is_none"
     )]
+    #[ts(optional, type = "string")]
     pub completed_at: Option<OffsetDateTime>,
     #[serde(with = "time::serde::rfc3339")]
+    #[ts(type = "string")]
     pub created_at: OffsetDateTime,
     #[serde(with = "time::serde::rfc3339")]
+    #[ts(type = "string")]
     pub updated_at: OffsetDateTime,
 }
 
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, TS)]
+#[ts(export)]
 pub struct DatabaseRestoreRecord {
     pub id: String,
     pub owner_user_id: String,
@@ -121,34 +143,43 @@ pub struct DatabaseRestoreRecord {
     pub status: DatabaseBackupStatus,
     pub phase: String,
     pub progress_percent: i32,
+    #[ts(type = "unknown")]
     pub restore_options: serde_json::Value,
     #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[ts(optional)]
     pub error: Option<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[ts(optional)]
     pub purpose: Option<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[ts(optional)]
     pub worker_id: Option<String>,
     #[serde(
         default,
         with = "time::serde::rfc3339::option",
         skip_serializing_if = "Option::is_none"
     )]
+    #[ts(optional, type = "string")]
     pub heartbeat_at: Option<OffsetDateTime>,
     #[serde(
         default,
         with = "time::serde::rfc3339::option",
         skip_serializing_if = "Option::is_none"
     )]
+    #[ts(optional, type = "string")]
     pub started_at: Option<OffsetDateTime>,
     #[serde(
         default,
         with = "time::serde::rfc3339::option",
         skip_serializing_if = "Option::is_none"
     )]
+    #[ts(optional, type = "string")]
     pub completed_at: Option<OffsetDateTime>,
     #[serde(with = "time::serde::rfc3339")]
+    #[ts(type = "string")]
     pub created_at: OffsetDateTime,
     #[serde(with = "time::serde::rfc3339")]
+    #[ts(type = "string")]
     pub updated_at: OffsetDateTime,
 }
 

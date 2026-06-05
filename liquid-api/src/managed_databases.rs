@@ -2,7 +2,7 @@ use axum::{
     Json, Router,
     extract::{Path, State},
     http::{HeaderMap, StatusCode},
-    routing::{get, patch, post, put},
+    routing::{get, patch, post},
 };
 use liquid_agent::{PostgresToolConfig, ToolRegistry};
 use liquid_core::{

@@ -100,6 +100,19 @@ bun run dev
 The dashboard reads `NEXT_PUBLIC_API_BASE_URL`, defaulting to
 `http://localhost:3001`.
 
+## API Type Contracts
+
+Frontend API contracts are generated from `liquid-core` with ts-rs. Do not edit
+files under `liquid-ui/lib/generated/api-types` by hand.
+
+After changing Rust DTOs used by the frontend, run:
+
+```bash
+cargo test -p liquid-core
+```
+
+Commit the regenerated TypeScript files with the Rust contract change.
+
 ## Docs
 
 ```bash

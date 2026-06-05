@@ -1,172 +1,60 @@
-export type PublicUser = {
-  id: string;
-  email: string;
-  display_name: string;
-};
-
-export type AuthResponse = {
-  token: string;
-  token_type: "Bearer";
-  expires_in_seconds: number;
-  user: PublicUser;
-};
-
-export type ManagedDatabase = {
-  id: string;
-  name: string;
-  engine: "postgres";
-  host: string;
-  port: number;
-  database: string;
-  username: string;
-  ssl_mode: "disable" | "prefer" | "require";
-  has_password: boolean;
-};
-
-export type CurrentManagedDatabaseResponse = {
-  database: ManagedDatabase | null;
-};
-
-export type SetCurrentManagedDatabaseRequest = {
-  managed_database_id: string;
-};
-
-export type ManagedDatabaseConnectionTestResponse = {
-  ok: boolean;
-  message: string;
-};
-
-export type CreateManagedDatabaseRequest = {
-  name: string;
-  engine: "postgres";
-  host: string;
-  port: number;
-  database: string;
-  username: string;
-  password: string;
-  ssl_mode: "disable" | "prefer" | "require";
-};
-
-export type UpdateManagedDatabaseRequest = Partial<
-  Omit<CreateManagedDatabaseRequest, "engine">
->;
-
-export type AgentConversation = {
-  id: string;
-  owner_user_id: string;
-  title: string;
-  created_at: string;
-  updated_at: string;
-};
-
-export type AgentMessageRole = "user" | "assistant" | "tool" | "system";
-
-export type AgentMessage = {
-  id: string;
-  conversation_id: string;
-  turn_id?: string;
-  role: AgentMessageRole;
-  content: string;
-  metadata?: unknown;
-  created_at: string;
-};
-
-export type AgentDashboardContext = {
-  active_view?: "ai" | "bi" | "databases" | "sql_audits";
-  selected_sql_audit_id?: string;
-  date_range?: "last_7_days" | "last_30_days";
-};
-
-export type CreateAgentTurnRequest = {
-  message: string;
-  managed_database_id?: string;
-  dashboard_context?: AgentDashboardContext;
-  client_request_id?: string;
-};
-
-export type AgentTurnStatus =
-  | "queued"
-  | "running"
-  | "completed"
-  | "blocked"
-  | "failed"
-  | "cancelled";
-
-export type AgentTurn = {
-  id: string;
-  conversation_id: string;
-  status: AgentTurnStatus;
-  user_message_id: string;
-  assistant_message_id?: string;
-  error?: string;
-  client_request_id?: string;
-  managed_database_id?: string;
-  dashboard_context?: AgentDashboardContext;
-  created_at: string;
-  updated_at: string;
-  completed_at?: string;
-};
-
-export type AgentEvent = {
-  seq: number;
-  turn_id: string;
-  type:
-    | "turn_started"
-    | "message_created"
-    | "assistant_delta"
-    | "tool_call_started"
-    | "tool_call_finished"
-    | "resource_created"
-    | "resource_updated"
-    | "action_proposed"
-    | "turn_completed"
-    | "turn_failed";
-  payload: Record<string, unknown>;
-  created_at: string;
-};
-
-export type AgentActionKind =
-  | "create_sql_audit"
-  | "approve_sql_audit"
-  | "reject_sql_audit"
-  | "execute_sql_audit"
-  | "create_managed_database"
-  | "update_managed_database"
-  | "delete_managed_database"
-  | "start_database_backup"
-  | "start_database_restore";
-
-export type AgentActionStatus =
-  | "proposed"
-  | "applied"
-  | "rejected"
-  | "failed"
-  | "superseded";
-
-export type AgentAction = {
-  id: string;
-  conversation_id: string;
-  turn_id: string;
-  kind: AgentActionKind;
-  status: AgentActionStatus;
-  title: string;
-  description: string;
-  payload: unknown;
-  resource_kind?: "sql_audit" | "managed_database" | "database_backup" | "database_restore";
-  resource_id?: string;
-  requires_confirmation: boolean;
-  created_at: string;
-  updated_at: string;
-};
-
-export type AgentCapabilitiesResponse = {
-  mode: string;
-  capabilities: {
-    name: string;
-    description: string;
-    requires_confirmation: boolean;
-  }[];
-};
+export type { AgentAction } from "./generated/api-types/AgentAction";
+export type { AgentActionDecisionRequest } from "./generated/api-types/AgentActionDecisionRequest";
+export type { AgentActionKind } from "./generated/api-types/AgentActionKind";
+export type { AgentActionStatus } from "./generated/api-types/AgentActionStatus";
+export type { AgentActiveView } from "./generated/api-types/AgentActiveView";
+export type { AgentCapabilitiesResponse } from "./generated/api-types/AgentCapabilitiesResponse";
+export type { AgentCapability } from "./generated/api-types/AgentCapability";
+export type { AgentConversation } from "./generated/api-types/AgentConversation";
+export type { AgentDashboardContext } from "./generated/api-types/AgentDashboardContext";
+export type { AgentDateRange } from "./generated/api-types/AgentDateRange";
+export type {
+  AgentEventRecord,
+  AgentEventRecord as AgentEvent,
+} from "./generated/api-types/AgentEventRecord";
+export type { AgentEventType } from "./generated/api-types/AgentEventType";
+export type { AgentMessage } from "./generated/api-types/AgentMessage";
+export type { AgentMessageRole } from "./generated/api-types/AgentMessageRole";
+export type { AgentResourceKind } from "./generated/api-types/AgentResourceKind";
+export type { AgentTurn } from "./generated/api-types/AgentTurn";
+export type { AgentTurnStatus } from "./generated/api-types/AgentTurnStatus";
+export type { ApproveSqlAuditRequest } from "./generated/api-types/ApproveSqlAuditRequest";
+export type { AuditSummary } from "./generated/api-types/AuditSummary";
+export type { AuditTrendPoint } from "./generated/api-types/AuditTrendPoint";
+export type { AuthResponse } from "./generated/api-types/AuthResponse";
+export type { CreateAgentActionRequest } from "./generated/api-types/CreateAgentActionRequest";
+export type { CreateAgentConversationRequest } from "./generated/api-types/CreateAgentConversationRequest";
+export type { CreateAgentTurnRequest } from "./generated/api-types/CreateAgentTurnRequest";
+export type { CreateManagedDatabaseRequest } from "./generated/api-types/CreateManagedDatabaseRequest";
+export type { CreateSqlAuditRequest } from "./generated/api-types/CreateSqlAuditRequest";
+export type { CurrentManagedDatabaseResponse } from "./generated/api-types/CurrentManagedDatabaseResponse";
+export type { CurrentUserResponse } from "./generated/api-types/CurrentUserResponse";
+export type { DatabaseBackupFormat } from "./generated/api-types/DatabaseBackupFormat";
+export type { DatabaseBackupObjectMetadata } from "./generated/api-types/DatabaseBackupObjectMetadata";
+export type { DatabaseBackupRecord } from "./generated/api-types/DatabaseBackupRecord";
+export type { DatabaseBackupStatus } from "./generated/api-types/DatabaseBackupStatus";
+export type { DatabaseRestoreRecord } from "./generated/api-types/DatabaseRestoreRecord";
+export type { LoginRequest } from "./generated/api-types/LoginRequest";
+export type { ManagedDatabase } from "./generated/api-types/ManagedDatabase";
+export type { ManagedDatabaseConnectionTestResponse } from "./generated/api-types/ManagedDatabaseConnectionTestResponse";
+export type { ManagedDatabaseEngine } from "./generated/api-types/ManagedDatabaseEngine";
+export type { ManagedDatabaseSnapshot } from "./generated/api-types/ManagedDatabaseSnapshot";
+export type { ManagedDatabaseSslMode } from "./generated/api-types/ManagedDatabaseSslMode";
+export type { PublicUser } from "./generated/api-types/PublicUser";
+export type { RegisterRequest } from "./generated/api-types/RegisterRequest";
+export type { RejectSqlAuditRequest } from "./generated/api-types/RejectSqlAuditRequest";
+export type { RiskBreakdown } from "./generated/api-types/RiskBreakdown";
+export type { RiskSeverity } from "./generated/api-types/RiskSeverity";
+export type { SetCurrentManagedDatabaseRequest } from "./generated/api-types/SetCurrentManagedDatabaseRequest";
+export type { SqlAuditExecutionResult } from "./generated/api-types/SqlAuditExecutionResult";
+export type { SqlAuditFinding } from "./generated/api-types/SqlAuditFinding";
+export type { SqlAuditRecord } from "./generated/api-types/SqlAuditRecord";
+export type { SqlAuditReport } from "./generated/api-types/SqlAuditReport";
+export type { SqlAuditRequest } from "./generated/api-types/SqlAuditRequest";
+export type { SqlAuditStatus } from "./generated/api-types/SqlAuditStatus";
+export type { SqlStatementKind } from "./generated/api-types/SqlStatementKind";
+export type { UpdateAgentConversationRequest } from "./generated/api-types/UpdateAgentConversationRequest";
+export type { UpdateManagedDatabaseRequest } from "./generated/api-types/UpdateManagedDatabaseRequest";
 
 export class ApiError extends Error {
   status: number;

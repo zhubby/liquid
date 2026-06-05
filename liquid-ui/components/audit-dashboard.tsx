@@ -905,17 +905,22 @@ function upsertStreamingAssistantMessage(
   ];
 }
 
-function eventPayloadString(
-  payload: Record<string, unknown>,
-  key: string,
-): string | null {
-  const value = payload[key];
+function eventPayloadString(payload: unknown, key: string): string | null {
+  if (!payload || typeof payload !== "object") {
+    return null;
+  }
+
+  const value = (payload as Record<string, unknown>)[key];
 
   return typeof value === "string" ? value : null;
 }
 
-function eventPayloadAction(payload: Record<string, unknown>): AgentAction | null {
-  const value = payload.action;
+function eventPayloadAction(payload: unknown): AgentAction | null {
+  if (!payload || typeof payload !== "object") {
+    return null;
+  }
+
+  const value = (payload as Record<string, unknown>).action;
 
   if (!value || typeof value !== "object") {
     return null;

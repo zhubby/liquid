@@ -2,9 +2,11 @@ use std::{fmt, time::Duration};
 
 use async_trait::async_trait;
 use serde::{Deserialize, Serialize};
+use ts_rs::TS;
 
-#[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, Serialize, Deserialize, TS, PartialEq, Eq)]
 #[serde(rename_all = "snake_case")]
+#[ts(export)]
 pub enum ManagedDatabaseEngine {
     Postgres,
 }
@@ -17,8 +19,9 @@ impl ManagedDatabaseEngine {
     }
 }
 
-#[derive(Debug, Clone, Copy, Default, Serialize, Deserialize, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, Default, Serialize, Deserialize, TS, PartialEq, Eq)]
 #[serde(rename_all = "snake_case")]
+#[ts(export)]
 pub enum ManagedDatabaseSslMode {
     Disable,
     #[default]
@@ -36,7 +39,8 @@ impl ManagedDatabaseSslMode {
     }
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+#[derive(Debug, Clone, Serialize, Deserialize, TS, PartialEq, Eq)]
+#[ts(export)]
 pub struct ManagedDatabase {
     pub id: String,
     pub name: String,
@@ -49,23 +53,27 @@ pub struct ManagedDatabase {
     pub has_password: bool,
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+#[derive(Debug, Clone, Serialize, Deserialize, TS, PartialEq, Eq)]
+#[ts(export)]
 pub struct CurrentManagedDatabaseResponse {
     pub database: Option<ManagedDatabase>,
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+#[derive(Debug, Clone, Serialize, Deserialize, TS, PartialEq, Eq)]
+#[ts(export)]
 pub struct SetCurrentManagedDatabaseRequest {
     pub managed_database_id: String,
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+#[derive(Debug, Clone, Serialize, Deserialize, TS, PartialEq, Eq)]
+#[ts(export)]
 pub struct ManagedDatabaseConnectionTestResponse {
     pub ok: bool,
     pub message: String,
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+#[derive(Debug, Clone, Serialize, Deserialize, TS, PartialEq, Eq)]
+#[ts(export)]
 pub struct CreateManagedDatabaseRequest {
     pub name: String,
     pub engine: ManagedDatabaseEngine,
@@ -78,14 +86,22 @@ pub struct CreateManagedDatabaseRequest {
     pub ssl_mode: ManagedDatabaseSslMode,
 }
 
-#[derive(Debug, Clone, Default, Serialize, Deserialize, PartialEq, Eq)]
+#[derive(Debug, Clone, Default, Serialize, Deserialize, TS, PartialEq, Eq)]
+#[ts(export)]
 pub struct UpdateManagedDatabaseRequest {
+    #[ts(optional)]
     pub name: Option<String>,
+    #[ts(optional)]
     pub host: Option<String>,
+    #[ts(optional)]
     pub port: Option<i32>,
+    #[ts(optional)]
     pub database: Option<String>,
+    #[ts(optional)]
     pub username: Option<String>,
+    #[ts(optional)]
     pub password: Option<String>,
+    #[ts(optional)]
     pub ssl_mode: Option<ManagedDatabaseSslMode>,
 }
 

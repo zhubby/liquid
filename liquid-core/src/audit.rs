@@ -1,8 +1,10 @@
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
 use time::OffsetDateTime;
+use ts_rs::TS;
 
-#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+#[derive(Debug, Clone, Serialize, Deserialize, TS, PartialEq)]
+#[ts(export)]
 pub struct AuditSummary {
     pub total_queries: u64,
     pub flagged_queries: u64,
@@ -13,15 +15,17 @@ pub struct AuditSummary {
     pub trend: Vec<AuditTrendPoint>,
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+#[derive(Debug, Clone, Serialize, Deserialize, TS, PartialEq, Eq)]
+#[ts(export)]
 pub struct RiskBreakdown {
     pub label: String,
     pub count: u64,
     pub severity: RiskSeverity,
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+#[derive(Debug, Clone, Serialize, Deserialize, TS, PartialEq, Eq)]
 #[serde(rename_all = "snake_case")]
+#[ts(export)]
 pub enum RiskSeverity {
     Low,
     Medium,
@@ -29,19 +33,23 @@ pub enum RiskSeverity {
     Critical,
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+#[derive(Debug, Clone, Serialize, Deserialize, TS, PartialEq, Eq)]
+#[ts(export)]
 pub struct AuditTrendPoint {
     pub day: String,
     pub audited: u64,
     pub flagged: u64,
 }
 
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, TS)]
+#[ts(export)]
 pub struct SqlAuditRequest {
     pub sql: String,
     #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[ts(optional)]
     pub schema: Option<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[ts(optional)]
     pub context: Option<String>,
 }
 
@@ -65,14 +73,18 @@ impl SqlAuditRequest {
     }
 }
 
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, TS)]
+#[ts(export)]
 pub struct CreateSqlAuditRequest {
     pub sql: String,
     #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[ts(optional)]
     pub schema: Option<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[ts(optional)]
     pub context: Option<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[ts(optional)]
     pub execution_purpose: Option<String>,
 }
 
@@ -86,7 +98,8 @@ impl CreateSqlAuditRequest {
     }
 }
 
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, TS)]
+#[ts(export)]
 pub struct SqlAuditReport {
     pub summary: String,
     pub risk_score: u8,
@@ -94,7 +107,8 @@ pub struct SqlAuditReport {
     pub findings: Vec<SqlAuditFinding>,
 }
 
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, TS)]
+#[ts(export)]
 pub struct SqlAuditFinding {
     pub title: String,
     pub severity: RiskSeverity,
@@ -102,8 +116,9 @@ pub struct SqlAuditFinding {
     pub recommendation: String,
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, TS)]
 #[serde(rename_all = "snake_case")]
+#[ts(export)]
 pub enum SqlAuditStatus {
     Audited,
     PendingApproval,
@@ -130,8 +145,9 @@ impl SqlAuditStatus {
     }
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, TS)]
 #[serde(rename_all = "snake_case")]
+#[ts(export)]
 pub enum SqlStatementKind {
     Select,
     Insert,
@@ -168,29 +184,36 @@ impl SqlStatementKind {
     }
 }
 
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, TS)]
+#[ts(export)]
 pub struct ApproveSqlAuditRequest {
     #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[ts(optional)]
     pub comment: Option<String>,
 }
 
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, TS)]
+#[ts(export)]
 pub struct RejectSqlAuditRequest {
     #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[ts(optional)]
     pub comment: Option<String>,
 }
 
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, TS)]
+#[ts(export)]
 pub struct SqlAuditExecutionResult {
     pub statement_kind: SqlStatementKind,
     pub affected_rows: u64,
     pub elapsed_ms: u64,
     pub risk_floor: u8,
     #[serde(default)]
+    #[ts(type = "unknown")]
     pub findings: Value,
 }
 
-#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize, TS)]
+#[ts(export)]
 pub struct SqlAuditRecord {
     pub id: String,
     pub owner_user_id: String,
@@ -204,52 +227,69 @@ pub struct SqlAuditRecord {
     pub managed_database_ssl_mode: String,
     pub sql: String,
     #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[ts(optional)]
     pub schema: Option<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[ts(optional)]
     pub context: Option<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[ts(optional)]
     pub execution_purpose: Option<String>,
     pub status: SqlAuditStatus,
     #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[ts(optional)]
     pub statement_kind: Option<SqlStatementKind>,
     pub risk_score: u8,
     #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[ts(optional)]
     pub report: Option<SqlAuditReport>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[ts(optional, type = "unknown")]
     pub deterministic_analysis: Option<Value>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[ts(optional)]
     pub approved_by_user_id: Option<String>,
     #[serde(
         default,
         with = "time::serde::rfc3339::option",
         skip_serializing_if = "Option::is_none"
     )]
+    #[ts(optional, type = "string")]
     pub approved_at: Option<OffsetDateTime>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[ts(optional)]
     pub approval_comment: Option<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[ts(optional)]
     pub rejected_by_user_id: Option<String>,
     #[serde(
         default,
         with = "time::serde::rfc3339::option",
         skip_serializing_if = "Option::is_none"
     )]
+    #[ts(optional, type = "string")]
     pub rejected_at: Option<OffsetDateTime>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[ts(optional)]
     pub rejection_comment: Option<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[ts(optional)]
     pub execution_result: Option<SqlAuditExecutionResult>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[ts(optional)]
     pub execution_error: Option<String>,
     #[serde(with = "time::serde::rfc3339")]
+    #[ts(type = "string")]
     pub created_at: OffsetDateTime,
     #[serde(with = "time::serde::rfc3339")]
+    #[ts(type = "string")]
     pub updated_at: OffsetDateTime,
     #[serde(
         default,
         with = "time::serde::rfc3339::option",
         skip_serializing_if = "Option::is_none"
     )]
+    #[ts(optional, type = "string")]
     pub executed_at: Option<OffsetDateTime>,
 }
 
