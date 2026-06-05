@@ -3,14 +3,26 @@
 ## Backend
 
 ```bash
-cargo run -p liquid-cli
+cargo run -p liquid-cli -- server
 ```
 
 The API binds to `LIQUID_API_ADDR`, defaulting to `127.0.0.1:3001`.
 You can also provide a TOML config file:
 
 ```bash
-cargo run -p liquid-cli -- --config liquid.toml
+cargo run -p liquid-cli -- server --config liquid.toml
+```
+
+Run application database migrations without starting the API:
+
+```bash
+cargo run -p liquid-cli -- migrate
+```
+
+Print the binary version:
+
+```bash
+cargo run -p liquid-cli -- version
 ```
 
 Example:

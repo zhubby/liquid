@@ -47,10 +47,11 @@ impl AuditedDatabaseEngine {
     }
 }
 
-#[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, Default, Serialize, Deserialize, PartialEq, Eq)]
 #[serde(rename_all = "snake_case")]
 pub enum AuditedDatabaseSslMode {
     Disable,
+    #[default]
     Prefer,
     Require,
 }
@@ -62,12 +63,6 @@ impl AuditedDatabaseSslMode {
             Self::Prefer => "prefer",
             Self::Require => "require",
         }
-    }
-}
-
-impl Default for AuditedDatabaseSslMode {
-    fn default() -> Self {
-        Self::Prefer
     }
 }
 
