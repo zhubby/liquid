@@ -14,6 +14,7 @@ liquid-llm = { path = "../liquid-llm" }
 liquid-sql = { path = "../liquid-sql" }
 serde.workspace = true
 serde_json.workspace = true
+sqlx.workspace = true
 
 [dev-dependencies]
 tokio.workspace = true

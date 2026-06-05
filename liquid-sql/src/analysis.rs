@@ -22,6 +22,7 @@ pub fn analyze_postgres_sql(request: PgSqlAnalysisRequest) -> PgSqlAnalysis {
                 None,
                 None,
             )],
+            metadata: None,
             parse_error: Some(PgSqlParseError {
                 message: "SQL audit request must include SQL".to_owned(),
             }),
@@ -42,6 +43,7 @@ pub fn analyze_postgres_sql(request: PgSqlAnalysisRequest) -> PgSqlAnalysis {
                     None,
                     Some(message.clone()),
                 )],
+                metadata: None,
                 parse_error: Some(PgSqlParseError { message }),
             };
         }
@@ -50,6 +52,7 @@ pub fn analyze_postgres_sql(request: PgSqlAnalysisRequest) -> PgSqlAnalysis {
     let mut analysis = PgSqlAnalysis {
         statements: Vec::new(),
         findings: Vec::new(),
+        metadata: None,
         parse_error: None,
     };
 

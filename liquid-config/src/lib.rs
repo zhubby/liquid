@@ -10,6 +10,7 @@ const DEFAULT_OPENAI_BASE_URL: &str = "https://api.openai.com";
 pub struct LiquidConfig {
     pub api_addr: SocketAddr,
     pub database_url: String,
+    pub sql_metadata: SqlMetadataMode,
     pub llm: LlmConfig,
 }
 
@@ -26,6 +27,29 @@ pub enum LlmApiMode {
     #[default]
     ChatCompletions,
     Responses,
+}
+
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+pub enum SqlMetadataMode {
+    #[default]
+    Auto,
+    Off,
+    Required,
+}
+
+impl FromStr for SqlMetadataMode {
+    type Err = anyhow::Error;
+
+    fn from_str(value: &str) -> Result<Self> {
+        match value.trim().to_ascii_lowercase().as_str() {
+            "" | "auto" => Ok(Self::Auto),
+            "off" | "disabled" | "false" => Ok(Self::Off),
+            "required" | "require" | "on" | "true" => Ok(Self::Required),
+            other => Err(anyhow::anyhow!(
+                "invalid LIQUID_SQL_METADATA: {other}; expected auto, off, or required"
+            )),
+        }
+    }
 }
 
 impl FromStr for LlmApiMode {
@@ -62,12 +86,17 @@ impl LiquidConfig {
             .as_deref()
             .unwrap_or_default()
             .parse()?;
+        let sql_metadata = get("LIQUID_SQL_METADATA")
+            .as_deref()
+            .unwrap_or_default()
+            .parse()?;
 
         Ok(Self {
             api_addr: api_addr
                 .parse()
                 .with_context(|| format!("invalid LIQUID_API_ADDR: {api_addr}"))?,
             database_url,
+            sql_metadata,
             llm: LlmConfig {
                 api_key,
                 base_url,
@@ -108,6 +137,7 @@ mod tests {
         assert_eq!(config.llm.base_url, DEFAULT_OPENAI_BASE_URL);
         assert_eq!(config.llm.model, None);
         assert_eq!(config.llm.api_mode, LlmApiMode::ChatCompletions);
+        assert_eq!(config.sql_metadata, SqlMetadataMode::Auto);
     }
 
     #[test]
@@ -136,5 +166,27 @@ mod tests {
         .unwrap_err();
 
         assert!(error.to_string().contains("invalid OPENAI_API_MODE"));
+    }
+
+    #[test]
+    fn parses_sql_metadata_mode() {
+        let config = LiquidConfig::from_env_values(|key| match key {
+            "LIQUID_SQL_METADATA" => Some("required".to_owned()),
+            _ => None,
+        })
+        .unwrap();
+
+        assert_eq!(config.sql_metadata, SqlMetadataMode::Required);
+    }
+
+    #[test]
+    fn rejects_invalid_sql_metadata_mode() {
+        let error = LiquidConfig::from_env_values(|key| match key {
+            "LIQUID_SQL_METADATA" => Some("sometimes".to_owned()),
+            _ => None,
+        })
+        .unwrap_err();
+
+        assert!(error.to_string().contains("invalid LIQUID_SQL_METADATA"));
     }
 }

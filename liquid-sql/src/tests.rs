@@ -1,6 +1,14 @@
+use std::collections::BTreeMap;
+
 use crate::{
-    PgSqlAnalysis, PgSqlAnalysisRequest, PgSqlRuleOptions, PgSqlStatementKind, analyze_postgres_sql,
+    PgSqlAnalysis, PgSqlAnalysisRequest, PgSqlColumnMetadata, PgSqlConstraintMetadata,
+    PgSqlIndexMetadata, PgSqlLockMetadata, PgSqlMetadataError, PgSqlMetadataOptions,
+    PgSqlPlanMetadata, PgSqlPlanNodeMetadata, PgSqlPrivilegeMetadata, PgSqlRelationMetadata,
+    PgSqlRlsMetadata, PgSqlRuleOptions, PgSqlStatementKind, PgSqlStatementMetadata,
+    analyze_postgres_sql, analyze_postgres_sql_with_metadata,
 };
+
+use super::metadata::tests::MockMetadataProvider;
 
 fn analyze(sql: &str) -> PgSqlAnalysis {
     analyze_postgres_sql(PgSqlAnalysisRequest::new(sql))
@@ -284,4 +292,309 @@ fn security_and_procedural_control_statements_are_flagged() {
     assert!(has_rule(&alter_role_set, "alter_role_set"));
     assert!(has_rule(&drop_role, "drop_role"));
     assert!(has_rule(&do_block, "do_block"));
+}
+
+#[tokio::test]
+async fn metadata_unavailable_preserves_ast_findings() {
+    let provider = MockMetadataProvider {
+        error: Some(PgSqlMetadataError::new("database unavailable")),
+        ..MockMetadataProvider::default()
+    };
+    let analysis = analyze_postgres_sql_with_metadata(
+        PgSqlAnalysisRequest::new("delete from users"),
+        &provider,
+        PgSqlMetadataOptions::default(),
+    )
+    .await;
+
+    assert!(has_rule(&analysis, "delete_without_where"));
+    assert!(has_rule(&analysis, "metadata_unavailable"));
+    assert_eq!(
+        analysis.metadata.unwrap().warnings[0],
+        "database unavailable"
+    );
+}
+
+#[tokio::test]
+async fn metadata_flags_large_table_missing_privilege_rls_and_lock_conflict() {
+    let mut statement = PgSqlStatementMetadata::new(0);
+    statement.relations.push(relation(42, "public", "users"));
+    statement.privileges.push(PgSqlPrivilegeMetadata {
+        relation_oid: 42,
+        action: "DELETE".to_owned(),
+        allowed: false,
+    });
+    statement.rls.push(PgSqlRlsMetadata {
+        relation_oid: 42,
+        enabled: true,
+        forced: false,
+        current_role_bypasses_rls: false,
+        policy_count: 1,
+        applicable_policy_count: 0,
+    });
+    statement.locks.push(PgSqlLockMetadata {
+        relation_oid: 42,
+        expected_mode: "RowExclusiveLock".to_owned(),
+        conflicting_granted_locks: 1,
+        conflicting_waiting_locks: 0,
+        longest_conflict_age_ms: Some(12_000),
+    });
+
+    let analysis =
+        analyze_with_statement_metadata("delete from users where id = 1", statement).await;
+
+    assert!(has_rule(&analysis, "large_table_operation"));
+    assert!(has_rule(&analysis, "missing_privilege"));
+    assert!(has_rule(&analysis, "rls_without_applicable_policy"));
+    assert!(has_rule(&analysis, "lock_conflict"));
+}
+
+#[tokio::test]
+async fn metadata_flags_plan_cost_and_rows() {
+    let mut statement = PgSqlStatementMetadata::new(0);
+    statement.plan = Some(PgSqlPlanMetadata {
+        statement_index: 0,
+        total_cost: 250_000.0,
+        plan_rows: 250_000,
+        nodes: vec![
+            PgSqlPlanNodeMetadata {
+                node_type: "Seq Scan".to_owned(),
+                relation_name: Some("users".to_owned()),
+                total_cost: 200_000.0,
+                plan_rows: 250_000,
+            },
+            PgSqlPlanNodeMetadata {
+                node_type: "Nested Loop".to_owned(),
+                relation_name: None,
+                total_cost: 250_000.0,
+                plan_rows: 250_000,
+            },
+        ],
+    });
+
+    let analysis = analyze_with_statement_metadata("select id from users", statement).await;
+
+    assert!(has_rule(&analysis, "high_estimated_rows"));
+    assert!(has_rule(&analysis, "high_plan_cost"));
+    assert!(has_rule(&analysis, "large_seq_scan"));
+    assert!(has_rule(&analysis, "high_cost_nested_loop"));
+}
+
+#[tokio::test]
+async fn metadata_flags_duplicate_and_invalid_indexes() {
+    let mut statement = PgSqlStatementMetadata::new(0);
+    statement.relations.push(relation(42, "public", "users"));
+    statement.indexes.push(PgSqlIndexMetadata {
+        relation_oid: 42,
+        index_oid: 99,
+        schema: "public".to_owned(),
+        name: "idx_users_email".to_owned(),
+        columns: vec!["email".to_owned()],
+        is_unique: false,
+        is_primary: false,
+        is_valid: false,
+        is_ready: true,
+        predicate: None,
+        definition: "CREATE INDEX idx_users_email ON users(email)".to_owned(),
+    });
+
+    let analysis = analyze_with_statement_metadata(
+        "create index idx_users_email_2 on users(email)",
+        statement,
+    )
+    .await;
+
+    assert!(has_rule(&analysis, "duplicate_index"));
+    assert!(has_rule(&analysis, "index_not_ready"));
+}
+
+#[tokio::test]
+async fn metadata_flags_insert_nullable_violations() {
+    let mut statement = PgSqlStatementMetadata::new(0);
+    statement.relations.push(relation(42, "public", "users"));
+    statement.columns.push(PgSqlColumnMetadata {
+        relation_oid: 42,
+        name: "email".to_owned(),
+        is_nullable: false,
+        has_default: false,
+        is_identity: false,
+        is_generated: false,
+    });
+
+    let missing =
+        analyze_with_statement_metadata("insert into users(id) values (1)", statement.clone())
+            .await;
+    let null =
+        analyze_with_statement_metadata("insert into users(email) values (null)", statement).await;
+
+    assert!(has_rule(&missing, "insert_missing_required_column"));
+    assert!(has_rule(&null, "insert_null_into_not_null"));
+}
+
+#[tokio::test]
+async fn metadata_preserves_explicit_insert_column_order_for_null_checks() {
+    let mut statement = PgSqlStatementMetadata::new(0);
+    statement.relations.push(relation(42, "public", "users"));
+    statement.columns.push(PgSqlColumnMetadata {
+        relation_oid: 42,
+        name: "email".to_owned(),
+        is_nullable: false,
+        has_default: false,
+        is_identity: false,
+        is_generated: false,
+    });
+    statement.columns.push(PgSqlColumnMetadata {
+        relation_oid: 42,
+        name: "name".to_owned(),
+        is_nullable: true,
+        has_default: false,
+        is_identity: false,
+        is_generated: false,
+    });
+
+    let analysis = analyze_with_statement_metadata(
+        "insert into users(name, email) values (null, 'a@b.test')",
+        statement,
+    )
+    .await;
+
+    assert!(!has_rule(&analysis, "insert_null_into_not_null"));
+}
+
+#[tokio::test]
+async fn metadata_flags_missing_predicate_and_join_indexes_on_large_tables() {
+    let mut statement = PgSqlStatementMetadata::new(0);
+    statement.relations.push(relation(42, "public", "users"));
+    statement.relations.push(relation(43, "public", "orders"));
+    statement.columns.push(column(42, "id"));
+    statement.columns.push(column(42, "email"));
+    statement.columns.push(column(43, "user_id"));
+
+    let analysis = analyze_with_statement_metadata(
+        "select users.id from users join orders on orders.user_id = users.id where users.email = 'a@b.test'",
+        statement,
+    )
+    .await;
+
+    assert!(has_rule(&analysis, "missing_predicate_index"));
+    assert!(has_rule(&analysis, "missing_join_index"));
+}
+
+#[tokio::test]
+async fn metadata_does_not_flag_missing_index_when_ready_valid_index_exists() {
+    let mut statement = PgSqlStatementMetadata::new(0);
+    statement.relations.push(relation(42, "public", "users"));
+    statement.columns.push(column(42, "email"));
+    statement.indexes.push(PgSqlIndexMetadata {
+        relation_oid: 42,
+        index_oid: 99,
+        schema: "public".to_owned(),
+        name: "idx_users_email".to_owned(),
+        columns: vec!["email".to_owned()],
+        is_unique: false,
+        is_primary: false,
+        is_valid: true,
+        is_ready: true,
+        predicate: None,
+        definition: "CREATE INDEX idx_users_email ON users(email)".to_owned(),
+    });
+
+    let analysis =
+        analyze_with_statement_metadata("select id from users where email = 'a@b.test'", statement)
+            .await;
+
+    assert!(!has_rule(&analysis, "missing_predicate_index"));
+}
+
+#[tokio::test]
+async fn metadata_uses_table_alias_for_missing_index_detection() {
+    let mut statement = PgSqlStatementMetadata::new(0);
+    statement.relations.push(relation(42, "public", "users"));
+    statement.columns.push(column(42, "email"));
+
+    let analysis = analyze_with_statement_metadata(
+        "select u.id from users u where u.email = 'a@b.test'",
+        statement,
+    )
+    .await;
+
+    assert!(has_rule(&analysis, "missing_predicate_index"));
+}
+
+#[test]
+fn metadata_relation_resolution_excludes_cte_references() {
+    let refs = super::postgres::relation_refs_for_test(
+        "with users as (select id from archived_users) select id from users",
+    );
+
+    assert_eq!(refs.len(), 1);
+    assert_eq!(refs[0].name, "archived_users");
+}
+
+#[tokio::test]
+async fn metadata_flags_unvalidated_constraints_and_truncate_rows() {
+    let mut statement = PgSqlStatementMetadata::new(0);
+    let mut relation = relation(42, "public", "users");
+    relation.estimated_rows = Some(12_345.0);
+    statement.relations.push(relation);
+    statement.constraints.push(PgSqlConstraintMetadata {
+        relation_oid: 42,
+        name: "users_email_check".to_owned(),
+        kind: "c".to_owned(),
+        columns: vec!["email".to_owned()],
+        is_validated: false,
+        definition: Some("CHECK (email <> '') NOT VALID".to_owned()),
+    });
+
+    let analysis = analyze_with_statement_metadata("truncate table users", statement).await;
+
+    assert!(has_rule(&analysis, "constraint_not_validated"));
+    assert!(has_rule(&analysis, "truncate_estimated_rows"));
+}
+
+async fn analyze_with_statement_metadata(
+    sql: &str,
+    statement: PgSqlStatementMetadata,
+) -> PgSqlAnalysis {
+    let mut statements = BTreeMap::new();
+    statements.insert(0, statement);
+    let provider = MockMetadataProvider {
+        statements,
+        ..MockMetadataProvider::default()
+    };
+
+    analyze_postgres_sql_with_metadata(
+        PgSqlAnalysisRequest::new(sql),
+        &provider,
+        PgSqlMetadataOptions::default(),
+    )
+    .await
+}
+
+fn relation(oid: i64, schema: &str, name: &str) -> PgSqlRelationMetadata {
+    PgSqlRelationMetadata {
+        oid,
+        schema: schema.to_owned(),
+        name: name.to_owned(),
+        kind: "r".to_owned(),
+        owner: "postgres".to_owned(),
+        total_size_bytes: 2_000_000_000,
+        relation_size_bytes: 1_500_000_000,
+        estimated_rows: Some(250_000.0),
+        live_rows: Some(250_000),
+        dead_rows: Some(1_000),
+        is_partitioned: false,
+        partition_count: 0,
+    }
+}
+
+fn column(relation_oid: i64, name: &str) -> PgSqlColumnMetadata {
+    PgSqlColumnMetadata {
+        relation_oid,
+        name: name.to_owned(),
+        is_nullable: true,
+        has_default: false,
+        is_identity: false,
+        is_generated: false,
+    }
 }
