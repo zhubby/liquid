@@ -1,41 +1,36 @@
-# Dashboard Page Liquid Glass Overrides
+# Dashboard Page
 
-These rules override `../MASTER.md` for the main SQL audit dashboard rendered by
+These rules apply to the SQL audit dashboard rendered by
 `components/audit-dashboard.tsx`.
 
 ## Information Hierarchy
 
-The dashboard first viewport must show:
+The first viewport should show:
 
-1. Floating liquid app/control bar.
+1. Sticky app and controls card.
 2. Four KPI cards.
 3. Audit trend chart and risk breakdown chart.
 
-The page should not include a marketing hero, large illustration, or explanatory
-feature section.
+Do not include a marketing hero, large illustration, or explanatory feature
+section.
 
-## Floating Control Bar
+## Header Controls
 
-Use one detached liquid bar at the top.
+Use one sticky shadcn card at the top.
 
 Required contents:
 
 - left: `ShieldCheck` icon, `Liquid SQL Audit`, compact subtitle or environment
   label,
-- center or wrap row: time range segmented control when implemented,
-- right: API status badge, filter button, refresh button.
+- right: date range display, API status badge, refresh button.
 
 Behavior:
 
-- Desktop: sticky top, inset from page edges, rounded capsule or rounded 16px
-  depending on wrapped controls.
-- Mobile: allow two rows inside the bar; keep actions reachable and fixed-size.
-- Do not place the bar inside a `Card`.
+- Desktop: one row with title on the left and controls on the right.
+- Mobile: allow controls to wrap below the title.
+- Do not use custom material, blur, or refraction effects.
 
-## KPI Row
-
-KPI cards should remain solid data cards. Use glass only for tiny icon wells if
-needed.
+## KPI Cards
 
 Card order:
 
@@ -46,50 +41,44 @@ Card order:
 
 Rules:
 
+- Use default shadcn `Card`, `CardHeader`, `CardTitle`, and `CardContent`.
 - Keep value baseline alignment stable.
 - Keep all icon wells the same size.
-- Use semantic severity colors for flagged and high-risk values.
-- Do not animate KPI cards on load unless skeletons are used.
+- Use existing shadcn/chart tokens for visual emphasis.
 
 ## Chart Panels
 
 `Audit Volume`:
 
-- Use a line or composed chart.
-- Audited line: primary blue.
-- Flagged line: danger red.
-- Optional safe region or threshold band may use mint at low opacity.
-- Tooltip can use liquid popover styling with solid text contrast.
+- Use a line chart.
+- Audited line: `--chart-2`.
+- Flagged line: `--destructive`.
+- Tooltip uses `--popover`, `--popover-foreground`, and `--border`.
 
 `Risk Breakdown`:
 
-- Use vertical bar chart for current data shape.
-- Preserve severity colors:
-  - low: mint,
-  - medium: amber,
-  - high: red,
-  - critical: rose.
+- Use a vertical bar chart for the current data shape.
+- Preserve severity meaning with existing tokens:
+  - low: `--chart-2`,
+  - medium: `--chart-4`,
+  - high: `--chart-5`,
+  - critical: `--destructive`.
 - Keep labels visible at 375px; abbreviate labels only if tooltip gives the full
   label.
 
 ## State Handling
 
-API state appears in the control bar:
+API state appears in the control card:
 
-- Live API: blue or mint badge.
-- Loading: neutral badge with refresh icon motion only if reduced motion allows.
-- Mock data/offline: amber badge.
+- Live API: secondary badge.
+- Loading: outline badge with refresh icon motion.
+- Mock data/offline: destructive badge.
 
 Avoid placing offline state as a dominant banner unless the data is unusable.
 
 ## Implementation Notes
 
-When implementing this page:
-
-- Use `main` with `.liquid-environment`.
-- Add top padding equal to sticky bar height plus 24px.
-- Apply `.data-card` to KPI and chart containers.
-- Keep Recharts containers at `h-72` or `h-80`.
-- Use CSS variables for chart colors instead of hardcoded earth-tone hex values.
 - Keep `NEXT_PUBLIC_API_BASE_URL` behavior unchanged.
-
+- Keep Recharts containers at `h-72` or `h-80`.
+- Use CSS variables for chart colors instead of hardcoded hex values.
+- Do not introduce extra dependencies for visual effects.
