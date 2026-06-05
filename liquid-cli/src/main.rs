@@ -1,23 +1,41 @@
 use std::sync::Arc;
+use std::{env, path::PathBuf};
 
-use liquid_agent::{
-    MockSqlAuditAgent, PostgresToolConfig, PostgresToolExecutionMode, SqlAuditAgent,
-    ToolCallingSqlAuditAgent, ToolRegistry,
-};
-use liquid_config::{LiquidConfig, LlmApiMode, SqlExecutionMode, SqlMetadataMode};
+use liquid_agent::{MockSqlAuditAgent, SqlAuditAgent, ToolCallingSqlAuditAgent};
+use liquid_config::{LiquidConfig, LlmApiMode};
 use liquid_llm::{LlmProtocol, OpenAiCompatibleClient, OpenAiCompatibleConfig};
-use sqlx::postgres::PgPoolOptions;
+use liquid_storage::{Storage, StorageOptions};
 use tracing_subscriber::EnvFilter;
 
 #[tokio::main]
 async fn main() -> anyhow::Result<()> {
     init_tracing();
 
-    let config = LiquidConfig::from_env()?;
+    let config_path = config_path_from_args()?;
+    let config = LiquidConfig::from_file_and_env(config_path.as_deref())?;
+    let storage = build_storage(&config).await?;
     let agent = build_agent(&config).await?;
 
     tracing::info!(addr = %config.api_addr, "starting liquid api");
-    liquid_api::serve(config, agent).await
+    liquid_api::serve(config, agent, storage).await
+}
+
+async fn build_storage(config: &LiquidConfig) -> anyhow::Result<Arc<Storage>> {
+    let storage = Arc::new(
+        Storage::connect_with_options(
+            StorageOptions::new(config.database.url.clone())
+                .with_max_connections(config.database.max_connections)
+                .with_token_ttl_seconds(config.auth.token_ttl_seconds)
+                .with_encryption_key(config.security.encryption_key.clone()),
+        )
+        .await?,
+    );
+
+    if config.database.auto_migrate {
+        storage.migrate().await?;
+    }
+
+    Ok(storage)
 }
 
 async fn build_agent(config: &LiquidConfig) -> anyhow::Result<Arc<dyn SqlAuditAgent>> {
@@ -47,51 +65,32 @@ async fn build_agent(config: &LiquidConfig) -> anyhow::Result<Arc<dyn SqlAuditAg
         "using OpenAI-compatible SQL audit agent"
     );
 
-    let (postgres_pool, metadata_required) = postgres_tool_pool(config).await?;
-    let tools = ToolRegistry::with_postgres_tools(PostgresToolConfig::new(
-        postgres_pool,
-        metadata_required,
-        postgres_tool_execution(config.sql_execution),
-    ));
-
-    Ok(Arc::new(
-        ToolCallingSqlAuditAgent::new(llm, model, protocol).with_tools(tools),
-    ))
+    Ok(Arc::new(ToolCallingSqlAuditAgent::new(
+        llm, model, protocol,
+    )))
 }
 
-async fn postgres_tool_pool(config: &LiquidConfig) -> anyhow::Result<(Option<sqlx::PgPool>, bool)> {
-    let metadata_required = matches!(config.sql_metadata, SqlMetadataMode::Required);
-    let pool_required = metadata_required
-        || !matches!(config.sql_metadata, SqlMetadataMode::Off)
-        || !matches!(config.sql_execution, SqlExecutionMode::Off);
+fn config_path_from_args() -> anyhow::Result<Option<PathBuf>> {
+    let mut args = env::args().skip(1);
+    let mut config_path = None;
 
-    if !pool_required {
-        return Ok((None, false));
-    }
-
-    match config.sql_metadata {
-        SqlMetadataMode::Required => {
-            let pool = PgPoolOptions::new()
-                .max_connections(2)
-                .connect(&config.database_url)
-                .await?;
-            Ok((Some(pool), true))
-        }
-        SqlMetadataMode::Auto | SqlMetadataMode::Off => {
-            let pool = PgPoolOptions::new()
-                .max_connections(2)
-                .connect_lazy(&config.database_url)?;
-            Ok((Some(pool), false))
+    while let Some(arg) = args.next() {
+        match arg.as_str() {
+            "--config" | "-c" => {
+                let Some(path) = args.next() else {
+                    anyhow::bail!("{arg} requires a path");
+                };
+                config_path = Some(PathBuf::from(path));
+            }
+            "--help" | "-h" => {
+                println!("Usage: liquid [--config <path>]");
+                std::process::exit(0);
+            }
+            other => anyhow::bail!("unknown argument: {other}"),
         }
     }
-}
 
-fn postgres_tool_execution(mode: SqlExecutionMode) -> PostgresToolExecutionMode {
-    match mode {
-        SqlExecutionMode::Off => PostgresToolExecutionMode::Off,
-        SqlExecutionMode::Readonly => PostgresToolExecutionMode::Readonly,
-        SqlExecutionMode::WriteGated => PostgresToolExecutionMode::WriteGated,
-    }
+    Ok(config_path)
 }
 
 fn init_tracing() {

@@ -1,5 +1,113 @@
 use serde::{Deserialize, Serialize};
 
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+pub struct PublicUser {
+    pub id: String,
+    pub email: String,
+    pub display_name: String,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+pub struct RegisterRequest {
+    pub email: String,
+    pub display_name: String,
+    pub password: String,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+pub struct LoginRequest {
+    pub email: String,
+    pub password: String,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+pub struct AuthResponse {
+    pub token: String,
+    pub token_type: String,
+    pub expires_in_seconds: i64,
+    pub user: PublicUser,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+pub struct CurrentUserResponse {
+    pub user: PublicUser,
+}
+
+#[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "snake_case")]
+pub enum AuditedDatabaseEngine {
+    Postgres,
+}
+
+impl AuditedDatabaseEngine {
+    pub fn as_str(self) -> &'static str {
+        match self {
+            Self::Postgres => "postgres",
+        }
+    }
+}
+
+#[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "snake_case")]
+pub enum AuditedDatabaseSslMode {
+    Disable,
+    Prefer,
+    Require,
+}
+
+impl AuditedDatabaseSslMode {
+    pub fn as_str(self) -> &'static str {
+        match self {
+            Self::Disable => "disable",
+            Self::Prefer => "prefer",
+            Self::Require => "require",
+        }
+    }
+}
+
+impl Default for AuditedDatabaseSslMode {
+    fn default() -> Self {
+        Self::Prefer
+    }
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+pub struct AuditedDatabase {
+    pub id: String,
+    pub name: String,
+    pub engine: AuditedDatabaseEngine,
+    pub host: String,
+    pub port: i32,
+    pub database: String,
+    pub username: String,
+    pub ssl_mode: AuditedDatabaseSslMode,
+    pub has_password: bool,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+pub struct CreateAuditedDatabaseRequest {
+    pub name: String,
+    pub engine: AuditedDatabaseEngine,
+    pub host: String,
+    pub port: i32,
+    pub database: String,
+    pub username: String,
+    pub password: String,
+    #[serde(default)]
+    pub ssl_mode: AuditedDatabaseSslMode,
+}
+
+#[derive(Debug, Clone, Default, Serialize, Deserialize, PartialEq, Eq)]
+pub struct UpdateAuditedDatabaseRequest {
+    pub name: Option<String>,
+    pub host: Option<String>,
+    pub port: Option<i32>,
+    pub database: Option<String>,
+    pub username: Option<String>,
+    pub password: Option<String>,
+    pub ssl_mode: Option<AuditedDatabaseSslMode>,
+}
+
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
 pub struct AuditSummary {
     pub total_queries: u64,

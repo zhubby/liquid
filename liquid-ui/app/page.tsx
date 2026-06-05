@@ -1,5 +1,5 @@
-import { AuditDashboard } from "@/components/audit-dashboard";
+import { LiquidApp } from "@/components/liquid-app";
 
 export default function Home() {
-  return <AuditDashboard />;
+  return <LiquidApp />;
 }

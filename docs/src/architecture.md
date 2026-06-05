@@ -18,4 +18,8 @@ The SQL audit agent uses a small tool registry and an LLM tool-call loop. The
 `liquid-agent` crate owns agent behavior, tool dispatch, and SQL audit report
 types. The `liquid-llm` crate owns provider protocol mapping for Chat
 Completions and Responses so OpenAI wire details do not leak into agent logic.
-Real persistence should be introduced behind the existing storage boundaries.
+`liquid-storage` owns the Liquid application database. It embeds SQLx
+migrations and stores application users, revocable auth tokens, and audited
+database connection records. Audited database connections are managed by the
+frontend and stored in Liquid; they are not process-level target database
+configuration.

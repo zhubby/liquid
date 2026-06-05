@@ -7,6 +7,43 @@ cargo run -p liquid-cli
 ```
 
 The API binds to `LIQUID_API_ADDR`, defaulting to `127.0.0.1:3001`.
+You can also provide a TOML config file:
+
+```bash
+cargo run -p liquid-cli -- --config liquid.toml
+```
+
+Example:
+
+```toml
+[api]
+addr = "127.0.0.1:3001"
+cors_origin = "http://localhost:3000"
+
+[database]
+url = "postgres://postgres:postgres@localhost:5432/liquid"
+max_connections = 5
+auto_migrate = true
+
+[auth]
+token_ttl_seconds = 604800
+
+[security]
+encryption_key = "replace-with-a-secret-key"
+
+[llm]
+base_url = "https://api.openai.com"
+api_mode = "chat_completions"
+
+[sql]
+metadata = "auto"
+execution = "readonly"
+```
+
+Environment variables override config file values. The Liquid application
+database stores users, auth tokens, and user-managed audited database connection
+records. Audited database passwords are encrypted with `LIQUID_ENCRYPTION_KEY`
+or `[security].encryption_key`.
 
 The backend uses the mock SQL audit agent unless both `OPENAI_API_KEY` and
 `OPENAI_MODEL` are set. OpenAI-compatible LLM settings are:
