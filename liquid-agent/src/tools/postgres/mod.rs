@@ -10,6 +10,7 @@ pub use config::{PostgresToolConfig, PostgresToolExecutionMode};
 pub(super) use catalog::{PgListRelationsTool, PgListSchemasTool};
 pub(super) use config::PostgresToolContext;
 pub(super) use describe::PgDescribeRelationTool;
+pub use execute::{ApprovedWriteExecutionResult, execute_approved_write_sql_with_config};
 pub(super) use execute::{PgExecuteReadonlySqlTool, PgExecuteWriteSqlTool};
 pub(super) use explain::PgExplainSqlTool;
 
@@ -68,6 +69,55 @@ mod tests {
             .unwrap_err();
 
         assert!(error.to_string().contains("exactly one statement"));
+    }
+
+    #[tokio::test]
+    async fn approved_write_executor_rejects_select_before_database_access() {
+        let error = execute::execute_approved_write_sql(
+            &test_context(),
+            "select id from users",
+            "approved_write_sql",
+        )
+        .await
+        .unwrap_err();
+
+        assert!(error.to_string().contains("rejects SELECT"));
+    }
+
+    #[tokio::test]
+    async fn approved_write_executor_rejects_multiple_statements_before_database_access() {
+        let error = execute::execute_approved_write_sql(
+            &test_context(),
+            "update users set active = false where id = 1; select 1",
+            "approved_write_sql",
+        )
+        .await
+        .unwrap_err();
+
+        assert!(error.to_string().contains("exactly one statement"));
+    }
+
+    #[tokio::test]
+    async fn approved_write_executor_rejects_transaction_before_database_access() {
+        let error =
+            execute::execute_approved_write_sql(&test_context(), "begin", "approved_write_sql")
+                .await
+                .unwrap_err();
+
+        assert!(error.to_string().contains("transaction and control"));
+    }
+
+    #[tokio::test]
+    async fn approved_write_executor_rejects_critical_sql_before_database_access() {
+        let error = execute::execute_approved_write_sql(
+            &test_context(),
+            "drop table users",
+            "approved_write_sql",
+        )
+        .await
+        .unwrap_err();
+
+        assert!(error.to_string().contains("critical deterministic risk"));
     }
 
     #[tokio::test]

@@ -1,15 +1,21 @@
 use async_trait::async_trait;
 use liquid_core::{
-    AuthResponse, CreateManagedDatabaseRequest, LoginRequest, ManagedDatabase,
-    ManagedDatabaseConnectionLoader, ManagedDatabaseConnectionLoaderError,
+    ApproveSqlAuditRequest, AuthResponse, CreateManagedDatabaseRequest, LoginRequest,
+    ManagedDatabase, ManagedDatabaseConnectionLoader, ManagedDatabaseConnectionLoaderError,
     ManagedDatabaseConnectionSpec, ManagedDatabasePoolKey, PublicUser, RegisterRequest,
+    RejectSqlAuditRequest, SqlAuditExecutionResult, SqlAuditRecord, SqlAuditStatus,
     UpdateManagedDatabaseRequest,
 };
 use sqlx::{PgPool, postgres::PgPoolOptions};
 
 use crate::{
-    auth, crypto::PasswordCipher, error::StorageError, managed_databases, options::StorageOptions,
-    traits::LiquidStore,
+    auth,
+    crypto::PasswordCipher,
+    error::StorageError,
+    managed_databases,
+    options::StorageOptions,
+    sql_audits,
+    traits::{CreateSqlAuditRecord, LiquidStore},
 };
 
 #[derive(Debug, Clone)]
@@ -114,11 +120,83 @@ impl LiquidStore for Storage {
     ) -> Result<(), StorageError> {
         managed_databases::delete_managed_database(self, owner_user_id, id).await
     }
+
+    async fn create_sql_audit(
+        &self,
+        owner_user_id: &str,
+        managed_database_id: &str,
+        record: CreateSqlAuditRecord,
+    ) -> Result<SqlAuditRecord, StorageError> {
+        sql_audits::create_sql_audit(self, owner_user_id, managed_database_id, record).await
+    }
+
+    async fn list_sql_audits(
+        &self,
+        owner_user_id: &str,
+        managed_database_id: Option<&str>,
+        status: Option<SqlAuditStatus>,
+        limit: i64,
+    ) -> Result<Vec<SqlAuditRecord>, StorageError> {
+        sql_audits::list_sql_audits(self, owner_user_id, managed_database_id, status, limit).await
+    }
+
+    async fn get_sql_audit(
+        &self,
+        owner_user_id: &str,
+        id: &str,
+    ) -> Result<SqlAuditRecord, StorageError> {
+        sql_audits::get_sql_audit(self, owner_user_id, id).await
+    }
+
+    async fn approve_sql_audit(
+        &self,
+        owner_user_id: &str,
+        id: &str,
+        request: ApproveSqlAuditRequest,
+    ) -> Result<SqlAuditRecord, StorageError> {
+        sql_audits::approve_sql_audit(self, owner_user_id, id, request).await
+    }
+
+    async fn reject_sql_audit(
+        &self,
+        owner_user_id: &str,
+        id: &str,
+        request: RejectSqlAuditRequest,
+    ) -> Result<SqlAuditRecord, StorageError> {
+        sql_audits::reject_sql_audit(self, owner_user_id, id, request).await
+    }
+
+    async fn start_sql_audit_execution(
+        &self,
+        owner_user_id: &str,
+        id: &str,
+    ) -> Result<SqlAuditRecord, StorageError> {
+        sql_audits::start_sql_audit_execution(self, owner_user_id, id).await
+    }
+
+    async fn complete_sql_audit_execution(
+        &self,
+        owner_user_id: &str,
+        id: &str,
+        result: SqlAuditExecutionResult,
+    ) -> Result<SqlAuditRecord, StorageError> {
+        sql_audits::complete_sql_audit_execution(self, owner_user_id, id, result).await
+    }
+
+    async fn fail_sql_audit_execution(
+        &self,
+        owner_user_id: &str,
+        id: &str,
+        error: String,
+    ) -> Result<SqlAuditRecord, StorageError> {
+        sql_audits::fail_sql_audit_execution(self, owner_user_id, id, error).await
+    }
 }
 
 fn managed_database_loader_error(error: StorageError) -> ManagedDatabaseConnectionLoaderError {
     match error {
         StorageError::NotFound => ManagedDatabaseConnectionLoaderError::NotFound,
+        StorageError::Conflict(message) => ManagedDatabaseConnectionLoaderError::Backend(message),
         StorageError::Validation(message) => {
             ManagedDatabaseConnectionLoaderError::InvalidConnection(message)
         }

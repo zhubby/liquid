@@ -7,10 +7,11 @@ mod error;
 mod health;
 mod managed_databases;
 mod server;
+mod sql_audits;
 mod state;
 
 pub use server::serve;
-pub use state::ApiState;
+pub use state::{ApiState, ApprovedSqlExecutionFuture, ApprovedSqlExecutor};
 
 pub fn router(state: ApiState) -> Router {
     Router::new()
@@ -18,6 +19,7 @@ pub fn router(state: ApiState) -> Router {
         .merge(auth::routes())
         .merge(audit::routes())
         .merge(managed_databases::routes())
+        .merge(sql_audits::routes())
         .with_state(state)
 }
 

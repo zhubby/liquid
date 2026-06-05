@@ -10,11 +10,11 @@ path = "src/main.rs"
 [dependencies]
 anyhow.workspace = true
 clap.workspace = true
-liquid-agent = { path = "../liquid-agent" }
-liquid-api = { path = "../liquid-api" }
-liquid-config = { path = "../liquid-config" }
-liquid-llm = { path = "../liquid-llm" }
-liquid-storage = { path = "../liquid-storage" }
+liquid-agent.workspace = true
+liquid-api.workspace = true
+liquid-config.workspace = true
+liquid-llm.workspace = true
+liquid-storage.workspace = true
 tokio.workspace = true
 tracing.workspace = true
 tracing-subscriber.workspace = true

@@ -10,18 +10,21 @@ use axum::{
     },
 };
 use liquid_agent::{
-    AgentStream, MockSqlAuditAgent, PostgresToolExecutionMode, SqlAuditAgent, ToolRegistry,
+    AgentStream, ApprovedWriteExecutionResult, MockSqlAuditAgent, PostgresToolConfig,
+    PostgresToolExecutionMode, SqlAuditAgent, ToolRegistry,
 };
-use liquid_api::{ApiState, router};
+use liquid_api::{ApiState, ApprovedSqlExecutionFuture, ApprovedSqlExecutor, router};
 use liquid_core::{
-    AuditSummary, AuthResponse, CreateManagedDatabaseRequest, LoginRequest, ManagedDatabase,
-    ManagedDatabaseConnectionLoader, ManagedDatabaseConnectionLoaderError,
+    ApproveSqlAuditRequest, AuditSummary, AuthResponse, CreateManagedDatabaseRequest, LoginRequest,
+    ManagedDatabase, ManagedDatabaseConnectionLoader, ManagedDatabaseConnectionLoaderError,
     ManagedDatabaseConnectionSpec, ManagedDatabaseEngine, ManagedDatabasePoolKey,
-    ManagedDatabasePoolPolicy, ManagedDatabaseSslMode, PublicUser, RegisterRequest, SqlAuditReport,
-    SqlAuditRequest, UpdateManagedDatabaseRequest,
+    ManagedDatabasePoolPolicy, ManagedDatabaseSslMode, PublicUser, RegisterRequest,
+    RejectSqlAuditRequest, SqlAuditExecutionResult, SqlAuditRecord, SqlAuditReport,
+    SqlAuditRequest, SqlAuditStatus, UpdateManagedDatabaseRequest,
 };
+use liquid_sql::{PgSqlAnalysisRequest, PgSqlStatementKind, analyze_postgres_sql};
 use liquid_storage::{
-    LiquidStore, ManagedDatabasePoolConnector, ManagedDatabasePoolError,
+    CreateSqlAuditRecord, LiquidStore, ManagedDatabasePoolConnector, ManagedDatabasePoolError,
     ManagedDatabasePoolManager, StorageError,
 };
 use serde_json::{Value, json};
@@ -37,6 +40,7 @@ const VALID_TOKEN: &str = "valid-token";
 struct TestStore {
     revoked: Mutex<bool>,
     databases: Mutex<Vec<ManagedDatabase>>,
+    audits: Mutex<Vec<SqlAuditRecord>>,
 }
 
 #[async_trait]
@@ -148,6 +152,217 @@ impl LiquidStore for TestStore {
 
         Ok(())
     }
+
+    async fn create_sql_audit(
+        &self,
+        owner_user_id: &str,
+        managed_database_id: &str,
+        record: CreateSqlAuditRecord,
+    ) -> Result<SqlAuditRecord, StorageError> {
+        let CreateSqlAuditRecord {
+            request,
+            report,
+            deterministic_analysis,
+            statement_kind,
+            status,
+            risk_score,
+        } = record;
+        let database = self
+            .databases
+            .lock()
+            .unwrap()
+            .iter()
+            .find(|database| database.id == managed_database_id)
+            .cloned()
+            .ok_or(StorageError::NotFound)?;
+        let mut audits = self.audits.lock().unwrap();
+        let record = SqlAuditRecord {
+            id: format!("audit-{}", audits.len() + 1),
+            owner_user_id: owner_user_id.to_owned(),
+            managed_database_id: managed_database_id.to_owned(),
+            managed_database_name: database.name,
+            managed_database_engine: database.engine.as_str().to_owned(),
+            managed_database_host: database.host,
+            managed_database_port: database.port,
+            managed_database_database: database.database,
+            managed_database_username: database.username,
+            managed_database_ssl_mode: database.ssl_mode.as_str().to_owned(),
+            sql: request.sql,
+            schema: request.schema,
+            context: request.context,
+            execution_purpose: request.execution_purpose,
+            status,
+            statement_kind,
+            risk_score,
+            report: Some(report),
+            deterministic_analysis: Some(deterministic_analysis),
+            approved_by_user_id: None,
+            approved_at: None,
+            approval_comment: None,
+            rejected_by_user_id: None,
+            rejected_at: None,
+            rejection_comment: None,
+            execution_result: None,
+            execution_error: None,
+            created_at: time::OffsetDateTime::UNIX_EPOCH,
+            updated_at: time::OffsetDateTime::UNIX_EPOCH,
+            executed_at: None,
+        };
+        audits.push(record.clone());
+        Ok(record)
+    }
+
+    async fn list_sql_audits(
+        &self,
+        owner_user_id: &str,
+        managed_database_id: Option<&str>,
+        status: Option<SqlAuditStatus>,
+        limit: i64,
+    ) -> Result<Vec<SqlAuditRecord>, StorageError> {
+        let audits = self.audits.lock().unwrap();
+        Ok(audits
+            .iter()
+            .filter(|record| record.owner_user_id == owner_user_id)
+            .filter(|record| {
+                managed_database_id
+                    .map(|id| record.managed_database_id == id)
+                    .unwrap_or(true)
+            })
+            .filter(|record| status.map(|status| record.status == status).unwrap_or(true))
+            .take(limit.clamp(1, 100) as usize)
+            .cloned()
+            .collect())
+    }
+
+    async fn get_sql_audit(
+        &self,
+        owner_user_id: &str,
+        id: &str,
+    ) -> Result<SqlAuditRecord, StorageError> {
+        self.audits
+            .lock()
+            .unwrap()
+            .iter()
+            .find(|record| record.id == id && record.owner_user_id == owner_user_id)
+            .cloned()
+            .ok_or(StorageError::NotFound)
+    }
+
+    async fn approve_sql_audit(
+        &self,
+        owner_user_id: &str,
+        id: &str,
+        request: ApproveSqlAuditRequest,
+    ) -> Result<SqlAuditRecord, StorageError> {
+        let mut audits = self.audits.lock().unwrap();
+        let Some(record) = audits
+            .iter_mut()
+            .find(|record| record.id == id && record.owner_user_id == owner_user_id)
+        else {
+            return Err(StorageError::NotFound);
+        };
+        if !matches!(record.status, SqlAuditStatus::PendingApproval) {
+            return Err(StorageError::Conflict(
+                "only pending approval audits can be approved".to_owned(),
+            ));
+        }
+        record.status = SqlAuditStatus::Approved;
+        record.approved_by_user_id = Some(owner_user_id.to_owned());
+        record.approval_comment = request.comment;
+        Ok(record.clone())
+    }
+
+    async fn reject_sql_audit(
+        &self,
+        owner_user_id: &str,
+        id: &str,
+        request: RejectSqlAuditRequest,
+    ) -> Result<SqlAuditRecord, StorageError> {
+        let mut audits = self.audits.lock().unwrap();
+        let Some(record) = audits
+            .iter_mut()
+            .find(|record| record.id == id && record.owner_user_id == owner_user_id)
+        else {
+            return Err(StorageError::NotFound);
+        };
+        if !matches!(record.status, SqlAuditStatus::PendingApproval) {
+            return Err(StorageError::Conflict(
+                "only pending approval audits can be rejected".to_owned(),
+            ));
+        }
+        record.status = SqlAuditStatus::Rejected;
+        record.rejected_by_user_id = Some(owner_user_id.to_owned());
+        record.rejection_comment = request.comment;
+        Ok(record.clone())
+    }
+
+    async fn start_sql_audit_execution(
+        &self,
+        owner_user_id: &str,
+        id: &str,
+    ) -> Result<SqlAuditRecord, StorageError> {
+        let mut audits = self.audits.lock().unwrap();
+        let Some(record) = audits
+            .iter_mut()
+            .find(|record| record.id == id && record.owner_user_id == owner_user_id)
+        else {
+            return Err(StorageError::NotFound);
+        };
+        if !matches!(record.status, SqlAuditStatus::Approved) {
+            return Err(StorageError::Conflict(
+                "only approved audits can be executed".to_owned(),
+            ));
+        }
+        record.status = SqlAuditStatus::Executing;
+        Ok(record.clone())
+    }
+
+    async fn complete_sql_audit_execution(
+        &self,
+        owner_user_id: &str,
+        id: &str,
+        result: SqlAuditExecutionResult,
+    ) -> Result<SqlAuditRecord, StorageError> {
+        let mut audits = self.audits.lock().unwrap();
+        let Some(record) = audits
+            .iter_mut()
+            .find(|record| record.id == id && record.owner_user_id == owner_user_id)
+        else {
+            return Err(StorageError::NotFound);
+        };
+        if !matches!(record.status, SqlAuditStatus::Executing) {
+            return Err(StorageError::Conflict(
+                "only executing audits can be completed".to_owned(),
+            ));
+        }
+        record.status = SqlAuditStatus::Executed;
+        record.execution_result = Some(result);
+        record.executed_at = Some(time::OffsetDateTime::UNIX_EPOCH);
+        Ok(record.clone())
+    }
+
+    async fn fail_sql_audit_execution(
+        &self,
+        owner_user_id: &str,
+        id: &str,
+        error: String,
+    ) -> Result<SqlAuditRecord, StorageError> {
+        let mut audits = self.audits.lock().unwrap();
+        let Some(record) = audits
+            .iter_mut()
+            .find(|record| record.id == id && record.owner_user_id == owner_user_id)
+        else {
+            return Err(StorageError::NotFound);
+        };
+        if !matches!(record.status, SqlAuditStatus::Executing) {
+            return Err(StorageError::Conflict(
+                "only executing audits can fail".to_owned(),
+            ));
+        }
+        record.status = SqlAuditStatus::ExecutionFailed;
+        record.execution_error = Some(error);
+        Ok(record.clone())
+    }
 }
 
 #[async_trait]
@@ -227,6 +442,38 @@ impl SqlAuditAgent for CapturingSqlAuditAgent {
     }
 }
 
+#[derive(Default)]
+struct FakeApprovedSqlExecutor {
+    fail_with: Mutex<Option<String>>,
+}
+
+impl ApprovedSqlExecutor for FakeApprovedSqlExecutor {
+    fn execute<'a>(
+        &'a self,
+        _config: PostgresToolConfig,
+        sql: &'a str,
+    ) -> ApprovedSqlExecutionFuture<'a> {
+        Box::pin(async move {
+            if let Some(message) = self.fail_with.lock().unwrap().clone() {
+                return Err(anyhow::anyhow!(message));
+            }
+
+            let analysis = analyze_postgres_sql(PgSqlAnalysisRequest::new(sql));
+            Ok(ApprovedWriteExecutionResult {
+                statement_kind: analysis
+                    .statements
+                    .first()
+                    .map(|statement| statement.kind.clone())
+                    .unwrap_or(PgSqlStatementKind::Other),
+                affected_rows: 1,
+                elapsed_ms: 7,
+                risk_floor: analysis.risk_floor(),
+                analysis,
+            })
+        })
+    }
+}
+
 fn test_app() -> Router {
     test_app_with_agent(Arc::new(MockSqlAuditAgent))
 }
@@ -239,6 +486,18 @@ fn test_app_with_agent_and_execution(
     agent: Arc<dyn SqlAuditAgent>,
     sql_execution: PostgresToolExecutionMode,
 ) -> Router {
+    test_app_with_agent_execution_and_executor(
+        agent,
+        sql_execution,
+        Arc::new(FakeApprovedSqlExecutor::default()),
+    )
+}
+
+fn test_app_with_agent_execution_and_executor(
+    agent: Arc<dyn SqlAuditAgent>,
+    sql_execution: PostgresToolExecutionMode,
+    executor: Arc<dyn ApprovedSqlExecutor>,
+) -> Router {
     let store = Arc::new(TestStore::default());
     let loader: Arc<dyn ManagedDatabaseConnectionLoader> = store.clone();
     let pool_manager = Arc::new(ManagedDatabasePoolManager::with_connector(
@@ -247,12 +506,13 @@ fn test_app_with_agent_and_execution(
         ManagedDatabasePoolPolicy::default(),
     ));
 
-    router(ApiState::with_pool_manager(
+    router(ApiState::with_pool_manager_and_executor(
         agent,
         store,
         pool_manager,
         false,
         sql_execution,
+        executor,
     ))
 }
 
@@ -310,6 +570,29 @@ fn lazy_test_pool(
         .max_lifetime(Some(policy.connection_max_lifetime))
         .test_before_acquire(true)
         .connect_lazy_with(options)
+}
+
+async fn create_test_database(app: &Router) {
+    let response = app
+        .clone()
+        .oneshot(auth_json_request(
+            "POST",
+            "/api/v1/managed-databases",
+            json!({
+                "name": "Warehouse",
+                "engine": "postgres",
+                "host": "localhost",
+                "port": 5432,
+                "database": "warehouse",
+                "username": "readonly",
+                "password": "password123",
+                "ssl_mode": "disable"
+            }),
+        ))
+        .await
+        .unwrap();
+
+    assert_eq!(response.status(), StatusCode::CREATED);
 }
 
 #[tokio::test]
@@ -630,6 +913,306 @@ async fn managed_database_audit_sql_uses_readonly_tool_registry() {
             .any(|name| name == "pg_execute_readonly_sql")
     );
     assert!(!tool_names.iter().any(|name| name == "pg_execute_write_sql"));
+}
+
+#[tokio::test]
+async fn sql_audit_persistence_requires_authentication() {
+    let response = test_app()
+        .oneshot(json_request(
+            "/api/v1/managed-databases/db-1/sql-audits",
+            json!({
+                "sql": "select * from users"
+            }),
+        ))
+        .await
+        .unwrap();
+
+    assert_eq!(response.status(), StatusCode::UNAUTHORIZED);
+}
+
+#[tokio::test]
+async fn sql_audit_persistence_creates_audited_select_record() {
+    let app = test_app();
+    create_test_database(&app).await;
+
+    let response = app
+        .clone()
+        .oneshot(auth_json_request(
+            "POST",
+            "/api/v1/managed-databases/db-1/sql-audits",
+            json!({
+                "sql": "select * from users",
+                "context": "read-only review"
+            }),
+        ))
+        .await
+        .unwrap();
+
+    assert_eq!(response.status(), StatusCode::CREATED);
+    let payload = response_json(response).await;
+    assert_eq!(payload["id"], "audit-1");
+    assert_eq!(payload["status"], "audited");
+    assert_eq!(payload["statement_kind"], "select");
+    assert_eq!(payload["managed_database_id"], "db-1");
+    assert_eq!(payload["sql"], "select * from users");
+    assert_eq!(payload["report"]["summary"], "Mock SQL audit completed.");
+    assert_eq!(payload["report"]["risk_score"], 50);
+
+    let list_response = app
+        .oneshot(auth_request(
+            "/api/v1/sql-audits?managed_database_id=db-1&status=audited",
+        ))
+        .await
+        .unwrap();
+    assert_eq!(list_response.status(), StatusCode::OK);
+    let payload = response_json(list_response).await;
+    assert_eq!(payload.as_array().unwrap().len(), 1);
+}
+
+#[tokio::test]
+async fn sql_audit_approve_and_execute_runs_once_when_write_gated() {
+    let app = test_app_with_agent_and_execution(
+        Arc::new(CapturingSqlAuditAgent::default()),
+        PostgresToolExecutionMode::WriteGated,
+    );
+    create_test_database(&app).await;
+
+    let create_response = app
+        .clone()
+        .oneshot(auth_json_request(
+            "POST",
+            "/api/v1/managed-databases/db-1/sql-audits",
+            json!({
+                "sql": "update users set active = false where id = 1",
+                "execution_purpose": "Deactivate test user"
+            }),
+        ))
+        .await
+        .unwrap();
+    assert_eq!(create_response.status(), StatusCode::CREATED);
+    let payload = response_json(create_response).await;
+    assert_eq!(payload["status"], "pending_approval");
+
+    let approve_response = app
+        .clone()
+        .oneshot(auth_json_request(
+            "POST",
+            "/api/v1/sql-audits/audit-1/approve",
+            json!({
+                "comment": "approved"
+            }),
+        ))
+        .await
+        .unwrap();
+    assert_eq!(approve_response.status(), StatusCode::OK);
+    let payload = response_json(approve_response).await;
+    assert_eq!(payload["status"], "approved");
+
+    let execute_response = app
+        .clone()
+        .oneshot(
+            Request::builder()
+                .method("POST")
+                .uri("/api/v1/sql-audits/audit-1/execute")
+                .header(AUTHORIZATION, format!("Bearer {VALID_TOKEN}"))
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(execute_response.status(), StatusCode::OK);
+    let payload = response_json(execute_response).await;
+    assert_eq!(payload["status"], "executed");
+    assert_eq!(payload["execution_result"]["affected_rows"], 1);
+
+    let repeat_response = app
+        .oneshot(
+            Request::builder()
+                .method("POST")
+                .uri("/api/v1/sql-audits/audit-1/execute")
+                .header(AUTHORIZATION, format!("Bearer {VALID_TOKEN}"))
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(repeat_response.status(), StatusCode::CONFLICT);
+}
+
+#[tokio::test]
+async fn sql_audit_reject_blocks_execution() {
+    let app = test_app_with_agent_and_execution(
+        Arc::new(CapturingSqlAuditAgent::default()),
+        PostgresToolExecutionMode::WriteGated,
+    );
+    create_test_database(&app).await;
+
+    let create_response = app
+        .clone()
+        .oneshot(auth_json_request(
+            "POST",
+            "/api/v1/managed-databases/db-1/sql-audits",
+            json!({
+                "sql": "delete from users where id = 1",
+                "execution_purpose": "Remove test user"
+            }),
+        ))
+        .await
+        .unwrap();
+    assert_eq!(create_response.status(), StatusCode::CREATED);
+
+    let reject_response = app
+        .clone()
+        .oneshot(auth_json_request(
+            "POST",
+            "/api/v1/sql-audits/audit-1/reject",
+            json!({
+                "comment": "too risky"
+            }),
+        ))
+        .await
+        .unwrap();
+    assert_eq!(reject_response.status(), StatusCode::OK);
+    let payload = response_json(reject_response).await;
+    assert_eq!(payload["status"], "rejected");
+
+    let execute_response = app
+        .oneshot(
+            Request::builder()
+                .method("POST")
+                .uri("/api/v1/sql-audits/audit-1/execute")
+                .header(AUTHORIZATION, format!("Bearer {VALID_TOKEN}"))
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(execute_response.status(), StatusCode::CONFLICT);
+}
+
+#[tokio::test]
+async fn sql_audit_blocks_critical_sql() {
+    let app = test_app();
+    create_test_database(&app).await;
+
+    let create_response = app
+        .clone()
+        .oneshot(auth_json_request(
+            "POST",
+            "/api/v1/managed-databases/db-1/sql-audits",
+            json!({
+                "sql": "drop table users",
+                "execution_purpose": "Dangerous migration"
+            }),
+        ))
+        .await
+        .unwrap();
+    assert_eq!(create_response.status(), StatusCode::CREATED);
+    let payload = response_json(create_response).await;
+    assert_eq!(payload["status"], "blocked");
+
+    let approve_response = app
+        .oneshot(auth_json_request(
+            "POST",
+            "/api/v1/sql-audits/audit-1/approve",
+            json!({}),
+        ))
+        .await
+        .unwrap();
+    assert_eq!(approve_response.status(), StatusCode::CONFLICT);
+}
+
+#[tokio::test]
+async fn sql_audit_execute_requires_write_gated_config() {
+    let app = test_app();
+    create_test_database(&app).await;
+
+    let create_response = app
+        .clone()
+        .oneshot(auth_json_request(
+            "POST",
+            "/api/v1/managed-databases/db-1/sql-audits",
+            json!({
+                "sql": "update users set active = false where id = 1",
+                "execution_purpose": "Deactivate test user"
+            }),
+        ))
+        .await
+        .unwrap();
+    assert_eq!(create_response.status(), StatusCode::CREATED);
+
+    let execute_response = app
+        .oneshot(
+            Request::builder()
+                .method("POST")
+                .uri("/api/v1/sql-audits/audit-1/execute")
+                .header(AUTHORIZATION, format!("Bearer {VALID_TOKEN}"))
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(execute_response.status(), StatusCode::FORBIDDEN);
+}
+
+#[tokio::test]
+async fn sql_audit_execute_rejects_managed_database_drift() {
+    let app = test_app_with_agent_and_execution(
+        Arc::new(CapturingSqlAuditAgent::default()),
+        PostgresToolExecutionMode::WriteGated,
+    );
+    create_test_database(&app).await;
+
+    let create_response = app
+        .clone()
+        .oneshot(auth_json_request(
+            "POST",
+            "/api/v1/managed-databases/db-1/sql-audits",
+            json!({
+                "sql": "update users set active = false where id = 1",
+                "execution_purpose": "Deactivate test user"
+            }),
+        ))
+        .await
+        .unwrap();
+    assert_eq!(create_response.status(), StatusCode::CREATED);
+
+    let approve_response = app
+        .clone()
+        .oneshot(auth_json_request(
+            "POST",
+            "/api/v1/sql-audits/audit-1/approve",
+            json!({}),
+        ))
+        .await
+        .unwrap();
+    assert_eq!(approve_response.status(), StatusCode::OK);
+
+    let update_response = app
+        .clone()
+        .oneshot(auth_json_request(
+            "PATCH",
+            "/api/v1/managed-databases/db-1",
+            json!({
+                "host": "other-host"
+            }),
+        ))
+        .await
+        .unwrap();
+    assert_eq!(update_response.status(), StatusCode::OK);
+
+    let execute_response = app
+        .oneshot(
+            Request::builder()
+                .method("POST")
+                .uri("/api/v1/sql-audits/audit-1/execute")
+                .header(AUTHORIZATION, format!("Bearer {VALID_TOKEN}"))
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(execute_response.status(), StatusCode::CONFLICT);
 }
 
 fn json_request(uri: &str, payload: Value) -> Request<Body> {

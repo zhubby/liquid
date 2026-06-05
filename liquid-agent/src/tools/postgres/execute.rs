@@ -3,7 +3,7 @@ use std::time::Instant;
 use anyhow::{Result, bail};
 use async_trait::async_trait;
 use liquid_llm::ToolDefinition;
-use liquid_sql::{PgSqlRiskSeverity, PgSqlStatementKind};
+use liquid_sql::{PgSqlAnalysis, PgSqlRiskSeverity, PgSqlStatementKind};
 use serde_json::{Value, json};
 use sqlx::Row;
 
@@ -11,7 +11,7 @@ use crate::{tools::AgentTool, types::ToolOutput};
 
 use super::{
     args::{elapsed_ms, limit_arg, required_string_arg, validate_single_statement},
-    config::PostgresToolContext,
+    config::{PostgresToolConfig, PostgresToolContext},
 };
 
 #[derive(Debug, Clone)]
@@ -143,55 +143,93 @@ impl AgentTool for PgExecuteWriteSqlTool {
     async fn execute(&self, arguments: Value) -> Result<ToolOutput> {
         let sql = required_string_arg(&arguments, "sql", "pg_execute_write_sql")?;
         let purpose = required_string_arg(&arguments, "purpose", "pg_execute_write_sql")?;
-        let (analysis, statement_kind, executable_sql) =
-            validate_single_statement(&sql, "pg_execute_write_sql")?;
 
-        if matches!(statement_kind, PgSqlStatementKind::Select) {
-            bail!("pg_execute_write_sql rejects SELECT; use pg_execute_readonly_sql");
-        }
-
-        if matches!(
-            statement_kind,
-            PgSqlStatementKind::Transaction | PgSqlStatementKind::Control
-        ) {
-            bail!(
-                "pg_execute_write_sql rejects transaction and control statements; got {:?}",
-                statement_kind
-            );
-        }
-
-        if analysis
-            .findings
-            .iter()
-            .any(|finding| matches!(finding.severity, PgSqlRiskSeverity::Critical))
-        {
-            bail!("pg_execute_write_sql rejects statements with critical deterministic risk");
-        }
-
-        let started_at = Instant::now();
-        let mut transaction = self.context.pool.begin().await?;
-        set_tool_timeouts(&mut transaction, &self.context).await?;
-        let result = sqlx::query(&executable_sql)
-            .execute(&mut *transaction)
-            .await?;
-        transaction.commit().await?;
-        let elapsed_ms = elapsed_ms(started_at);
-
+        let result =
+            execute_approved_write_sql(&self.context, &sql, "pg_execute_write_sql").await?;
         tracing::info!(
-            statement_kind = ?statement_kind,
-            affected_rows = result.rows_affected(),
+            statement_kind = ?result.statement_kind,
+            affected_rows = result.affected_rows,
             purpose_length = purpose.len(),
             "executed gated PostgreSQL write tool"
         );
 
         Ok(ToolOutput::json(json!({
-            "statement_kind": statement_kind,
-            "affected_rows": result.rows_affected(),
-            "elapsed_ms": elapsed_ms,
-            "risk_floor": analysis.risk_floor(),
-            "findings": analysis.findings,
+            "statement_kind": result.statement_kind,
+            "affected_rows": result.affected_rows,
+            "elapsed_ms": result.elapsed_ms,
+            "risk_floor": result.risk_floor,
+            "findings": result.analysis.findings,
         })))
     }
+}
+
+#[derive(Debug, Clone, PartialEq)]
+pub struct ApprovedWriteExecutionResult {
+    pub statement_kind: PgSqlStatementKind,
+    pub affected_rows: u64,
+    pub elapsed_ms: u64,
+    pub risk_floor: u8,
+    pub analysis: PgSqlAnalysis,
+}
+
+pub async fn execute_approved_write_sql_with_config(
+    config: PostgresToolConfig,
+    sql: &str,
+) -> Result<ApprovedWriteExecutionResult> {
+    let Some(pool) = config.pool.clone() else {
+        bail!("approved write SQL execution requires a managed database pool");
+    };
+    let context = PostgresToolContext::new(pool, &config);
+
+    execute_approved_write_sql(&context, sql, "approved_write_sql").await
+}
+
+pub(super) async fn execute_approved_write_sql(
+    context: &PostgresToolContext,
+    sql: &str,
+    caller: &str,
+) -> Result<ApprovedWriteExecutionResult> {
+    let (analysis, statement_kind, executable_sql) = validate_single_statement(sql, caller)?;
+
+    if matches!(statement_kind, PgSqlStatementKind::Select) {
+        bail!("{caller} rejects SELECT; use read-only audit execution");
+    }
+
+    if matches!(
+        statement_kind,
+        PgSqlStatementKind::Transaction | PgSqlStatementKind::Control
+    ) {
+        bail!(
+            "{caller} rejects transaction and control statements; got {:?}",
+            statement_kind
+        );
+    }
+
+    if analysis
+        .findings
+        .iter()
+        .any(|finding| matches!(finding.severity, PgSqlRiskSeverity::Critical))
+    {
+        bail!("{caller} rejects statements with critical deterministic risk");
+    }
+
+    let risk_floor = analysis.risk_floor();
+    let started_at = Instant::now();
+    let mut transaction = context.pool.begin().await?;
+    set_tool_timeouts(&mut transaction, context).await?;
+    let result = sqlx::query(&executable_sql)
+        .execute(&mut *transaction)
+        .await?;
+    transaction.commit().await?;
+    let elapsed_ms = elapsed_ms(started_at);
+
+    Ok(ApprovedWriteExecutionResult {
+        statement_kind,
+        affected_rows: result.rows_affected(),
+        elapsed_ms,
+        risk_floor,
+        analysis,
+    })
 }
 
 pub(super) async fn readonly_transaction(

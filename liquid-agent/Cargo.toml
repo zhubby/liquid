@@ -9,9 +9,9 @@ async-stream.workspace = true
 async-trait.workspace = true
 futures-core.workspace = true
 futures-util.workspace = true
-liquid-core = { path = "../liquid-core" }
-liquid-llm = { path = "../liquid-llm" }
-liquid-sql = { path = "../liquid-sql" }
+liquid-core.workspace = true
+liquid-llm.workspace = true
+liquid-sql.workspace = true
 serde.workspace = true
 serde_json.workspace = true
 sqlx.workspace = true

@@ -1,4 +1,6 @@
 use serde::{Deserialize, Serialize};
+use serde_json::Value;
+use time::OffsetDateTime;
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
 pub struct AuditSummary {
@@ -64,6 +66,27 @@ impl SqlAuditRequest {
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct CreateSqlAuditRequest {
+    pub sql: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub schema: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub context: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub execution_purpose: Option<String>,
+}
+
+impl CreateSqlAuditRequest {
+    pub fn into_audit_request(&self) -> SqlAuditRequest {
+        SqlAuditRequest {
+            sql: self.sql.clone(),
+            schema: self.schema.clone(),
+            context: self.context.clone(),
+        }
+    }
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct SqlAuditReport {
     pub summary: String,
     pub risk_score: u8,
@@ -77,6 +100,157 @@ pub struct SqlAuditFinding {
     pub severity: RiskSeverity,
     pub explanation: String,
     pub recommendation: String,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum SqlAuditStatus {
+    Audited,
+    PendingApproval,
+    Approved,
+    Rejected,
+    Blocked,
+    Executing,
+    Executed,
+    ExecutionFailed,
+}
+
+impl SqlAuditStatus {
+    pub fn as_str(self) -> &'static str {
+        match self {
+            Self::Audited => "audited",
+            Self::PendingApproval => "pending_approval",
+            Self::Approved => "approved",
+            Self::Rejected => "rejected",
+            Self::Blocked => "blocked",
+            Self::Executing => "executing",
+            Self::Executed => "executed",
+            Self::ExecutionFailed => "execution_failed",
+        }
+    }
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum SqlStatementKind {
+    Select,
+    Insert,
+    Update,
+    Delete,
+    Merge,
+    Create,
+    Alter,
+    Drop,
+    Truncate,
+    Security,
+    Transaction,
+    Control,
+    Other,
+}
+
+impl SqlStatementKind {
+    pub fn as_str(self) -> &'static str {
+        match self {
+            Self::Select => "select",
+            Self::Insert => "insert",
+            Self::Update => "update",
+            Self::Delete => "delete",
+            Self::Merge => "merge",
+            Self::Create => "create",
+            Self::Alter => "alter",
+            Self::Drop => "drop",
+            Self::Truncate => "truncate",
+            Self::Security => "security",
+            Self::Transaction => "transaction",
+            Self::Control => "control",
+            Self::Other => "other",
+        }
+    }
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct ApproveSqlAuditRequest {
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub comment: Option<String>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct RejectSqlAuditRequest {
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub comment: Option<String>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct SqlAuditExecutionResult {
+    pub statement_kind: SqlStatementKind,
+    pub affected_rows: u64,
+    pub elapsed_ms: u64,
+    pub risk_floor: u8,
+    #[serde(default)]
+    pub findings: Value,
+}
+
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct SqlAuditRecord {
+    pub id: String,
+    pub owner_user_id: String,
+    pub managed_database_id: String,
+    pub managed_database_name: String,
+    pub managed_database_engine: String,
+    pub managed_database_host: String,
+    pub managed_database_port: i32,
+    pub managed_database_database: String,
+    pub managed_database_username: String,
+    pub managed_database_ssl_mode: String,
+    pub sql: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub schema: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub context: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub execution_purpose: Option<String>,
+    pub status: SqlAuditStatus,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub statement_kind: Option<SqlStatementKind>,
+    pub risk_score: u8,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub report: Option<SqlAuditReport>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub deterministic_analysis: Option<Value>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub approved_by_user_id: Option<String>,
+    #[serde(
+        default,
+        with = "time::serde::rfc3339::option",
+        skip_serializing_if = "Option::is_none"
+    )]
+    pub approved_at: Option<OffsetDateTime>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub approval_comment: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub rejected_by_user_id: Option<String>,
+    #[serde(
+        default,
+        with = "time::serde::rfc3339::option",
+        skip_serializing_if = "Option::is_none"
+    )]
+    pub rejected_at: Option<OffsetDateTime>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub rejection_comment: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub execution_result: Option<SqlAuditExecutionResult>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub execution_error: Option<String>,
+    #[serde(with = "time::serde::rfc3339")]
+    pub created_at: OffsetDateTime,
+    #[serde(with = "time::serde::rfc3339")]
+    pub updated_at: OffsetDateTime,
+    #[serde(
+        default,
+        with = "time::serde::rfc3339::option",
+        skip_serializing_if = "Option::is_none"
+    )]
+    pub executed_at: Option<OffsetDateTime>,
 }
 
 impl AuditSummary {

@@ -31,6 +31,20 @@ impl ApiError {
             message: error.to_string(),
         }
     }
+
+    pub(crate) fn forbidden(message: impl Into<String>) -> Self {
+        Self {
+            status: StatusCode::FORBIDDEN,
+            message: message.into(),
+        }
+    }
+
+    pub(crate) fn conflict(message: impl Into<String>) -> Self {
+        Self {
+            status: StatusCode::CONFLICT,
+            message: message.into(),
+        }
+    }
 }
 
 impl From<StorageError> for ApiError {
@@ -46,6 +60,10 @@ impl From<StorageError> for ApiError {
             },
             StorageError::NotFound => Self {
                 status: StatusCode::NOT_FOUND,
+                message: error.to_string(),
+            },
+            StorageError::Conflict(_) => Self {
+                status: StatusCode::CONFLICT,
                 message: error.to_string(),
             },
             StorageError::Validation(_) => Self {

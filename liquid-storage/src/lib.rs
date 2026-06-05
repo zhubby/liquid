@@ -4,6 +4,7 @@ mod error;
 mod managed_databases;
 mod managed_pools;
 mod options;
+mod sql_audits;
 mod store;
 mod traits;
 mod validation;
@@ -15,4 +16,4 @@ pub use managed_pools::{
 };
 pub use options::StorageOptions;
 pub use store::Storage;
-pub use traits::LiquidStore;
+pub use traits::{CreateSqlAuditRecord, LiquidStore};

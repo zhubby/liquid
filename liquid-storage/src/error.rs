@@ -9,6 +9,8 @@ pub enum StorageError {
     #[error("record not found")]
     NotFound,
     #[error("{0}")]
+    Conflict(String),
+    #[error("{0}")]
     Validation(String),
     #[error("{0}")]
     Database(#[source] sqlx::Error),

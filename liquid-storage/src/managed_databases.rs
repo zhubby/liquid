@@ -257,6 +257,54 @@ impl ManagedDatabaseConnectionRow {
     }
 }
 
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(crate) struct ManagedDatabaseSnapshot {
+    pub id: String,
+    pub name: String,
+    pub engine: ManagedDatabaseEngine,
+    pub host: String,
+    pub port: i32,
+    pub database: String,
+    pub username: String,
+    pub ssl_mode: ManagedDatabaseSslMode,
+}
+
+pub(crate) async fn load_managed_database_snapshot(
+    storage: &Storage,
+    owner_user_id: &str,
+    id: &str,
+) -> Result<ManagedDatabaseSnapshot, StorageError> {
+    let row = sqlx::query_as::<_, ManagedDatabaseRow>(
+        r#"
+        select id::text, name, engine, host, port, database_name, username, ssl_mode,
+               encrypted_password <> '' as has_password
+        from managed_databases
+        where id = $1::uuid
+          and owner_user_id = $2::uuid
+        "#,
+    )
+    .bind(id)
+    .bind(owner_user_id)
+    .fetch_optional(&storage.pool)
+    .await
+    .map_err(map_database_error)?;
+
+    let Some(row) = row else {
+        return Err(StorageError::NotFound);
+    };
+
+    Ok(ManagedDatabaseSnapshot {
+        id: row.id,
+        name: row.name,
+        engine: parse_engine(&row.engine)?,
+        host: row.host,
+        port: row.port,
+        database: row.database_name,
+        username: row.username,
+        ssl_mode: parse_ssl_mode(&row.ssl_mode)?,
+    })
+}
+
 #[derive(Debug)]
 struct ValidatedManagedDatabase {
     name: String,
