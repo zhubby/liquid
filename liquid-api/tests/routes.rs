@@ -6,7 +6,11 @@ use axum::{
     body::Body,
     http::{
         Request, StatusCode,
-        header::{AUTHORIZATION, CONTENT_TYPE},
+        header::{
+            ACCESS_CONTROL_ALLOW_METHODS, ACCESS_CONTROL_ALLOW_ORIGIN,
+            ACCESS_CONTROL_REQUEST_HEADERS, ACCESS_CONTROL_REQUEST_METHOD, AUTHORIZATION,
+            CONTENT_TYPE, ORIGIN,
+        },
     },
 };
 use liquid_agent::{
@@ -15,7 +19,7 @@ use liquid_agent::{
 };
 use liquid_api::{
     ApiState, ApprovedSqlExecutionFuture, ApprovedSqlExecutor, ManagedDatabaseConnectionTestFuture,
-    ManagedDatabaseConnectionTester, router,
+    ManagedDatabaseConnectionTester, router, router_with_cors,
 };
 use liquid_core::{
     AgentAction, AgentActionStatus, AgentConversation, AgentEventRecord, AgentEventType,
@@ -938,6 +942,30 @@ fn test_app() -> Router {
     test_app_with_agent(Arc::new(MockSqlAuditAgent))
 }
 
+fn test_app_with_cors() -> Router {
+    let store = Arc::new(TestStore::default());
+    let loader: Arc<dyn ManagedDatabaseConnectionLoader> = store.clone();
+    let pool_manager = Arc::new(ManagedDatabasePoolManager::with_connector(
+        loader,
+        Arc::new(TestPoolConnector),
+        ManagedDatabasePoolPolicy::default(),
+    ));
+
+    router_with_cors(
+        ApiState::with_pool_manager_executor_and_connection_tester(
+            Arc::new(MockSqlAuditAgent),
+            store,
+            pool_manager,
+            false,
+            PostgresToolExecutionMode::Readonly,
+            Arc::new(FakeApprovedSqlExecutor::default()),
+            Arc::new(FakeManagedDatabaseConnectionTester),
+        ),
+        "http://localhost:3000",
+    )
+    .unwrap()
+}
+
 fn test_app_with_agent(agent: Arc<dyn SqlAuditAgent>) -> Router {
     test_app_with_agent_and_execution(agent, PostgresToolExecutionMode::Readonly)
 }
@@ -1069,6 +1097,36 @@ async fn healthz_returns_ok() {
         .unwrap();
 
     assert_eq!(response.status(), StatusCode::OK);
+}
+
+#[tokio::test]
+async fn cors_preflight_allows_setting_current_managed_database() {
+    let response = test_app_with_cors()
+        .oneshot(
+            Request::builder()
+                .method("OPTIONS")
+                .uri("/api/v1/managed-databases/current")
+                .header(ORIGIN, "http://localhost:3000")
+                .header(ACCESS_CONTROL_REQUEST_METHOD, "PUT")
+                .header(ACCESS_CONTROL_REQUEST_HEADERS, "authorization,content-type")
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+
+    assert_eq!(response.status(), StatusCode::OK);
+    assert_eq!(
+        response.headers().get(ACCESS_CONTROL_ALLOW_ORIGIN).unwrap(),
+        "http://localhost:3000"
+    );
+    let allowed_methods = response
+        .headers()
+        .get(ACCESS_CONTROL_ALLOW_METHODS)
+        .unwrap()
+        .to_str()
+        .unwrap();
+    assert!(allowed_methods.contains("PUT"));
 }
 
 #[tokio::test]

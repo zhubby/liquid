@@ -2,6 +2,7 @@
 
 import { type FormEvent, useEffect, useState } from "react";
 import { Database, Loader2, LockKeyhole, ShieldCheck } from "lucide-react";
+import { toast } from "sonner";
 
 import { AuditDashboard } from "@/components/audit-dashboard";
 import { ManagedDatabasePicker } from "@/components/managed-database-picker";
@@ -170,14 +171,12 @@ function AuthScreen({
   const [email, setEmail] = useState("");
   const [displayName, setDisplayName] = useState("");
   const [password, setPassword] = useState("");
-  const [error, setError] = useState<string | null>(null);
   const [isSubmitting, setIsSubmitting] = useState(false);
 
   const isRegister = mode === "register";
 
   const handleSubmit = async (event: FormEvent<HTMLFormElement>) => {
     event.preventDefault();
-    setError(null);
     setIsSubmitting(true);
 
     try {
@@ -200,7 +199,7 @@ function AuthScreen({
 
       await onAuthenticated(response);
     } catch (error) {
-      setError(error instanceof Error ? error.message : "认证失败");
+      toast.error(error instanceof Error ? error.message : "认证失败");
     } finally {
       setIsSubmitting(false);
     }
@@ -294,12 +293,6 @@ function AuthScreen({
                 autoComplete={isRegister ? "new-password" : "current-password"}
                 required
               />
-
-              {error ? (
-                <div className="rounded-md border border-destructive/30 bg-destructive/10 px-3 py-2 text-sm text-destructive">
-                  {error}
-                </div>
-              ) : null}
 
               <Button type="submit" className="w-full" disabled={isSubmitting}>
                 {isSubmitting ? (

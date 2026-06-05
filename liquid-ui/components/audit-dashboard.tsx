@@ -32,6 +32,7 @@ import {
   TrendingUp,
   X,
 } from "lucide-react";
+import { toast } from "sonner";
 import {
   Bar,
   BarChart,
@@ -443,7 +444,6 @@ function AiPanel({
   const [input, setInput] = useState("");
   const [isLoading, setIsLoading] = useState(true);
   const [isSending, setIsSending] = useState(false);
-  const [error, setError] = useState<string | null>(null);
   const initializedRef = useRef(false);
   const activeStreamRef = useRef<AbortController | null>(null);
 
@@ -468,7 +468,6 @@ function AiPanel({
 
   const initializeWorkbench = useCallback(async () => {
     setIsLoading(true);
-    setError(null);
 
     try {
       const [conversations, capabilities] = await Promise.all([
@@ -491,7 +490,9 @@ function AiPanel({
       setAgentMode(capabilities.mode);
       await loadMessagesAndActions(activeConversation.id);
     } catch (error) {
-      setError(error instanceof Error ? error.message : "加载 agent 工作台失败");
+      toast.error(
+        error instanceof Error ? error.message : "加载 agent 工作台失败",
+      );
     } finally {
       setIsLoading(false);
     }
@@ -529,7 +530,6 @@ function AiPanel({
       }
 
       setInput("");
-      setError(null);
       setIsSending(true);
       activeStreamRef.current?.abort();
 
@@ -599,7 +599,7 @@ function AiPanel({
         await loadMessagesAndActions(conversation.id);
       } catch (error) {
         if (!(error instanceof DOMException && error.name === "AbortError")) {
-          setError(error instanceof Error ? error.message : "发送失败");
+          toast.error(error instanceof Error ? error.message : "发送失败");
         }
       } finally {
         setIsSending(false);
@@ -625,8 +625,6 @@ function AiPanel({
     action: AgentAction,
     decision: "apply" | "reject",
   ) => {
-    setError(null);
-
     try {
       const updated = await apiRequest<AgentAction>(
         `/api/v1/agent/actions/${action.id}/${decision}`,
@@ -638,7 +636,7 @@ function AiPanel({
       );
       mergeAction(updated);
     } catch (error) {
-      setError(error instanceof Error ? error.message : "动作处理失败");
+      toast.error(error instanceof Error ? error.message : "动作处理失败");
     }
   };
 
@@ -707,11 +705,6 @@ function AiPanel({
         </div>
 
         <div className="border-t bg-card px-4 py-3">
-          {error ? (
-            <div className="mb-3 rounded-md border border-destructive/30 bg-destructive/10 px-3 py-2 text-sm text-destructive">
-              {error}
-            </div>
-          ) : null}
           <div className="mb-3 flex items-center gap-2 rounded-md border bg-background px-3 py-2">
             <Database className="size-4 shrink-0 text-muted-foreground" aria-hidden />
             <div className="min-w-0">
