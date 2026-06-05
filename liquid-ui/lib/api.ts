@@ -11,7 +11,7 @@ export type AuthResponse = {
   user: PublicUser;
 };
 
-export type AuditedDatabase = {
+export type ManagedDatabase = {
   id: string;
   name: string;
   engine: "postgres";
@@ -23,7 +23,7 @@ export type AuditedDatabase = {
   has_password: boolean;
 };
 
-export type CreateAuditedDatabaseRequest = {
+export type CreateManagedDatabaseRequest = {
   name: string;
   engine: "postgres";
   host: string;
@@ -34,8 +34,8 @@ export type CreateAuditedDatabaseRequest = {
   ssl_mode: "disable" | "prefer" | "require";
 };
 
-export type UpdateAuditedDatabaseRequest = Partial<
-  Omit<CreateAuditedDatabaseRequest, "engine">
+export type UpdateManagedDatabaseRequest = Partial<
+  Omit<CreateManagedDatabaseRequest, "engine">
 >;
 
 export class ApiError extends Error {

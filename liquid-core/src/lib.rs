@@ -35,11 +35,11 @@ pub struct CurrentUserResponse {
 
 #[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq)]
 #[serde(rename_all = "snake_case")]
-pub enum AuditedDatabaseEngine {
+pub enum ManagedDatabaseEngine {
     Postgres,
 }
 
-impl AuditedDatabaseEngine {
+impl ManagedDatabaseEngine {
     pub fn as_str(self) -> &'static str {
         match self {
             Self::Postgres => "postgres",
@@ -49,14 +49,14 @@ impl AuditedDatabaseEngine {
 
 #[derive(Debug, Clone, Copy, Default, Serialize, Deserialize, PartialEq, Eq)]
 #[serde(rename_all = "snake_case")]
-pub enum AuditedDatabaseSslMode {
+pub enum ManagedDatabaseSslMode {
     Disable,
     #[default]
     Prefer,
     Require,
 }
 
-impl AuditedDatabaseSslMode {
+impl ManagedDatabaseSslMode {
     pub fn as_str(self) -> &'static str {
         match self {
             Self::Disable => "disable",
@@ -67,40 +67,40 @@ impl AuditedDatabaseSslMode {
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
-pub struct AuditedDatabase {
+pub struct ManagedDatabase {
     pub id: String,
     pub name: String,
-    pub engine: AuditedDatabaseEngine,
+    pub engine: ManagedDatabaseEngine,
     pub host: String,
     pub port: i32,
     pub database: String,
     pub username: String,
-    pub ssl_mode: AuditedDatabaseSslMode,
+    pub ssl_mode: ManagedDatabaseSslMode,
     pub has_password: bool,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
-pub struct CreateAuditedDatabaseRequest {
+pub struct CreateManagedDatabaseRequest {
     pub name: String,
-    pub engine: AuditedDatabaseEngine,
+    pub engine: ManagedDatabaseEngine,
     pub host: String,
     pub port: i32,
     pub database: String,
     pub username: String,
     pub password: String,
     #[serde(default)]
-    pub ssl_mode: AuditedDatabaseSslMode,
+    pub ssl_mode: ManagedDatabaseSslMode,
 }
 
 #[derive(Debug, Clone, Default, Serialize, Deserialize, PartialEq, Eq)]
-pub struct UpdateAuditedDatabaseRequest {
+pub struct UpdateManagedDatabaseRequest {
     pub name: Option<String>,
     pub host: Option<String>,
     pub port: Option<i32>,
     pub database: Option<String>,
     pub username: Option<String>,
     pub password: Option<String>,
-    pub ssl_mode: Option<AuditedDatabaseSslMode>,
+    pub ssl_mode: Option<ManagedDatabaseSslMode>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]

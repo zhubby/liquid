@@ -1,6 +1,6 @@
 use liquid_core::{
-    AuditedDatabase, AuditedDatabaseEngine, AuditedDatabaseSslMode, CreateAuditedDatabaseRequest,
-    UpdateAuditedDatabaseRequest,
+    CreateManagedDatabaseRequest, ManagedDatabase, ManagedDatabaseEngine, ManagedDatabaseSslMode,
+    UpdateManagedDatabaseRequest,
 };
 
 use crate::{
@@ -10,15 +10,15 @@ use crate::{
     validation::{optional_string, required_string, validate_port},
 };
 
-pub(crate) async fn list_audited_databases(
+pub(crate) async fn list_managed_databases(
     storage: &Storage,
     owner_user_id: &str,
-) -> Result<Vec<AuditedDatabase>, StorageError> {
-    let rows = sqlx::query_as::<_, AuditedDatabaseRow>(
+) -> Result<Vec<ManagedDatabase>, StorageError> {
+    let rows = sqlx::query_as::<_, ManagedDatabaseRow>(
         r#"
         select id::text, name, engine, host, port, database_name, username, ssl_mode,
                encrypted_password <> '' as has_password
-        from audited_databases
+        from managed_databases
         where owner_user_id = $1::uuid
         order by lower(name)
         "#,
@@ -27,20 +27,20 @@ pub(crate) async fn list_audited_databases(
     .fetch_all(&storage.pool)
     .await?;
 
-    rows.into_iter().map(AuditedDatabase::try_from).collect()
+    rows.into_iter().map(ManagedDatabase::try_from).collect()
 }
 
-pub(crate) async fn create_audited_database(
+pub(crate) async fn create_managed_database(
     storage: &Storage,
     owner_user_id: &str,
-    request: CreateAuditedDatabaseRequest,
-) -> Result<AuditedDatabase, StorageError> {
-    let record = ValidatedAuditedDatabase::from_create(request)?;
+    request: CreateManagedDatabaseRequest,
+) -> Result<ManagedDatabase, StorageError> {
+    let record = ValidatedManagedDatabase::from_create(request)?;
     let encrypted_password = storage.cipher.encrypt(&record.password)?;
 
-    let row = sqlx::query_as::<_, AuditedDatabaseRow>(
+    let row = sqlx::query_as::<_, ManagedDatabaseRow>(
         r#"
-        insert into audited_databases (
+        insert into managed_databases (
             owner_user_id, name, engine, host, port, database_name, username,
             encrypted_password, ssl_mode
         )
@@ -62,19 +62,19 @@ pub(crate) async fn create_audited_database(
     .await
     .map_err(map_database_error)?;
 
-    AuditedDatabase::try_from(row)
+    ManagedDatabase::try_from(row)
 }
 
-pub(crate) async fn update_audited_database(
+pub(crate) async fn update_managed_database(
     storage: &Storage,
     owner_user_id: &str,
     id: &str,
-    request: UpdateAuditedDatabaseRequest,
-) -> Result<AuditedDatabase, StorageError> {
-    let update = ValidatedAuditedDatabaseUpdate::from_update(request, &storage.cipher)?;
-    let row = sqlx::query_as::<_, AuditedDatabaseRow>(
+    request: UpdateManagedDatabaseRequest,
+) -> Result<ManagedDatabase, StorageError> {
+    let update = ValidatedManagedDatabaseUpdate::from_update(request, &storage.cipher)?;
+    let row = sqlx::query_as::<_, ManagedDatabaseRow>(
         r#"
-        update audited_databases
+        update managed_databases
         set name = coalesce($3::text, name),
             host = coalesce($4::text, host),
             port = coalesce($5::integer, port),
@@ -106,17 +106,17 @@ pub(crate) async fn update_audited_database(
         return Err(StorageError::NotFound);
     };
 
-    AuditedDatabase::try_from(row)
+    ManagedDatabase::try_from(row)
 }
 
-pub(crate) async fn delete_audited_database(
+pub(crate) async fn delete_managed_database(
     storage: &Storage,
     owner_user_id: &str,
     id: &str,
 ) -> Result<(), StorageError> {
     let result = sqlx::query(
         r#"
-        delete from audited_databases
+        delete from managed_databases
         where id = $1::uuid
           and owner_user_id = $2::uuid
         "#,
@@ -134,7 +134,7 @@ pub(crate) async fn delete_audited_database(
 }
 
 #[derive(Debug)]
-struct AuditedDatabaseRow {
+struct ManagedDatabaseRow {
     id: String,
     name: String,
     engine: String,
@@ -146,7 +146,7 @@ struct AuditedDatabaseRow {
     has_password: bool,
 }
 
-impl<'r> sqlx::FromRow<'r, sqlx::postgres::PgRow> for AuditedDatabaseRow {
+impl<'r> sqlx::FromRow<'r, sqlx::postgres::PgRow> for ManagedDatabaseRow {
     fn from_row(row: &'r sqlx::postgres::PgRow) -> Result<Self, sqlx::Error> {
         use sqlx::Row;
 
@@ -164,10 +164,10 @@ impl<'r> sqlx::FromRow<'r, sqlx::postgres::PgRow> for AuditedDatabaseRow {
     }
 }
 
-impl TryFrom<AuditedDatabaseRow> for AuditedDatabase {
+impl TryFrom<ManagedDatabaseRow> for ManagedDatabase {
     type Error = StorageError;
 
-    fn try_from(row: AuditedDatabaseRow) -> Result<Self, Self::Error> {
+    fn try_from(row: ManagedDatabaseRow) -> Result<Self, Self::Error> {
         Ok(Self {
             id: row.id,
             name: row.name,
@@ -183,19 +183,19 @@ impl TryFrom<AuditedDatabaseRow> for AuditedDatabase {
 }
 
 #[derive(Debug)]
-struct ValidatedAuditedDatabase {
+struct ValidatedManagedDatabase {
     name: String,
-    engine: AuditedDatabaseEngine,
+    engine: ManagedDatabaseEngine,
     host: String,
     port: i32,
     database: String,
     username: String,
     password: String,
-    ssl_mode: AuditedDatabaseSslMode,
+    ssl_mode: ManagedDatabaseSslMode,
 }
 
-impl ValidatedAuditedDatabase {
-    fn from_create(request: CreateAuditedDatabaseRequest) -> Result<Self, StorageError> {
+impl ValidatedManagedDatabase {
+    fn from_create(request: CreateManagedDatabaseRequest) -> Result<Self, StorageError> {
         validate_port(request.port)?;
 
         Ok(Self {
@@ -212,19 +212,19 @@ impl ValidatedAuditedDatabase {
 }
 
 #[derive(Debug)]
-struct ValidatedAuditedDatabaseUpdate {
+struct ValidatedManagedDatabaseUpdate {
     name: Option<String>,
     host: Option<String>,
     port: Option<i32>,
     database: Option<String>,
     username: Option<String>,
     encrypted_password: Option<String>,
-    ssl_mode: Option<AuditedDatabaseSslMode>,
+    ssl_mode: Option<ManagedDatabaseSslMode>,
 }
 
-impl ValidatedAuditedDatabaseUpdate {
+impl ValidatedManagedDatabaseUpdate {
     fn from_update(
-        request: UpdateAuditedDatabaseRequest,
+        request: UpdateManagedDatabaseRequest,
         cipher: &PasswordCipher,
     ) -> Result<Self, StorageError> {
         if let Some(port) = request.port {
@@ -248,22 +248,22 @@ impl ValidatedAuditedDatabaseUpdate {
     }
 }
 
-fn parse_engine(value: &str) -> Result<AuditedDatabaseEngine, StorageError> {
+fn parse_engine(value: &str) -> Result<ManagedDatabaseEngine, StorageError> {
     match value {
-        "postgres" => Ok(AuditedDatabaseEngine::Postgres),
+        "postgres" => Ok(ManagedDatabaseEngine::Postgres),
         other => Err(StorageError::Validation(format!(
-            "unsupported audited database engine: {other}"
+            "unsupported managed database engine: {other}"
         ))),
     }
 }
 
-fn parse_ssl_mode(value: &str) -> Result<AuditedDatabaseSslMode, StorageError> {
+fn parse_ssl_mode(value: &str) -> Result<ManagedDatabaseSslMode, StorageError> {
     match value {
-        "disable" => Ok(AuditedDatabaseSslMode::Disable),
-        "prefer" => Ok(AuditedDatabaseSslMode::Prefer),
-        "require" => Ok(AuditedDatabaseSslMode::Require),
+        "disable" => Ok(ManagedDatabaseSslMode::Disable),
+        "prefer" => Ok(ManagedDatabaseSslMode::Prefer),
+        "require" => Ok(ManagedDatabaseSslMode::Require),
         other => Err(StorageError::Validation(format!(
-            "unsupported audited database ssl mode: {other}"
+            "unsupported managed database ssl mode: {other}"
         ))),
     }
 }
@@ -271,25 +271,25 @@ fn parse_ssl_mode(value: &str) -> Result<AuditedDatabaseSslMode, StorageError> {
 #[cfg(test)]
 mod tests {
     use liquid_core::{
-        AuditedDatabaseEngine, AuditedDatabaseSslMode, CreateAuditedDatabaseRequest,
+        CreateManagedDatabaseRequest, ManagedDatabaseEngine, ManagedDatabaseSslMode,
     };
 
     use super::*;
 
     #[test]
-    fn create_audited_database_validation_rejects_bad_port() {
-        let request = CreateAuditedDatabaseRequest {
+    fn create_managed_database_validation_rejects_bad_port() {
+        let request = CreateManagedDatabaseRequest {
             name: "Warehouse".to_owned(),
-            engine: AuditedDatabaseEngine::Postgres,
+            engine: ManagedDatabaseEngine::Postgres,
             host: "localhost".to_owned(),
             port: 70_000,
             database: "warehouse".to_owned(),
             username: "readonly".to_owned(),
             password: "secret".to_owned(),
-            ssl_mode: AuditedDatabaseSslMode::Prefer,
+            ssl_mode: ManagedDatabaseSslMode::Prefer,
         };
 
-        let error = ValidatedAuditedDatabase::from_create(request).unwrap_err();
+        let error = ValidatedManagedDatabase::from_create(request).unwrap_err();
 
         assert!(error.to_string().contains("port must be between"));
     }

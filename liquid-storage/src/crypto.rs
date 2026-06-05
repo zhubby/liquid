@@ -29,7 +29,7 @@ impl PasswordCipher {
 
         key.seal_in_place_append_tag(nonce, Aad::empty(), &mut in_out)
             .map_err(|_| {
-                StorageError::Crypto("failed to encrypt audited database password".into())
+                StorageError::Crypto("failed to encrypt managed database password".into())
             })?;
 
         let mut combined = nonce_bytes.to_vec();
@@ -39,12 +39,12 @@ impl PasswordCipher {
 
     pub(crate) fn decrypt(&self, ciphertext: &str) -> Result<String, StorageError> {
         let mut combined = URL_SAFE_NO_PAD.decode(ciphertext).map_err(|_| {
-            StorageError::Crypto("invalid encrypted audited database password".into())
+            StorageError::Crypto("invalid encrypted managed database password".into())
         })?;
 
         if combined.len() <= NONCE_BYTES {
             return Err(StorageError::Crypto(
-                "invalid encrypted audited database password".into(),
+                "invalid encrypted managed database password".into(),
             ));
         }
 
@@ -56,7 +56,7 @@ impl PasswordCipher {
         let plaintext = key
             .open_in_place(nonce, Aad::empty(), &mut encrypted)
             .map_err(|_| {
-                StorageError::Crypto("failed to decrypt audited database password".into())
+                StorageError::Crypto("failed to decrypt managed database password".into())
             })?;
 
         String::from_utf8(plaintext.to_vec())
@@ -75,7 +75,7 @@ mod tests {
     use super::*;
 
     #[test]
-    fn audited_database_password_encryption_round_trips() {
+    fn managed_database_password_encryption_round_trips() {
         let cipher = PasswordCipher::new("test-secret");
         let encrypted = cipher.encrypt("postgres-password").unwrap();
 
@@ -84,7 +84,7 @@ mod tests {
     }
 
     #[test]
-    fn audited_database_password_encryption_rejects_wrong_key() {
+    fn managed_database_password_encryption_rejects_wrong_key() {
         let cipher = PasswordCipher::new("test-secret");
         let wrong_cipher = PasswordCipher::new("different-secret");
         let encrypted = cipher.encrypt("postgres-password").unwrap();

@@ -162,7 +162,7 @@ function AuthScreen({
               <div>
                 <h1 className="text-lg font-semibold">Liquid SQL Audit</h1>
                 <p className="mt-1 text-xs text-muted-foreground">
-                  登录后管理被审计数据库与 SQL 风险看板
+                  登录后管理托管数据库与 SQL 风险看板
                 </p>
               </div>
             </div>
@@ -176,7 +176,7 @@ function AuthScreen({
           <div className="mt-6 rounded-lg border bg-background p-4">
             <div className="flex items-center gap-2 text-sm font-medium">
               <Database className="size-4 text-muted-foreground" aria-hidden />
-              被审计数据库由 Liquid 管理
+              托管数据库由 Liquid 管理
             </div>
             <p className="mt-2 max-w-2xl text-sm leading-6 text-muted-foreground">
               连接信息保存在 Liquid 应用库中。第一版只管理连接记录，不自动同步 schema

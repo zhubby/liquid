@@ -27,7 +27,7 @@ create unique index if not exists auth_tokens_token_hash_unique_idx on auth_toke
 create index if not exists auth_tokens_active_lookup_idx on auth_tokens (token_hash, expires_at)
     where revoked_at is null;
 
-create table if not exists audited_databases (
+create table if not exists managed_databases (
     id uuid primary key default gen_random_uuid(),
     owner_user_id uuid not null references users(id) on delete cascade,
     name text not null,
@@ -40,14 +40,14 @@ create table if not exists audited_databases (
     ssl_mode text not null default 'prefer',
     created_at timestamptz not null default now(),
     updated_at timestamptz not null default now(),
-    constraint audited_databases_engine_check check (engine = 'postgres'),
-    constraint audited_databases_ssl_mode_check check (ssl_mode in ('disable', 'prefer', 'require')),
-    constraint audited_databases_port_check check (port between 1 and 65535),
-    constraint audited_databases_name_not_blank check (length(trim(name)) > 0),
-    constraint audited_databases_host_not_blank check (length(trim(host)) > 0),
-    constraint audited_databases_database_not_blank check (length(trim(database_name)) > 0),
-    constraint audited_databases_username_not_blank check (length(trim(username)) > 0)
+    constraint managed_databases_engine_check check (engine = 'postgres'),
+    constraint managed_databases_ssl_mode_check check (ssl_mode in ('disable', 'prefer', 'require')),
+    constraint managed_databases_port_check check (port between 1 and 65535),
+    constraint managed_databases_name_not_blank check (length(trim(name)) > 0),
+    constraint managed_databases_host_not_blank check (length(trim(host)) > 0),
+    constraint managed_databases_database_not_blank check (length(trim(database_name)) > 0),
+    constraint managed_databases_username_not_blank check (length(trim(username)) > 0)
 );
 
-create unique index if not exists audited_databases_owner_name_unique_idx
-    on audited_databases (owner_user_id, lower(name));
+create unique index if not exists managed_databases_owner_name_unique_idx
+    on managed_databases (owner_user_id, lower(name));

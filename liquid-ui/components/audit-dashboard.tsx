@@ -57,10 +57,10 @@ import {
   CardTitle,
 } from "@/components/ui/card";
 import {
-  type AuditedDatabase,
-  type CreateAuditedDatabaseRequest,
+  type ManagedDatabase,
+  type CreateManagedDatabaseRequest,
   type PublicUser,
-  type UpdateAuditedDatabaseRequest,
+  type UpdateManagedDatabaseRequest,
   apiRequest,
 } from "@/lib/api";
 import { cn } from "@/lib/utils";
@@ -114,21 +114,21 @@ type AuditDashboardProps = {
   onLogout: () => void;
 };
 
-type AuditedDatabaseForm = {
+type ManagedDatabaseForm = {
   name: string;
   host: string;
   port: string;
   database: string;
   username: string;
   password: string;
-  ssl_mode: AuditedDatabase["ssl_mode"];
+  ssl_mode: ManagedDatabase["ssl_mode"];
 };
 
 const MIN_AI_WIDTH = 320;
 const MIN_BI_WIDTH = 520;
 const DEFAULT_AI_PERCENT = 38;
 
-const emptyAuditedDatabaseForm: AuditedDatabaseForm = {
+const emptyManagedDatabaseForm: ManagedDatabaseForm = {
   name: "",
   host: "",
   port: "5432",
@@ -671,7 +671,7 @@ function BiPanel({ token }: { token: string }) {
           <CategoryChart />
         </div>
 
-        <AuditedDatabaseManager token={token} />
+        <ManagedDatabaseManager token={token} />
         <DatasetTable />
       </div>
     </section>
@@ -828,10 +828,10 @@ function CategoryChart() {
   );
 }
 
-function AuditedDatabaseManager({ token }: { token: string }) {
-  const [databases, setDatabases] = useState<AuditedDatabase[]>([]);
-  const [form, setForm] = useState<AuditedDatabaseForm>(
-    emptyAuditedDatabaseForm,
+function ManagedDatabaseManager({ token }: { token: string }) {
+  const [databases, setDatabases] = useState<ManagedDatabase[]>([]);
+  const [form, setForm] = useState<ManagedDatabaseForm>(
+    emptyManagedDatabaseForm,
   );
   const [editingId, setEditingId] = useState<string | null>(null);
   const [isLoading, setIsLoading] = useState(true);
@@ -844,8 +844,8 @@ function AuditedDatabaseManager({ token }: { token: string }) {
     setError(null);
 
     try {
-      const response = await apiRequest<AuditedDatabase[]>(
-        "/api/v1/audited-databases",
+      const response = await apiRequest<ManagedDatabase[]>(
+        "/api/v1/managed-databases",
         { token },
       );
       setDatabases(response);
@@ -861,7 +861,7 @@ function AuditedDatabaseManager({ token }: { token: string }) {
   }, [loadDatabases]);
 
   const resetForm = () => {
-    setForm(emptyAuditedDatabaseForm);
+    setForm(emptyManagedDatabaseForm);
     setEditingId(null);
   };
 
@@ -881,7 +881,7 @@ function AuditedDatabaseManager({ token }: { token: string }) {
 
     try {
       if (editingId) {
-        const body: UpdateAuditedDatabaseRequest = {
+        const body: UpdateManagedDatabaseRequest = {
           name: form.name,
           host: form.host,
           port,
@@ -894,8 +894,8 @@ function AuditedDatabaseManager({ token }: { token: string }) {
           body.password = form.password;
         }
 
-        const updated = await apiRequest<AuditedDatabase>(
-          `/api/v1/audited-databases/${editingId}`,
+        const updated = await apiRequest<ManagedDatabase>(
+          `/api/v1/managed-databases/${editingId}`,
           {
             method: "PATCH",
             token,
@@ -916,7 +916,7 @@ function AuditedDatabaseManager({ token }: { token: string }) {
           return;
         }
 
-        const body: CreateAuditedDatabaseRequest = {
+        const body: CreateManagedDatabaseRequest = {
           name: form.name,
           engine: "postgres",
           host: form.host,
@@ -926,8 +926,8 @@ function AuditedDatabaseManager({ token }: { token: string }) {
           password: form.password,
           ssl_mode: form.ssl_mode,
         };
-        const created = await apiRequest<AuditedDatabase>(
-          "/api/v1/audited-databases",
+        const created = await apiRequest<ManagedDatabase>(
+          "/api/v1/managed-databases",
           {
             method: "POST",
             token,
@@ -947,7 +947,7 @@ function AuditedDatabaseManager({ token }: { token: string }) {
     }
   };
 
-  const handleEdit = (database: AuditedDatabase) => {
+  const handleEdit = (database: ManagedDatabase) => {
     setEditingId(database.id);
     setForm({
       name: database.name,
@@ -962,12 +962,12 @@ function AuditedDatabaseManager({ token }: { token: string }) {
     setError(null);
   };
 
-  const handleDelete = async (database: AuditedDatabase) => {
+  const handleDelete = async (database: ManagedDatabase) => {
     setError(null);
     setStatus(null);
 
     try {
-      await apiRequest<void>(`/api/v1/audited-databases/${database.id}`, {
+      await apiRequest<void>(`/api/v1/managed-databases/${database.id}`, {
         method: "DELETE",
         token,
       });
@@ -989,7 +989,7 @@ function AuditedDatabaseManager({ token }: { token: string }) {
     <Card className="mt-4 rounded-lg py-4 shadow-xs">
       <CardHeader className="flex flex-row items-center justify-between gap-3 px-4">
         <div>
-          <CardTitle className="text-sm">被审计数据库</CardTitle>
+          <CardTitle className="text-sm">托管数据库</CardTitle>
           <p className="mt-1 text-xs text-muted-foreground">
             存储连接记录，密码加密保存；元数据同步后续开启
           </p>
@@ -1005,7 +1005,7 @@ function AuditedDatabaseManager({ token }: { token: string }) {
         >
           <DatabaseField
             className="lg:col-span-3"
-            id="audited-name"
+            id="managed-name"
             label="名称"
             value={form.name}
             onChange={(name) => setForm((current) => ({ ...current, name }))}
@@ -1013,7 +1013,7 @@ function AuditedDatabaseManager({ token }: { token: string }) {
           />
           <DatabaseField
             className="lg:col-span-3"
-            id="audited-host"
+            id="managed-host"
             label="主机"
             value={form.host}
             onChange={(host) => setForm((current) => ({ ...current, host }))}
@@ -1021,7 +1021,7 @@ function AuditedDatabaseManager({ token }: { token: string }) {
           />
           <DatabaseField
             className="lg:col-span-2"
-            id="audited-port"
+            id="managed-port"
             label="端口"
             value={form.port}
             onChange={(port) => setForm((current) => ({ ...current, port }))}
@@ -1030,7 +1030,7 @@ function AuditedDatabaseManager({ token }: { token: string }) {
           />
           <DatabaseField
             className="lg:col-span-4"
-            id="audited-database"
+            id="managed-database"
             label="数据库"
             value={form.database}
             onChange={(database) =>
@@ -1040,7 +1040,7 @@ function AuditedDatabaseManager({ token }: { token: string }) {
           />
           <DatabaseField
             className="lg:col-span-3"
-            id="audited-username"
+            id="managed-username"
             label="用户名"
             value={form.username}
             onChange={(username) =>
@@ -1050,7 +1050,7 @@ function AuditedDatabaseManager({ token }: { token: string }) {
           />
           <DatabaseField
             className="lg:col-span-3"
-            id="audited-password"
+            id="managed-password"
             label={editingId ? "新密码" : "密码"}
             type="password"
             value={form.password}
@@ -1063,17 +1063,17 @@ function AuditedDatabaseManager({ token }: { token: string }) {
           <div className="space-y-1.5 lg:col-span-3">
             <label
               className="text-xs font-medium text-muted-foreground"
-              htmlFor="audited-ssl"
+              htmlFor="managed-ssl"
             >
               SSL
             </label>
             <select
-              id="audited-ssl"
+              id="managed-ssl"
               value={form.ssl_mode}
               onChange={(event) =>
                 setForm((current) => ({
                   ...current,
-                  ssl_mode: event.target.value as AuditedDatabase["ssl_mode"],
+                  ssl_mode: event.target.value as ManagedDatabase["ssl_mode"],
                 }))
               }
               className="h-9 w-full rounded-md border bg-background px-3 text-sm outline-none transition-shadow focus-visible:ring-[3px] focus-visible:ring-ring/50"

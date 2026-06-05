@@ -1,7 +1,7 @@
-mod audited_databases;
 mod auth;
 mod crypto;
 mod error;
+mod managed_databases;
 mod options;
 mod store;
 mod traits;

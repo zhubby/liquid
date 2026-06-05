@@ -1,0 +1,12 @@
+.git
+target
+docs/book
+
+liquid-ui/.next
+liquid-ui/node_modules
+liquid-ui/out
+
+.env
+.env.*
+*.log
+.DS_Store

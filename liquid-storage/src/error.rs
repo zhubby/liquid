@@ -2,8 +2,8 @@
 pub enum StorageError {
     #[error("email already registered")]
     DuplicateEmail,
-    #[error("audited database name already exists")]
-    DuplicateAuditedDatabaseName,
+    #[error("managed database name already exists")]
+    DuplicateManagedDatabaseName,
     #[error("invalid email or password")]
     InvalidCredentials,
     #[error("record not found")]
@@ -30,8 +30,8 @@ pub(crate) fn map_database_error(error: sqlx::Error) -> StorageError {
     if database_error.code().as_deref() == Some("23505") {
         return match database_error.constraint() {
             Some("users_email_unique_idx") => StorageError::DuplicateEmail,
-            Some("audited_databases_owner_name_unique_idx") => {
-                StorageError::DuplicateAuditedDatabaseName
+            Some("managed_databases_owner_name_unique_idx") => {
+                StorageError::DuplicateManagedDatabaseName
             }
             _ => StorageError::Database(error),
         };

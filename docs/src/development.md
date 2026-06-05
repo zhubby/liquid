@@ -58,8 +58,8 @@ execution = "readonly"
 ```
 
 Environment variables override config file values. The Liquid application
-database stores users, auth tokens, and user-managed audited database connection
-records. Audited database passwords are encrypted with `LIQUID_ENCRYPTION_KEY`
+database stores users, auth tokens, and managed database connection records.
+Managed database passwords are encrypted with `LIQUID_ENCRYPTION_KEY`
 or `[security].encryption_key`.
 
 The backend uses the mock SQL audit agent unless both `OPENAI_API_KEY` and

@@ -1,12 +1,12 @@
 use async_trait::async_trait;
 use liquid_core::{
-    AuditedDatabase, AuthResponse, CreateAuditedDatabaseRequest, LoginRequest, PublicUser,
-    RegisterRequest, UpdateAuditedDatabaseRequest,
+    AuthResponse, CreateManagedDatabaseRequest, LoginRequest, ManagedDatabase, PublicUser,
+    RegisterRequest, UpdateManagedDatabaseRequest,
 };
 use sqlx::{PgPool, postgres::PgPoolOptions};
 
 use crate::{
-    audited_databases, auth, crypto::PasswordCipher, error::StorageError, options::StorageOptions,
+    auth, crypto::PasswordCipher, error::StorageError, managed_databases, options::StorageOptions,
     traits::LiquidStore,
 };
 
@@ -43,7 +43,7 @@ impl Storage {
         &self.pool
     }
 
-    pub fn decrypt_audited_database_password(
+    pub fn decrypt_managed_database_password(
         &self,
         encrypted_password: &str,
     ) -> Result<String, StorageError> {
@@ -69,35 +69,35 @@ impl LiquidStore for Storage {
         auth::revoke_token(self, token).await
     }
 
-    async fn list_audited_databases(
+    async fn list_managed_databases(
         &self,
         owner_user_id: &str,
-    ) -> Result<Vec<AuditedDatabase>, StorageError> {
-        audited_databases::list_audited_databases(self, owner_user_id).await
+    ) -> Result<Vec<ManagedDatabase>, StorageError> {
+        managed_databases::list_managed_databases(self, owner_user_id).await
     }
 
-    async fn create_audited_database(
+    async fn create_managed_database(
         &self,
         owner_user_id: &str,
-        request: CreateAuditedDatabaseRequest,
-    ) -> Result<AuditedDatabase, StorageError> {
-        audited_databases::create_audited_database(self, owner_user_id, request).await
+        request: CreateManagedDatabaseRequest,
+    ) -> Result<ManagedDatabase, StorageError> {
+        managed_databases::create_managed_database(self, owner_user_id, request).await
     }
 
-    async fn update_audited_database(
+    async fn update_managed_database(
         &self,
         owner_user_id: &str,
         id: &str,
-        request: UpdateAuditedDatabaseRequest,
-    ) -> Result<AuditedDatabase, StorageError> {
-        audited_databases::update_audited_database(self, owner_user_id, id, request).await
+        request: UpdateManagedDatabaseRequest,
+    ) -> Result<ManagedDatabase, StorageError> {
+        managed_databases::update_managed_database(self, owner_user_id, id, request).await
     }
 
-    async fn delete_audited_database(
+    async fn delete_managed_database(
         &self,
         owner_user_id: &str,
         id: &str,
     ) -> Result<(), StorageError> {
-        audited_databases::delete_audited_database(self, owner_user_id, id).await
+        managed_databases::delete_managed_database(self, owner_user_id, id).await
     }
 }
