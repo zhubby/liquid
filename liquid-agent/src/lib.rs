@@ -526,6 +526,21 @@ fn recommendation_for_rule(rule_id: &str) -> &'static str {
         "insert_values_row_limit" | "insert_from_select" | "copy_from" => {
             "Batch the write or use a controlled bulk-load path."
         }
+        "insert_on_conflict_update" => {
+            "Review conflict cardinality, update predicates, and idempotency before execution."
+        }
+        "high_estimated_write_rows" => {
+            "Reduce affected rows, batch the write, or schedule it with explicit operational approval."
+        }
+        "drop_protective_constraint" => {
+            "Require data integrity review and a rollback plan before dropping the constraint."
+        }
+        "large_table_schema_validation" => {
+            "Run validation during a maintenance window or use a staged PostgreSQL-safe migration pattern."
+        }
+        "foreign_key_without_index" => {
+            "Add a ready valid covering index on the referencing foreign-key columns before relying on this constraint at scale."
+        }
         "merge_write_actions" => "Review source cardinality and each MERGE action predicate.",
         "copy_program" => "Avoid server-side program execution unless it is explicitly approved.",
         "create_extension" | "create_function" | "do_block" => {
@@ -736,6 +751,20 @@ mod tests {
         assert_eq!(report.risk_score, 50);
         assert_eq!(report.findings[0].title, "Broad column projection");
         assert_eq!(report.findings[0].severity, RiskSeverity::Medium);
+    }
+
+    #[tokio::test]
+    async fn mock_agent_maps_hardened_rule_recommendations() {
+        let report = MockSqlAuditAgent
+            .audit_sql(SqlAuditRequest::new(
+                "insert into users(id, email) values (1, 'a@b.test') on conflict (id) do update set email = excluded.email",
+            ))
+            .await
+            .unwrap();
+
+        assert_eq!(report.findings[0].title, "INSERT ON CONFLICT DO UPDATE");
+        assert_eq!(report.findings[0].severity, RiskSeverity::High);
+        assert!(report.findings[0].recommendation.contains("idempotency"));
     }
 
     #[test]

@@ -2,7 +2,10 @@ use std::collections::BTreeSet;
 
 use pg_query::{
     NodeEnum,
-    protobuf::{AConst, ColumnRef, InsertStmt, JoinExpr, Node, SelectStmt},
+    protobuf::{
+        AConst, AlterTableCmd, AlterTableStmt, AlterTableType, ColumnRef, InsertStmt, JoinExpr,
+        Node, SelectStmt,
+    },
 };
 
 use crate::ast::{node_children, select_child_nodes};
@@ -24,8 +27,12 @@ pub(crate) fn inspect_schema(
     inspect_rls(statement_index, metadata, analysis);
     inspect_constraints(statement_index, metadata, analysis);
     inspect_missing_indexes(statement_index, node, metadata, options, analysis);
+    inspect_foreign_key_indexes(statement_index, metadata, options, analysis);
 
     match node {
+        NodeEnum::AlterTableStmt(stmt) => {
+            inspect_alter_table_metadata(statement_index, stmt, metadata, options, analysis);
+        }
         NodeEnum::InsertStmt(stmt) => {
             inspect_insert_nullable(statement_index, stmt, metadata, analysis);
         }
@@ -243,6 +250,24 @@ fn has_index_on_first_column(
         })
 }
 
+fn has_ready_valid_index_prefix(
+    indexes: &[PgSqlIndexMetadata],
+    relation_oid: i64,
+    columns: &[String],
+) -> bool {
+    indexes
+        .iter()
+        .filter(|index| index.relation_oid == relation_oid && index.is_valid && index.is_ready)
+        .any(|index| {
+            index.columns.len() >= columns.len()
+                && index
+                    .columns
+                    .iter()
+                    .zip(columns)
+                    .all(|(indexed, required)| indexed.eq_ignore_ascii_case(required))
+        })
+}
+
 fn inspect_privileges(
     statement_index: usize,
     metadata: &PgSqlStatementMetadata,
@@ -317,6 +342,196 @@ fn inspect_constraints(
                 )),
             ));
         }
+    }
+}
+
+fn relation_oid_for_range(
+    relname: &str,
+    schemaname: &str,
+    metadata: &PgSqlStatementMetadata,
+) -> Option<i64> {
+    metadata
+        .relations
+        .iter()
+        .find(|relation| {
+            relation.name.eq_ignore_ascii_case(relname)
+                && (schemaname.is_empty() || relation.schema.eq_ignore_ascii_case(schemaname))
+        })
+        .map(|relation| relation.oid)
+}
+
+fn alter_table_command(node: &Node) -> Option<&AlterTableCmd> {
+    match node.node.as_ref()? {
+        NodeEnum::AlterTableCmd(command) => Some(command.as_ref()),
+        _ => None,
+    }
+}
+
+fn schema_validation_subtype(subtype: AlterTableType) -> bool {
+    matches!(
+        subtype,
+        AlterTableType::AtSetNotNull
+            | AlterTableType::AtAddConstraint
+            | AlterTableType::AtValidateConstraint
+    )
+}
+
+fn protective_constraint_kind(kind: &str) -> Option<&'static str> {
+    match kind {
+        "f" => Some("foreign_key"),
+        "u" => Some("unique"),
+        "p" => Some("primary_key"),
+        "c" => Some("check"),
+        _ => None,
+    }
+}
+
+fn inspect_alter_table_metadata(
+    statement_index: usize,
+    stmt: &AlterTableStmt,
+    metadata: &PgSqlStatementMetadata,
+    options: &PgSqlMetadataOptions,
+    analysis: &mut PgSqlAnalysis,
+) {
+    let target_oid = stmt.relation.as_ref().and_then(|target| {
+        relation_oid_for_range(
+            target.relname.as_str(),
+            target.schemaname.as_str(),
+            metadata,
+        )
+    });
+
+    for command in stmt.cmds.iter().filter_map(alter_table_command) {
+        let Ok(subtype) = AlterTableType::try_from(command.subtype) else {
+            continue;
+        };
+
+        if matches!(subtype, AlterTableType::AtDropConstraint) {
+            inspect_drop_protective_constraint(
+                statement_index,
+                command,
+                target_oid,
+                metadata,
+                analysis,
+            );
+        }
+
+        if schema_validation_subtype(subtype) {
+            inspect_large_table_schema_validation(
+                statement_index,
+                subtype,
+                command,
+                target_oid,
+                metadata,
+                options,
+                analysis,
+            );
+        }
+    }
+}
+
+fn inspect_drop_protective_constraint(
+    statement_index: usize,
+    command: &AlterTableCmd,
+    target_oid: Option<i64>,
+    metadata: &PgSqlStatementMetadata,
+    analysis: &mut PgSqlAnalysis,
+) {
+    let Some(constraint) = metadata.constraints.iter().find(|constraint| {
+        constraint.name.eq_ignore_ascii_case(&command.name)
+            && target_oid.is_none_or(|oid| constraint.relation_oid == oid)
+            && protective_constraint_kind(&constraint.kind).is_some()
+    }) else {
+        return;
+    };
+
+    let kind = protective_constraint_kind(&constraint.kind).unwrap_or("constraint");
+    analysis.findings.push(PgSqlFinding::new(
+        "drop_protective_constraint",
+        PgSqlRiskSeverity::Critical,
+        "ALTER TABLE drops protective constraint",
+        "The ALTER TABLE statement drops a PostgreSQL constraint that protects referential integrity, uniqueness, primary key, or check invariants.",
+        Some(statement_index),
+        Some(format!(
+            "relation_oid={}, constraint={}, kind={kind}",
+            constraint.relation_oid, constraint.name
+        )),
+    ));
+}
+
+#[allow(clippy::too_many_arguments)]
+fn inspect_large_table_schema_validation(
+    statement_index: usize,
+    subtype: AlterTableType,
+    command: &AlterTableCmd,
+    target_oid: Option<i64>,
+    metadata: &PgSqlStatementMetadata,
+    options: &PgSqlMetadataOptions,
+    analysis: &mut PgSqlAnalysis,
+) {
+    for relation in metadata.relations.iter().filter(|relation| {
+        target_oid.is_none_or(|oid| relation.oid == oid)
+            && relation.total_size_bytes >= options.large_table_threshold_bytes
+    }) {
+        analysis.findings.push(PgSqlFinding::new(
+            "large_table_schema_validation",
+            PgSqlRiskSeverity::High,
+            "Large table schema validation",
+            "The ALTER TABLE command can scan or validate data on a large relation.",
+            Some(statement_index),
+            Some(format!(
+                "{}.{} subtype={} name={} total_size_bytes={}",
+                relation.schema,
+                relation.name,
+                subtype.as_str_name(),
+                command.name,
+                relation.total_size_bytes
+            )),
+        ));
+    }
+}
+
+fn inspect_foreign_key_indexes(
+    statement_index: usize,
+    metadata: &PgSqlStatementMetadata,
+    options: &PgSqlMetadataOptions,
+    analysis: &mut PgSqlAnalysis,
+) {
+    for constraint in metadata
+        .constraints
+        .iter()
+        .filter(|constraint| constraint.kind == "f" && !constraint.columns.is_empty())
+    {
+        let Some(relation) = metadata
+            .relations
+            .iter()
+            .find(|relation| relation.oid == constraint.relation_oid)
+        else {
+            continue;
+        };
+
+        if relation.total_size_bytes < options.large_table_threshold_bytes {
+            continue;
+        }
+
+        if has_ready_valid_index_prefix(&metadata.indexes, relation.oid, &constraint.columns) {
+            continue;
+        }
+
+        analysis.findings.push(PgSqlFinding::new(
+            "foreign_key_without_index",
+            PgSqlRiskSeverity::Medium,
+            "Foreign key without covering index",
+            "A large referencing table has a foreign key whose columns are not covered by a ready valid index prefix.",
+            Some(statement_index),
+            Some(format!(
+                "{}.{} constraint={} columns={}",
+                relation.schema,
+                relation.name,
+                constraint.name,
+                constraint.columns.join(",")
+            )),
+        ));
     }
 }
 
