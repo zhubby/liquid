@@ -7,7 +7,9 @@ cargo run -p liquid-cli -- server
 ```
 
 The API binds to `LIQUID_API_ADDR`, defaulting to `127.0.0.1:3001`.
-You can also provide a TOML config file:
+When `--config` is omitted, Liquid reads `~/.liquid/config.toml`. If the file
+does not exist, the CLI creates `~/.liquid/` and writes a default config file
+before loading it. You can also provide a TOML config file explicitly:
 
 ```bash
 cargo run -p liquid-cli -- server --config liquid.toml
@@ -18,6 +20,9 @@ Run application database migrations without starting the API:
 ```bash
 cargo run -p liquid-cli -- migrate
 ```
+
+`migrate` uses the same default config lookup and creation behavior as
+`server`.
 
 Print the binary version:
 

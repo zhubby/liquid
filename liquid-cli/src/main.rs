@@ -1,12 +1,16 @@
-use std::path::PathBuf;
 use std::sync::Arc;
+use std::{env, fs, path::PathBuf};
 
+use anyhow::Context;
 use clap::{Args, Parser, Subcommand};
 use liquid_agent::{MockSqlAuditAgent, SqlAuditAgent, ToolCallingSqlAuditAgent};
-use liquid_config::{LiquidConfig, LlmApiMode};
+use liquid_config::{LiquidConfig, LlmApiMode, default_config_toml};
 use liquid_llm::{LlmProtocol, OpenAiCompatibleClient, OpenAiCompatibleConfig};
 use liquid_storage::{Storage, StorageOptions};
 use tracing_subscriber::EnvFilter;
+
+const DEFAULT_CONFIG_DIR: &str = ".liquid";
+const DEFAULT_CONFIG_FILE: &str = "config.toml";
 
 #[derive(Debug, Parser)]
 #[command(
@@ -32,6 +36,8 @@ enum Command {
 #[derive(Debug, Args)]
 struct ConfigArgs {
     /// Path to a Liquid TOML config file.
+    ///
+    /// Defaults to ~/.liquid/config.toml and creates that file when it is missing.
     #[arg(short, long, value_name = "PATH")]
     config: Option<PathBuf>,
 }
@@ -52,7 +58,7 @@ async fn main() -> anyhow::Result<()> {
 }
 
 async fn run_server(args: ConfigArgs) -> anyhow::Result<()> {
-    let config = LiquidConfig::from_file_and_env(args.config.as_deref())?;
+    let config = load_config(&args)?;
     let storage = build_storage(&config).await?;
     let agent = build_agent(&config).await?;
 
@@ -61,7 +67,7 @@ async fn run_server(args: ConfigArgs) -> anyhow::Result<()> {
 }
 
 async fn run_migrate(args: ConfigArgs) -> anyhow::Result<()> {
-    let config = LiquidConfig::from_file_and_env(args.config.as_deref())?;
+    let config = load_config(&args)?;
     let storage = connect_storage(&config).await?;
 
     tracing::info!("running liquid database migrations");
@@ -69,6 +75,54 @@ async fn run_migrate(args: ConfigArgs) -> anyhow::Result<()> {
     tracing::info!("liquid database migrations complete");
 
     Ok(())
+}
+
+fn load_config(args: &ConfigArgs) -> anyhow::Result<LiquidConfig> {
+    let config_path = config_path_from_args(args, default_config_path)?;
+
+    LiquidConfig::from_file_and_env(Some(&config_path))
+}
+
+fn config_path_from_args<F>(args: &ConfigArgs, default_path: F) -> anyhow::Result<PathBuf>
+where
+    F: FnOnce() -> anyhow::Result<PathBuf>,
+{
+    let Some(config_path) = args.config.as_deref() else {
+        return ensure_default_config_file(default_path()?);
+    };
+
+    Ok(config_path.to_owned())
+}
+
+fn default_config_path() -> anyhow::Result<PathBuf> {
+    Ok(home_dir()?
+        .join(DEFAULT_CONFIG_DIR)
+        .join(DEFAULT_CONFIG_FILE))
+}
+
+fn home_dir() -> anyhow::Result<PathBuf> {
+    env::var_os("HOME")
+        .or_else(|| env::var_os("USERPROFILE"))
+        .map(PathBuf::from)
+        .filter(|path| !path.as_os_str().is_empty())
+        .context("could not determine user home directory; pass --config <PATH>")
+}
+
+fn ensure_default_config_file(path: PathBuf) -> anyhow::Result<PathBuf> {
+    if path.exists() {
+        return Ok(path);
+    }
+
+    if let Some(parent) = path.parent() {
+        fs::create_dir_all(parent)
+            .with_context(|| format!("failed to create config directory: {}", parent.display()))?;
+    }
+
+    fs::write(&path, default_config_toml())
+        .with_context(|| format!("failed to create default config file: {}", path.display()))?;
+    tracing::info!(path = %path.display(), "created default liquid config");
+
+    Ok(path)
 }
 
 async fn build_storage(config: &LiquidConfig) -> anyhow::Result<Arc<Storage>> {
@@ -131,6 +185,11 @@ fn init_tracing() {
 
 #[cfg(test)]
 mod tests {
+    use std::{
+        process,
+        time::{SystemTime, UNIX_EPOCH},
+    };
+
     use clap::Parser;
 
     use super::*;
@@ -162,5 +221,61 @@ mod tests {
         let cli = Cli::parse_from(["liquid", "version"]);
 
         assert!(matches!(cli.command, Command::Version));
+    }
+
+    #[test]
+    fn explicit_config_path_is_used_directly() {
+        let args = ConfigArgs {
+            config: Some(PathBuf::from("liquid.toml")),
+        };
+        let path =
+            config_path_from_args(&args, || panic!("default path should not be used")).unwrap();
+
+        assert_eq!(path, PathBuf::from("liquid.toml"));
+    }
+
+    #[test]
+    fn missing_config_creates_default_file() {
+        let root = temp_root("liquid-cli-default-config");
+        let path = root.join(DEFAULT_CONFIG_DIR).join(DEFAULT_CONFIG_FILE);
+        let args = ConfigArgs { config: None };
+
+        let resolved = config_path_from_args(&args, || Ok(path.clone())).unwrap();
+
+        assert_eq!(resolved, path);
+        assert!(resolved.exists());
+        assert!(resolved.parent().unwrap().is_dir());
+        assert!(
+            fs::read_to_string(&resolved)
+                .unwrap()
+                .contains("[database]")
+        );
+
+        let _ = fs::remove_dir_all(root);
+    }
+
+    #[test]
+    fn existing_default_config_is_preserved() {
+        let root = temp_root("liquid-cli-existing-config");
+        let path = root.join(DEFAULT_CONFIG_DIR).join(DEFAULT_CONFIG_FILE);
+        fs::create_dir_all(path.parent().unwrap()).unwrap();
+        fs::write(&path, "sentinel = true\n").unwrap();
+        let args = ConfigArgs { config: None };
+
+        let resolved = config_path_from_args(&args, || Ok(path.clone())).unwrap();
+
+        assert_eq!(resolved, path);
+        assert_eq!(fs::read_to_string(&resolved).unwrap(), "sentinel = true\n");
+
+        let _ = fs::remove_dir_all(root);
+    }
+
+    fn temp_root(name: &str) -> PathBuf {
+        let nanos = SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .unwrap()
+            .as_nanos();
+
+        env::temp_dir().join(format!("{name}-{}-{nanos}", process::id()))
     }
 }

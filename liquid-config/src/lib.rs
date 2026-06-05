@@ -12,6 +12,34 @@ const DEFAULT_AUTH_TOKEN_TTL_SECONDS: i64 = 60 * 60 * 24 * 7;
 const DEFAULT_ENCRYPTION_KEY: &str = "liquid-development-encryption-key-change-me";
 const DEFAULT_OPENAI_BASE_URL: &str = "https://api.openai.com";
 
+pub fn default_config_toml() -> String {
+    format!(
+        r#"[api]
+addr = "{DEFAULT_API_ADDR}"
+cors_origin = "{DEFAULT_CORS_ORIGIN}"
+
+[database]
+url = "{DEFAULT_DATABASE_URL}"
+max_connections = {DEFAULT_DATABASE_MAX_CONNECTIONS}
+auto_migrate = {DEFAULT_DATABASE_AUTO_MIGRATE}
+
+[auth]
+token_ttl_seconds = {DEFAULT_AUTH_TOKEN_TTL_SECONDS}
+
+[security]
+encryption_key = "{DEFAULT_ENCRYPTION_KEY}"
+
+[llm]
+base_url = "{DEFAULT_OPENAI_BASE_URL}"
+api_mode = "chat_completions"
+
+[sql]
+metadata = "auto"
+execution = "readonly"
+"#
+    )
+}
+
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct LiquidConfig {
     pub api_addr: SocketAddr,
@@ -512,6 +540,35 @@ execution = "off"
         .unwrap_err();
 
         assert!(error.to_string().contains("invalid LIQUID_SQL_EXECUTION"));
+    }
+
+    #[test]
+    fn generated_default_config_is_valid() {
+        let path = temp_config_path("liquid-default-config.toml");
+        fs::write(&path, default_config_toml()).unwrap();
+
+        let file_config = read_file_config(&path).unwrap();
+        let config = LiquidConfig::from_env_values(Some(file_config), |_| None).unwrap();
+
+        assert_eq!(config.api_addr, DEFAULT_API_ADDR.parse().unwrap());
+        assert_eq!(config.cors_origin, DEFAULT_CORS_ORIGIN);
+        assert_eq!(config.database.url, DEFAULT_DATABASE_URL);
+        assert_eq!(
+            config.database.max_connections,
+            DEFAULT_DATABASE_MAX_CONNECTIONS
+        );
+        assert_eq!(config.database.auto_migrate, DEFAULT_DATABASE_AUTO_MIGRATE);
+        assert_eq!(
+            config.auth.token_ttl_seconds,
+            DEFAULT_AUTH_TOKEN_TTL_SECONDS
+        );
+        assert_eq!(config.security.encryption_key, DEFAULT_ENCRYPTION_KEY);
+        assert_eq!(config.llm.base_url, DEFAULT_OPENAI_BASE_URL);
+        assert_eq!(config.llm.api_mode, LlmApiMode::ChatCompletions);
+        assert_eq!(config.sql_metadata, SqlMetadataMode::Auto);
+        assert_eq!(config.sql_execution, SqlExecutionMode::Readonly);
+
+        let _ = fs::remove_file(path);
     }
 
     fn temp_config_path(name: &str) -> PathBuf {
