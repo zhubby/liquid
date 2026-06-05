@@ -22,6 +22,12 @@ export OPENAI_API_MODE=chat_completions
 or without a trailing `/v1`. `OPENAI_API_MODE` defaults to `chat_completions` and
 also supports `responses`.
 
+PostgreSQL metadata tools use `DATABASE_URL`. SQL metadata collection is
+controlled by `LIQUID_SQL_METADATA=auto|off|required`, defaulting to `auto`.
+Agent SQL execution tools are controlled separately by
+`LIQUID_SQL_EXECUTION=off|readonly|write_gated`, defaulting to `readonly`.
+The gated write tool is only registered when `LIQUID_SQL_EXECUTION=write_gated`.
+
 ## Frontend
 
 ```bash

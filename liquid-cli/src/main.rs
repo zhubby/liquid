@@ -1,7 +1,10 @@
 use std::sync::Arc;
 
-use liquid_agent::{MockSqlAuditAgent, SqlAuditAgent, ToolCallingSqlAuditAgent, ToolRegistry};
-use liquid_config::{LiquidConfig, LlmApiMode, SqlMetadataMode};
+use liquid_agent::{
+    MockSqlAuditAgent, PostgresToolConfig, PostgresToolExecutionMode, SqlAuditAgent,
+    ToolCallingSqlAuditAgent, ToolRegistry,
+};
+use liquid_config::{LiquidConfig, LlmApiMode, SqlExecutionMode, SqlMetadataMode};
 use liquid_llm::{LlmProtocol, OpenAiCompatibleClient, OpenAiCompatibleConfig};
 use sqlx::postgres::PgPoolOptions;
 use tracing_subscriber::EnvFilter;
@@ -44,23 +47,29 @@ async fn build_agent(config: &LiquidConfig) -> anyhow::Result<Arc<dyn SqlAuditAg
         "using OpenAI-compatible SQL audit agent"
     );
 
-    let (metadata_pool, metadata_required) = metadata_pool(config).await?;
-    let tools = ToolRegistry::with_sql_metadata_pool(metadata_pool, metadata_required);
+    let (postgres_pool, metadata_required) = postgres_tool_pool(config).await?;
+    let tools = ToolRegistry::with_postgres_tools(PostgresToolConfig::new(
+        postgres_pool,
+        metadata_required,
+        postgres_tool_execution(config.sql_execution),
+    ));
 
     Ok(Arc::new(
         ToolCallingSqlAuditAgent::new(llm, model, protocol).with_tools(tools),
     ))
 }
 
-async fn metadata_pool(config: &LiquidConfig) -> anyhow::Result<(Option<sqlx::PgPool>, bool)> {
+async fn postgres_tool_pool(config: &LiquidConfig) -> anyhow::Result<(Option<sqlx::PgPool>, bool)> {
+    let metadata_required = matches!(config.sql_metadata, SqlMetadataMode::Required);
+    let pool_required = metadata_required
+        || !matches!(config.sql_metadata, SqlMetadataMode::Off)
+        || !matches!(config.sql_execution, SqlExecutionMode::Off);
+
+    if !pool_required {
+        return Ok((None, false));
+    }
+
     match config.sql_metadata {
-        SqlMetadataMode::Off => Ok((None, false)),
-        SqlMetadataMode::Auto => {
-            let pool = PgPoolOptions::new()
-                .max_connections(2)
-                .connect_lazy(&config.database_url)?;
-            Ok((Some(pool), false))
-        }
         SqlMetadataMode::Required => {
             let pool = PgPoolOptions::new()
                 .max_connections(2)
@@ -68,6 +77,20 @@ async fn metadata_pool(config: &LiquidConfig) -> anyhow::Result<(Option<sqlx::Pg
                 .await?;
             Ok((Some(pool), true))
         }
+        SqlMetadataMode::Auto | SqlMetadataMode::Off => {
+            let pool = PgPoolOptions::new()
+                .max_connections(2)
+                .connect_lazy(&config.database_url)?;
+            Ok((Some(pool), false))
+        }
+    }
+}
+
+fn postgres_tool_execution(mode: SqlExecutionMode) -> PostgresToolExecutionMode {
+    match mode {
+        SqlExecutionMode::Off => PostgresToolExecutionMode::Off,
+        SqlExecutionMode::Readonly => PostgresToolExecutionMode::Readonly,
+        SqlExecutionMode::WriteGated => PostgresToolExecutionMode::WriteGated,
     }
 }
 

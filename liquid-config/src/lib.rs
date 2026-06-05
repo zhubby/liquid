@@ -11,6 +11,7 @@ pub struct LiquidConfig {
     pub api_addr: SocketAddr,
     pub database_url: String,
     pub sql_metadata: SqlMetadataMode,
+    pub sql_execution: SqlExecutionMode,
     pub llm: LlmConfig,
 }
 
@@ -37,6 +38,14 @@ pub enum SqlMetadataMode {
     Required,
 }
 
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+pub enum SqlExecutionMode {
+    Off,
+    #[default]
+    Readonly,
+    WriteGated,
+}
+
 impl FromStr for SqlMetadataMode {
     type Err = anyhow::Error;
 
@@ -47,6 +56,21 @@ impl FromStr for SqlMetadataMode {
             "required" | "require" | "on" | "true" => Ok(Self::Required),
             other => Err(anyhow::anyhow!(
                 "invalid LIQUID_SQL_METADATA: {other}; expected auto, off, or required"
+            )),
+        }
+    }
+}
+
+impl FromStr for SqlExecutionMode {
+    type Err = anyhow::Error;
+
+    fn from_str(value: &str) -> Result<Self> {
+        match value.trim().to_ascii_lowercase().as_str() {
+            "" | "readonly" | "read_only" | "read-only" | "on" | "true" => Ok(Self::Readonly),
+            "off" | "disabled" | "false" => Ok(Self::Off),
+            "write_gated" | "write-gated" | "write" | "gated" => Ok(Self::WriteGated),
+            other => Err(anyhow::anyhow!(
+                "invalid LIQUID_SQL_EXECUTION: {other}; expected off, readonly, or write_gated"
             )),
         }
     }
@@ -90,6 +114,10 @@ impl LiquidConfig {
             .as_deref()
             .unwrap_or_default()
             .parse()?;
+        let sql_execution = get("LIQUID_SQL_EXECUTION")
+            .as_deref()
+            .unwrap_or_default()
+            .parse()?;
 
         Ok(Self {
             api_addr: api_addr
@@ -97,6 +125,7 @@ impl LiquidConfig {
                 .with_context(|| format!("invalid LIQUID_API_ADDR: {api_addr}"))?,
             database_url,
             sql_metadata,
+            sql_execution,
             llm: LlmConfig {
                 api_key,
                 base_url,
@@ -138,6 +167,7 @@ mod tests {
         assert_eq!(config.llm.model, None);
         assert_eq!(config.llm.api_mode, LlmApiMode::ChatCompletions);
         assert_eq!(config.sql_metadata, SqlMetadataMode::Auto);
+        assert_eq!(config.sql_execution, SqlExecutionMode::Readonly);
     }
 
     #[test]
@@ -180,6 +210,17 @@ mod tests {
     }
 
     #[test]
+    fn parses_sql_execution_mode() {
+        let config = LiquidConfig::from_env_values(|key| match key {
+            "LIQUID_SQL_EXECUTION" => Some("write_gated".to_owned()),
+            _ => None,
+        })
+        .unwrap();
+
+        assert_eq!(config.sql_execution, SqlExecutionMode::WriteGated);
+    }
+
+    #[test]
     fn rejects_invalid_sql_metadata_mode() {
         let error = LiquidConfig::from_env_values(|key| match key {
             "LIQUID_SQL_METADATA" => Some("sometimes".to_owned()),
@@ -188,5 +229,16 @@ mod tests {
         .unwrap_err();
 
         assert!(error.to_string().contains("invalid LIQUID_SQL_METADATA"));
+    }
+
+    #[test]
+    fn rejects_invalid_sql_execution_mode() {
+        let error = LiquidConfig::from_env_values(|key| match key {
+            "LIQUID_SQL_EXECUTION" => Some("sometimes".to_owned()),
+            _ => None,
+        })
+        .unwrap_err();
+
+        assert!(error.to_string().contains("invalid LIQUID_SQL_EXECUTION"));
     }
 }

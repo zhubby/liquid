@@ -772,18 +772,17 @@ fn collect_index_candidates(
 fn collect_relation_aliases(node: &NodeEnum, aliases: &mut Vec<RelationAlias>) {
     match node {
         NodeEnum::RangeVar(range) => {
-            if let Some(alias) = &range.alias {
-                if !alias.aliasname.is_empty() {
-                    push_unique_alias(
-                        aliases,
-                        RelationAlias {
-                            alias: alias.aliasname.clone(),
-                            schema: (!range.schemaname.is_empty())
-                                .then(|| range.schemaname.clone()),
-                            relation_name: range.relname.clone(),
-                        },
-                    );
-                }
+            if let Some(alias) = &range.alias
+                && !alias.aliasname.is_empty()
+            {
+                push_unique_alias(
+                    aliases,
+                    RelationAlias {
+                        alias: alias.aliasname.clone(),
+                        schema: (!range.schemaname.is_empty()).then(|| range.schemaname.clone()),
+                        relation_name: range.relname.clone(),
+                    },
+                );
             }
         }
         _ => {
