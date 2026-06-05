@@ -11,6 +11,10 @@ const DEFAULT_DATABASE_AUTO_MIGRATE: bool = true;
 const DEFAULT_AUTH_TOKEN_TTL_SECONDS: i64 = 60 * 60 * 24 * 7;
 const DEFAULT_ENCRYPTION_KEY: &str = "liquid-development-encryption-key-change-me";
 const DEFAULT_OPENAI_BASE_URL: &str = "https://api.openai.com";
+const DEFAULT_SQL_MANAGED_POOL_MAX_CONNECTIONS: u32 = 2;
+const DEFAULT_SQL_MANAGED_POOL_IDLE_TTL_SECONDS: u64 = 10 * 60;
+const DEFAULT_SQL_MANAGED_POOL_REAP_INTERVAL_SECONDS: u64 = 60;
+const DEFAULT_SQL_MANAGED_POOL_ACQUIRE_TIMEOUT_SECONDS: u64 = 10;
 
 pub fn default_config_toml() -> String {
     format!(
@@ -36,6 +40,10 @@ api_mode = "chat_completions"
 [sql]
 metadata = "auto"
 execution = "readonly"
+managed_pool_max_connections = {DEFAULT_SQL_MANAGED_POOL_MAX_CONNECTIONS}
+managed_pool_idle_ttl_seconds = {DEFAULT_SQL_MANAGED_POOL_IDLE_TTL_SECONDS}
+managed_pool_reap_interval_seconds = {DEFAULT_SQL_MANAGED_POOL_REAP_INTERVAL_SECONDS}
+managed_pool_acquire_timeout_seconds = {DEFAULT_SQL_MANAGED_POOL_ACQUIRE_TIMEOUT_SECONDS}
 "#
     )
 }
@@ -49,6 +57,7 @@ pub struct LiquidConfig {
     pub security: SecurityConfig,
     pub sql_metadata: SqlMetadataMode,
     pub sql_execution: SqlExecutionMode,
+    pub managed_database_pool: ManagedDatabasePoolConfig,
     pub llm: LlmConfig,
 }
 
@@ -75,6 +84,14 @@ pub struct LlmConfig {
     pub base_url: String,
     pub model: Option<String>,
     pub api_mode: LlmApiMode,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ManagedDatabasePoolConfig {
+    pub max_connections: u32,
+    pub idle_ttl_seconds: u64,
+    pub reap_interval_seconds: u64,
+    pub acquire_timeout_seconds: u64,
 }
 
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
@@ -145,6 +162,10 @@ struct FileLlmConfig {
 struct FileSqlConfig {
     metadata: Option<String>,
     execution: Option<String>,
+    managed_pool_max_connections: Option<u32>,
+    managed_pool_idle_ttl_seconds: Option<u64>,
+    managed_pool_reap_interval_seconds: Option<u64>,
+    managed_pool_acquire_timeout_seconds: Option<u64>,
 }
 
 impl FromStr for SqlMetadataMode {
@@ -278,9 +299,45 @@ impl LiquidConfig {
             .as_deref()
             .unwrap_or_default()
             .parse()?;
+        let managed_pool_max_connections = parse_u32(
+            "LIQUID_SQL_MANAGED_POOL_MAX_CONNECTIONS",
+            get("LIQUID_SQL_MANAGED_POOL_MAX_CONNECTIONS"),
+            file_sql.managed_pool_max_connections,
+            DEFAULT_SQL_MANAGED_POOL_MAX_CONNECTIONS,
+        )?;
+        let managed_pool_idle_ttl_seconds = parse_u64(
+            "LIQUID_SQL_MANAGED_POOL_IDLE_TTL_SECONDS",
+            get("LIQUID_SQL_MANAGED_POOL_IDLE_TTL_SECONDS"),
+            file_sql.managed_pool_idle_ttl_seconds,
+            DEFAULT_SQL_MANAGED_POOL_IDLE_TTL_SECONDS,
+        )?;
+        let managed_pool_reap_interval_seconds = parse_u64(
+            "LIQUID_SQL_MANAGED_POOL_REAP_INTERVAL_SECONDS",
+            get("LIQUID_SQL_MANAGED_POOL_REAP_INTERVAL_SECONDS"),
+            file_sql.managed_pool_reap_interval_seconds,
+            DEFAULT_SQL_MANAGED_POOL_REAP_INTERVAL_SECONDS,
+        )?;
+        let managed_pool_acquire_timeout_seconds = parse_u64(
+            "LIQUID_SQL_MANAGED_POOL_ACQUIRE_TIMEOUT_SECONDS",
+            get("LIQUID_SQL_MANAGED_POOL_ACQUIRE_TIMEOUT_SECONDS"),
+            file_sql.managed_pool_acquire_timeout_seconds,
+            DEFAULT_SQL_MANAGED_POOL_ACQUIRE_TIMEOUT_SECONDS,
+        )?;
 
         if token_ttl_seconds <= 0 {
             anyhow::bail!("LIQUID_AUTH_TOKEN_TTL_SECONDS must be positive");
+        }
+        if managed_pool_max_connections == 0 {
+            anyhow::bail!("LIQUID_SQL_MANAGED_POOL_MAX_CONNECTIONS must be positive");
+        }
+        if managed_pool_idle_ttl_seconds == 0 {
+            anyhow::bail!("LIQUID_SQL_MANAGED_POOL_IDLE_TTL_SECONDS must be positive");
+        }
+        if managed_pool_reap_interval_seconds == 0 {
+            anyhow::bail!("LIQUID_SQL_MANAGED_POOL_REAP_INTERVAL_SECONDS must be positive");
+        }
+        if managed_pool_acquire_timeout_seconds == 0 {
+            anyhow::bail!("LIQUID_SQL_MANAGED_POOL_ACQUIRE_TIMEOUT_SECONDS must be positive");
         }
 
         Ok(Self {
@@ -297,6 +354,12 @@ impl LiquidConfig {
             security: SecurityConfig { encryption_key },
             sql_metadata,
             sql_execution,
+            managed_database_pool: ManagedDatabasePoolConfig {
+                max_connections: managed_pool_max_connections,
+                idle_ttl_seconds: managed_pool_idle_ttl_seconds,
+                reap_interval_seconds: managed_pool_reap_interval_seconds,
+                acquire_timeout_seconds: managed_pool_acquire_timeout_seconds,
+            },
             llm: LlmConfig {
                 api_key,
                 base_url,
@@ -346,6 +409,20 @@ fn parse_i64(
     file_value: Option<i64>,
     default_value: i64,
 ) -> Result<i64> {
+    match env_value.and_then(non_empty) {
+        Some(value) => value
+            .parse()
+            .with_context(|| format!("invalid {env_name}: {value}")),
+        None => Ok(file_value.unwrap_or(default_value)),
+    }
+}
+
+fn parse_u64(
+    env_name: &str,
+    env_value: Option<String>,
+    file_value: Option<u64>,
+    default_value: u64,
+) -> Result<u64> {
     match env_value.and_then(non_empty) {
         Some(value) => value
             .parse()
@@ -452,6 +529,10 @@ api_mode = "responses"
 [sql]
 metadata = "off"
 execution = "off"
+managed_pool_max_connections = 4
+managed_pool_idle_ttl_seconds = 120
+managed_pool_reap_interval_seconds = 15
+managed_pool_acquire_timeout_seconds = 3
 "#,
         )
         .unwrap();
@@ -471,6 +552,10 @@ execution = "off"
         assert_eq!(config.llm.api_mode, LlmApiMode::Responses);
         assert_eq!(config.sql_metadata, SqlMetadataMode::Off);
         assert_eq!(config.sql_execution, SqlExecutionMode::Off);
+        assert_eq!(config.managed_database_pool.max_connections, 4);
+        assert_eq!(config.managed_database_pool.idle_ttl_seconds, 120);
+        assert_eq!(config.managed_database_pool.reap_interval_seconds, 15);
+        assert_eq!(config.managed_database_pool.acquire_timeout_seconds, 3);
 
         let _ = fs::remove_file(path);
     }
@@ -521,6 +606,23 @@ execution = "off"
     }
 
     #[test]
+    fn parses_managed_database_pool_env_values() {
+        let config = LiquidConfig::from_env_values(None, |key| match key {
+            "LIQUID_SQL_MANAGED_POOL_MAX_CONNECTIONS" => Some("3".to_owned()),
+            "LIQUID_SQL_MANAGED_POOL_IDLE_TTL_SECONDS" => Some("90".to_owned()),
+            "LIQUID_SQL_MANAGED_POOL_REAP_INTERVAL_SECONDS" => Some("9".to_owned()),
+            "LIQUID_SQL_MANAGED_POOL_ACQUIRE_TIMEOUT_SECONDS" => Some("2".to_owned()),
+            _ => None,
+        })
+        .unwrap();
+
+        assert_eq!(config.managed_database_pool.max_connections, 3);
+        assert_eq!(config.managed_database_pool.idle_ttl_seconds, 90);
+        assert_eq!(config.managed_database_pool.reap_interval_seconds, 9);
+        assert_eq!(config.managed_database_pool.acquire_timeout_seconds, 2);
+    }
+
+    #[test]
     fn rejects_invalid_sql_metadata_mode() {
         let error = LiquidConfig::from_env_values(None, |key| match key {
             "LIQUID_SQL_METADATA" => Some("sometimes".to_owned()),
@@ -540,6 +642,21 @@ execution = "off"
         .unwrap_err();
 
         assert!(error.to_string().contains("invalid LIQUID_SQL_EXECUTION"));
+    }
+
+    #[test]
+    fn rejects_zero_managed_database_pool_values() {
+        let error = LiquidConfig::from_env_values(None, |key| match key {
+            "LIQUID_SQL_MANAGED_POOL_MAX_CONNECTIONS" => Some("0".to_owned()),
+            _ => None,
+        })
+        .unwrap_err();
+
+        assert!(
+            error
+                .to_string()
+                .contains("LIQUID_SQL_MANAGED_POOL_MAX_CONNECTIONS")
+        );
     }
 
     #[test]
@@ -567,6 +684,22 @@ execution = "off"
         assert_eq!(config.llm.api_mode, LlmApiMode::ChatCompletions);
         assert_eq!(config.sql_metadata, SqlMetadataMode::Auto);
         assert_eq!(config.sql_execution, SqlExecutionMode::Readonly);
+        assert_eq!(
+            config.managed_database_pool.max_connections,
+            DEFAULT_SQL_MANAGED_POOL_MAX_CONNECTIONS
+        );
+        assert_eq!(
+            config.managed_database_pool.idle_ttl_seconds,
+            DEFAULT_SQL_MANAGED_POOL_IDLE_TTL_SECONDS
+        );
+        assert_eq!(
+            config.managed_database_pool.reap_interval_seconds,
+            DEFAULT_SQL_MANAGED_POOL_REAP_INTERVAL_SECONDS
+        );
+        assert_eq!(
+            config.managed_database_pool.acquire_timeout_seconds,
+            DEFAULT_SQL_MANAGED_POOL_ACQUIRE_TIMEOUT_SECONDS
+        );
 
         let _ = fs::remove_file(path);
     }

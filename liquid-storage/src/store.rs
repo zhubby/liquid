@@ -1,7 +1,9 @@
 use async_trait::async_trait;
 use liquid_core::{
-    AuthResponse, CreateManagedDatabaseRequest, LoginRequest, ManagedDatabase, PublicUser,
-    RegisterRequest, UpdateManagedDatabaseRequest,
+    AuthResponse, CreateManagedDatabaseRequest, LoginRequest, ManagedDatabase,
+    ManagedDatabaseConnectionLoader, ManagedDatabaseConnectionLoaderError,
+    ManagedDatabaseConnectionSpec, ManagedDatabasePoolKey, PublicUser, RegisterRequest,
+    UpdateManagedDatabaseRequest,
 };
 use sqlx::{PgPool, postgres::PgPoolOptions};
 
@@ -48,6 +50,18 @@ impl Storage {
         encrypted_password: &str,
     ) -> Result<String, StorageError> {
         self.cipher.decrypt(encrypted_password)
+    }
+}
+
+#[async_trait]
+impl ManagedDatabaseConnectionLoader for Storage {
+    async fn load_managed_database_connection(
+        &self,
+        key: &ManagedDatabasePoolKey,
+    ) -> Result<ManagedDatabaseConnectionSpec, ManagedDatabaseConnectionLoaderError> {
+        managed_databases::load_managed_database_connection(self, key)
+            .await
+            .map_err(managed_database_loader_error)
     }
 }
 
@@ -99,5 +113,19 @@ impl LiquidStore for Storage {
         id: &str,
     ) -> Result<(), StorageError> {
         managed_databases::delete_managed_database(self, owner_user_id, id).await
+    }
+}
+
+fn managed_database_loader_error(error: StorageError) -> ManagedDatabaseConnectionLoaderError {
+    match error {
+        StorageError::NotFound => ManagedDatabaseConnectionLoaderError::NotFound,
+        StorageError::Validation(message) => {
+            ManagedDatabaseConnectionLoaderError::InvalidConnection(message)
+        }
+        StorageError::Crypto(message) => ManagedDatabaseConnectionLoaderError::Secret(message),
+        StorageError::Database(error) => {
+            ManagedDatabaseConnectionLoaderError::Backend(error.to_string())
+        }
+        other => ManagedDatabaseConnectionLoaderError::Backend(other.to_string()),
     }
 }

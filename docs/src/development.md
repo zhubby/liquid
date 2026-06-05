@@ -55,6 +55,10 @@ api_mode = "chat_completions"
 [sql]
 metadata = "auto"
 execution = "readonly"
+managed_pool_max_connections = 2
+managed_pool_idle_ttl_seconds = 600
+managed_pool_reap_interval_seconds = 60
+managed_pool_acquire_timeout_seconds = 10
 ```
 
 Environment variables override config file values. The Liquid application
@@ -76,11 +80,14 @@ export OPENAI_API_MODE=chat_completions
 or without a trailing `/v1`. `OPENAI_API_MODE` defaults to `chat_completions` and
 also supports `responses`.
 
-PostgreSQL metadata tools use `DATABASE_URL`. SQL metadata collection is
-controlled by `LIQUID_SQL_METADATA=auto|off|required`, defaulting to `auto`.
-Agent SQL execution tools are controlled separately by
-`LIQUID_SQL_EXECUTION=off|readonly|write_gated`, defaulting to `readonly`.
-The gated write tool is only registered when `LIQUID_SQL_EXECUTION=write_gated`.
+Managed database SQL audit tools use the saved managed database records, not the
+process-level `DATABASE_URL`. SQL metadata collection is controlled by
+`LIQUID_SQL_METADATA=auto|off|required`, defaulting to `auto`.
+`LIQUID_SQL_EXECUTION=off` disables managed audit execution tools, `readonly`
+enables read-only execution, and `write_gated` is downgraded to read-only for
+the managed database audit endpoint in v1. Each managed database instance gets
+a lazy SQLx pool that is closed after
+`LIQUID_SQL_MANAGED_POOL_IDLE_TTL_SECONDS` seconds without use.
 
 ## Frontend
 

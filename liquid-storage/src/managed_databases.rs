@@ -1,5 +1,6 @@
 use liquid_core::{
-    CreateManagedDatabaseRequest, ManagedDatabase, ManagedDatabaseEngine, ManagedDatabaseSslMode,
+    CreateManagedDatabaseRequest, ManagedDatabase, ManagedDatabaseConnectionSpec,
+    ManagedDatabaseEngine, ManagedDatabasePoolKey, ManagedDatabaseSslMode,
     UpdateManagedDatabaseRequest,
 };
 
@@ -133,6 +134,31 @@ pub(crate) async fn delete_managed_database(
     Ok(())
 }
 
+pub(crate) async fn load_managed_database_connection(
+    storage: &Storage,
+    key: &ManagedDatabasePoolKey,
+) -> Result<ManagedDatabaseConnectionSpec, StorageError> {
+    let row = sqlx::query_as::<_, ManagedDatabaseConnectionRow>(
+        r#"
+        select engine, host, port, database_name, username, encrypted_password, ssl_mode
+        from managed_databases
+        where id = $1::uuid
+          and owner_user_id = $2::uuid
+        "#,
+    )
+    .bind(&key.database_id)
+    .bind(&key.owner_user_id)
+    .fetch_optional(&storage.pool)
+    .await
+    .map_err(map_database_error)?;
+
+    let Some(row) = row else {
+        return Err(StorageError::NotFound);
+    };
+
+    row.into_connection_spec(storage)
+}
+
 #[derive(Debug)]
 struct ManagedDatabaseRow {
     id: String,
@@ -144,6 +170,17 @@ struct ManagedDatabaseRow {
     username: String,
     ssl_mode: String,
     has_password: bool,
+}
+
+#[derive(Debug)]
+struct ManagedDatabaseConnectionRow {
+    engine: String,
+    host: String,
+    port: i32,
+    database_name: String,
+    username: String,
+    encrypted_password: String,
+    ssl_mode: String,
 }
 
 impl<'r> sqlx::FromRow<'r, sqlx::postgres::PgRow> for ManagedDatabaseRow {
@@ -178,6 +215,44 @@ impl TryFrom<ManagedDatabaseRow> for ManagedDatabase {
             username: row.username,
             ssl_mode: parse_ssl_mode(&row.ssl_mode)?,
             has_password: row.has_password,
+        })
+    }
+}
+
+impl<'r> sqlx::FromRow<'r, sqlx::postgres::PgRow> for ManagedDatabaseConnectionRow {
+    fn from_row(row: &'r sqlx::postgres::PgRow) -> Result<Self, sqlx::Error> {
+        use sqlx::Row;
+
+        Ok(Self {
+            engine: row.try_get("engine")?,
+            host: row.try_get("host")?,
+            port: row.try_get("port")?,
+            database_name: row.try_get("database_name")?,
+            username: row.try_get("username")?,
+            encrypted_password: row.try_get("encrypted_password")?,
+            ssl_mode: row.try_get("ssl_mode")?,
+        })
+    }
+}
+
+impl ManagedDatabaseConnectionRow {
+    fn into_connection_spec(
+        self,
+        storage: &Storage,
+    ) -> Result<ManagedDatabaseConnectionSpec, StorageError> {
+        let port = u16::try_from(self.port).map_err(|_| {
+            StorageError::Validation("managed database port must be between 1 and 65535".to_owned())
+        })?;
+        let password = storage.decrypt_managed_database_password(&self.encrypted_password)?;
+
+        Ok(ManagedDatabaseConnectionSpec {
+            engine: parse_engine(&self.engine)?,
+            host: self.host,
+            port,
+            database: self.database_name,
+            username: self.username,
+            password,
+            ssl_mode: parse_ssl_mode(&self.ssl_mode)?,
         })
     }
 }
@@ -248,7 +323,7 @@ impl ValidatedManagedDatabaseUpdate {
     }
 }
 
-fn parse_engine(value: &str) -> Result<ManagedDatabaseEngine, StorageError> {
+pub(crate) fn parse_engine(value: &str) -> Result<ManagedDatabaseEngine, StorageError> {
     match value {
         "postgres" => Ok(ManagedDatabaseEngine::Postgres),
         other => Err(StorageError::Validation(format!(
@@ -257,7 +332,7 @@ fn parse_engine(value: &str) -> Result<ManagedDatabaseEngine, StorageError> {
     }
 }
 
-fn parse_ssl_mode(value: &str) -> Result<ManagedDatabaseSslMode, StorageError> {
+pub(crate) fn parse_ssl_mode(value: &str) -> Result<ManagedDatabaseSslMode, StorageError> {
     match value {
         "disable" => Ok(ManagedDatabaseSslMode::Disable),
         "prefer" => Ok(ManagedDatabaseSslMode::Prefer),

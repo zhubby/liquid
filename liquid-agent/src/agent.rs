@@ -3,13 +3,13 @@ use std::sync::Arc;
 use anyhow::{Result, anyhow, bail};
 use async_stream::try_stream;
 use async_trait::async_trait;
-use liquid_core::AuditSummary;
+use liquid_core::{AuditSummary, SqlAuditReport, SqlAuditRequest};
 use liquid_llm::{LlmClient, LlmMessage, LlmProtocol, LlmRequest};
 
 use crate::{
     prompt::{audit_messages, parse_audit_report},
     tools::ToolRegistry,
-    types::{AgentEvent, AgentStream, SqlAuditReport, SqlAuditRequest},
+    types::{AgentEvent, AgentStream},
 };
 
 const DEFAULT_MAX_TOOL_ROUNDS: usize = 6;
@@ -18,6 +18,14 @@ const DEFAULT_MAX_TOOL_ROUNDS: usize = 6;
 pub trait SqlAuditAgent: Send + Sync {
     async fn audit_summary(&self) -> Result<AuditSummary>;
     async fn audit_sql(&self, request: SqlAuditRequest) -> Result<SqlAuditReport>;
+    async fn audit_sql_with_tools(
+        &self,
+        request: SqlAuditRequest,
+        tools: ToolRegistry,
+    ) -> Result<SqlAuditReport> {
+        let _ = tools;
+        self.audit_sql(request).await
+    }
     async fn audit_sql_stream(&self, request: SqlAuditRequest) -> Result<AgentStream>;
 }
 
@@ -51,13 +59,17 @@ impl ToolCallingSqlAuditAgent {
         self
     }
 
-    async fn run_audit(&self, request: SqlAuditRequest) -> Result<SqlAuditReport> {
+    async fn run_audit_with_tools(
+        &self,
+        request: SqlAuditRequest,
+        tools: ToolRegistry,
+    ) -> Result<SqlAuditReport> {
         let mut messages = audit_messages(&request)?;
 
         for _ in 0..self.max_tool_rounds {
             let response = self
                 .llm
-                .complete(self.llm_request(messages.clone()))
+                .complete(self.llm_request(messages.clone(), &tools))
                 .await?;
 
             if response.tool_calls.is_empty() {
@@ -70,7 +82,7 @@ impl ToolCallingSqlAuditAgent {
             ));
 
             for call in &response.tool_calls {
-                let output = self.tools.execute(call).await?;
+                let output = tools.execute(call).await?;
                 messages.push(LlmMessage::tool_result(call.id.clone(), output.content));
             }
         }
@@ -81,9 +93,13 @@ impl ToolCallingSqlAuditAgent {
         )
     }
 
-    fn llm_request(&self, messages: Vec<LlmMessage>) -> LlmRequest {
+    async fn run_audit(&self, request: SqlAuditRequest) -> Result<SqlAuditReport> {
+        self.run_audit_with_tools(request, self.tools.clone()).await
+    }
+
+    fn llm_request(&self, messages: Vec<LlmMessage>, tools: &ToolRegistry) -> LlmRequest {
         LlmRequest::new(self.model.clone(), self.protocol, messages)
-            .with_tools(self.tools.definitions())
+            .with_tools(tools.definitions())
             .with_temperature(0.1)
             .with_max_output_tokens(1_200)
     }
@@ -99,6 +115,14 @@ impl SqlAuditAgent for ToolCallingSqlAuditAgent {
         self.run_audit(request).await
     }
 
+    async fn audit_sql_with_tools(
+        &self,
+        request: SqlAuditRequest,
+        tools: ToolRegistry,
+    ) -> Result<SqlAuditReport> {
+        self.run_audit_with_tools(request, tools).await
+    }
+
     async fn audit_sql_stream(&self, request: SqlAuditRequest) -> Result<AgentStream> {
         let agent = self.clone();
 
@@ -107,7 +131,7 @@ impl SqlAuditAgent for ToolCallingSqlAuditAgent {
             let mut messages = audit_messages(&request)?;
 
             for _ in 0..agent.max_tool_rounds {
-                let response = agent.llm.complete(agent.llm_request(messages.clone())).await?;
+                let response = agent.llm.complete(agent.llm_request(messages.clone(), &agent.tools)).await?;
 
                 if response.tool_calls.is_empty() {
                     let report = parse_audit_report(&response.content)?;

@@ -96,6 +96,14 @@ Environment variables override config file values.
 | `OPENAI_API_MODE` | `chat_completions` | `chat_completions` or `responses`. |
 | `LIQUID_SQL_METADATA` | `auto` | `auto`, `off`, or `required`. |
 | `LIQUID_SQL_EXECUTION` | `readonly` | `off`, `readonly`, or `write_gated`. |
+| `LIQUID_SQL_MANAGED_POOL_MAX_CONNECTIONS` | `2` | Maximum connections per managed database pool. |
+| `LIQUID_SQL_MANAGED_POOL_IDLE_TTL_SECONDS` | `600` | Close an unused managed database pool after this many seconds. |
+| `LIQUID_SQL_MANAGED_POOL_REAP_INTERVAL_SECONDS` | `60` | Background interval for managed database pool cleanup. |
+| `LIQUID_SQL_MANAGED_POOL_ACQUIRE_TIMEOUT_SECONDS` | `10` | SQLx acquire timeout for managed database pools. |
+
+The managed database SQL audit endpoint is capped at read-only execution in v1:
+`LIQUID_SQL_EXECUTION=off` disables execution tools, and `write_gated` is
+downgraded to read-only.
 
 Set a real `LIQUID_ENCRYPTION_KEY` before storing managed database passwords
 outside local development.

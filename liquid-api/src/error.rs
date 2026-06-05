@@ -3,7 +3,7 @@ use axum::{
     http::StatusCode,
     response::{IntoResponse, Response},
 };
-use liquid_storage::StorageError;
+use liquid_storage::{ManagedDatabasePoolError, StorageError};
 use serde::Serialize;
 
 #[derive(Debug, Serialize)]
@@ -55,6 +55,29 @@ impl From<StorageError> for ApiError {
             StorageError::Database(_) | StorageError::Crypto(_) => Self {
                 status: StatusCode::INTERNAL_SERVER_ERROR,
                 message: "internal storage error".to_owned(),
+            },
+        }
+    }
+}
+
+impl From<ManagedDatabasePoolError> for ApiError {
+    fn from(error: ManagedDatabasePoolError) -> Self {
+        match error {
+            ManagedDatabasePoolError::NotFound => Self {
+                status: StatusCode::NOT_FOUND,
+                message: error.to_string(),
+            },
+            ManagedDatabasePoolError::Invalidated => Self {
+                status: StatusCode::CONFLICT,
+                message: error.to_string(),
+            },
+            ManagedDatabasePoolError::InvalidConnection(_) => Self {
+                status: StatusCode::BAD_REQUEST,
+                message: error.to_string(),
+            },
+            ManagedDatabasePoolError::Secret(_) | ManagedDatabasePoolError::Loader(_) => Self {
+                status: StatusCode::INTERNAL_SERVER_ERROR,
+                message: "managed database connection error".to_owned(),
             },
         }
     }

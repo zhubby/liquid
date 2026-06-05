@@ -1,7 +1,6 @@
 use anyhow::{Result, bail};
+use liquid_core::{SqlAuditReport, SqlAuditRequest};
 use liquid_llm::LlmMessage;
-
-use crate::types::{SqlAuditReport, SqlAuditRequest};
 
 const SQL_AUDIT_SYSTEM_PROMPT: &str = r#"You are Liquid's SQL audit agent.
 Audit PostgreSQL for data safety, governance, operational risk, and performance risk.

@@ -1,12 +1,12 @@
 use anyhow::Result;
 use async_stream::try_stream;
 use async_trait::async_trait;
-use liquid_core::{AuditSummary, RiskSeverity};
+use liquid_core::{AuditSummary, RiskSeverity, SqlAuditFinding, SqlAuditReport, SqlAuditRequest};
 use liquid_sql::{PgSqlAnalysisRequest, PgSqlFinding, PgSqlRiskSeverity, analyze_postgres_sql};
 
 use crate::{
     agent::SqlAuditAgent,
-    types::{AgentEvent, AgentStream, SqlAuditFinding, SqlAuditReport, SqlAuditRequest},
+    types::{AgentEvent, AgentStream},
 };
 
 #[derive(Debug, Default)]
