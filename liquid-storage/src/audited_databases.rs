@@ -1,0 +1,296 @@
+use liquid_core::{
+    AuditedDatabase, AuditedDatabaseEngine, AuditedDatabaseSslMode, CreateAuditedDatabaseRequest,
+    UpdateAuditedDatabaseRequest,
+};
+
+use crate::{
+    crypto::PasswordCipher,
+    error::{StorageError, map_database_error},
+    store::Storage,
+    validation::{optional_string, required_string, validate_port},
+};
+
+pub(crate) async fn list_audited_databases(
+    storage: &Storage,
+    owner_user_id: &str,
+) -> Result<Vec<AuditedDatabase>, StorageError> {
+    let rows = sqlx::query_as::<_, AuditedDatabaseRow>(
+        r#"
+        select id::text, name, engine, host, port, database_name, username, ssl_mode,
+               encrypted_password <> '' as has_password
+        from audited_databases
+        where owner_user_id = $1::uuid
+        order by lower(name)
+        "#,
+    )
+    .bind(owner_user_id)
+    .fetch_all(&storage.pool)
+    .await?;
+
+    rows.into_iter().map(AuditedDatabase::try_from).collect()
+}
+
+pub(crate) async fn create_audited_database(
+    storage: &Storage,
+    owner_user_id: &str,
+    request: CreateAuditedDatabaseRequest,
+) -> Result<AuditedDatabase, StorageError> {
+    let record = ValidatedAuditedDatabase::from_create(request)?;
+    let encrypted_password = storage.cipher.encrypt(&record.password)?;
+
+    let row = sqlx::query_as::<_, AuditedDatabaseRow>(
+        r#"
+        insert into audited_databases (
+            owner_user_id, name, engine, host, port, database_name, username,
+            encrypted_password, ssl_mode
+        )
+        values ($1::uuid, $2, $3, $4, $5, $6, $7, $8, $9)
+        returning id::text, name, engine, host, port, database_name, username, ssl_mode,
+                  encrypted_password <> '' as has_password
+        "#,
+    )
+    .bind(owner_user_id)
+    .bind(record.name)
+    .bind(record.engine.as_str())
+    .bind(record.host)
+    .bind(record.port)
+    .bind(record.database)
+    .bind(record.username)
+    .bind(encrypted_password)
+    .bind(record.ssl_mode.as_str())
+    .fetch_one(&storage.pool)
+    .await
+    .map_err(map_database_error)?;
+
+    AuditedDatabase::try_from(row)
+}
+
+pub(crate) async fn update_audited_database(
+    storage: &Storage,
+    owner_user_id: &str,
+    id: &str,
+    request: UpdateAuditedDatabaseRequest,
+) -> Result<AuditedDatabase, StorageError> {
+    let update = ValidatedAuditedDatabaseUpdate::from_update(request, &storage.cipher)?;
+    let row = sqlx::query_as::<_, AuditedDatabaseRow>(
+        r#"
+        update audited_databases
+        set name = coalesce($3::text, name),
+            host = coalesce($4::text, host),
+            port = coalesce($5::integer, port),
+            database_name = coalesce($6::text, database_name),
+            username = coalesce($7::text, username),
+            encrypted_password = coalesce($8::text, encrypted_password),
+            ssl_mode = coalesce($9::text, ssl_mode),
+            updated_at = now()
+        where id = $1::uuid
+          and owner_user_id = $2::uuid
+        returning id::text, name, engine, host, port, database_name, username, ssl_mode,
+                  encrypted_password <> '' as has_password
+        "#,
+    )
+    .bind(id)
+    .bind(owner_user_id)
+    .bind(update.name)
+    .bind(update.host)
+    .bind(update.port)
+    .bind(update.database)
+    .bind(update.username)
+    .bind(update.encrypted_password)
+    .bind(update.ssl_mode.map(|mode| mode.as_str().to_owned()))
+    .fetch_optional(&storage.pool)
+    .await
+    .map_err(map_database_error)?;
+
+    let Some(row) = row else {
+        return Err(StorageError::NotFound);
+    };
+
+    AuditedDatabase::try_from(row)
+}
+
+pub(crate) async fn delete_audited_database(
+    storage: &Storage,
+    owner_user_id: &str,
+    id: &str,
+) -> Result<(), StorageError> {
+    let result = sqlx::query(
+        r#"
+        delete from audited_databases
+        where id = $1::uuid
+          and owner_user_id = $2::uuid
+        "#,
+    )
+    .bind(id)
+    .bind(owner_user_id)
+    .execute(&storage.pool)
+    .await?;
+
+    if result.rows_affected() == 0 {
+        return Err(StorageError::NotFound);
+    }
+
+    Ok(())
+}
+
+#[derive(Debug)]
+struct AuditedDatabaseRow {
+    id: String,
+    name: String,
+    engine: String,
+    host: String,
+    port: i32,
+    database_name: String,
+    username: String,
+    ssl_mode: String,
+    has_password: bool,
+}
+
+impl<'r> sqlx::FromRow<'r, sqlx::postgres::PgRow> for AuditedDatabaseRow {
+    fn from_row(row: &'r sqlx::postgres::PgRow) -> Result<Self, sqlx::Error> {
+        use sqlx::Row;
+
+        Ok(Self {
+            id: row.try_get("id")?,
+            name: row.try_get("name")?,
+            engine: row.try_get("engine")?,
+            host: row.try_get("host")?,
+            port: row.try_get("port")?,
+            database_name: row.try_get("database_name")?,
+            username: row.try_get("username")?,
+            ssl_mode: row.try_get("ssl_mode")?,
+            has_password: row.try_get("has_password")?,
+        })
+    }
+}
+
+impl TryFrom<AuditedDatabaseRow> for AuditedDatabase {
+    type Error = StorageError;
+
+    fn try_from(row: AuditedDatabaseRow) -> Result<Self, Self::Error> {
+        Ok(Self {
+            id: row.id,
+            name: row.name,
+            engine: parse_engine(&row.engine)?,
+            host: row.host,
+            port: row.port,
+            database: row.database_name,
+            username: row.username,
+            ssl_mode: parse_ssl_mode(&row.ssl_mode)?,
+            has_password: row.has_password,
+        })
+    }
+}
+
+#[derive(Debug)]
+struct ValidatedAuditedDatabase {
+    name: String,
+    engine: AuditedDatabaseEngine,
+    host: String,
+    port: i32,
+    database: String,
+    username: String,
+    password: String,
+    ssl_mode: AuditedDatabaseSslMode,
+}
+
+impl ValidatedAuditedDatabase {
+    fn from_create(request: CreateAuditedDatabaseRequest) -> Result<Self, StorageError> {
+        validate_port(request.port)?;
+
+        Ok(Self {
+            name: required_string("name", &request.name)?,
+            engine: request.engine,
+            host: required_string("host", &request.host)?,
+            port: request.port,
+            database: required_string("database", &request.database)?,
+            username: required_string("username", &request.username)?,
+            password: required_string("password", &request.password)?,
+            ssl_mode: request.ssl_mode,
+        })
+    }
+}
+
+#[derive(Debug)]
+struct ValidatedAuditedDatabaseUpdate {
+    name: Option<String>,
+    host: Option<String>,
+    port: Option<i32>,
+    database: Option<String>,
+    username: Option<String>,
+    encrypted_password: Option<String>,
+    ssl_mode: Option<AuditedDatabaseSslMode>,
+}
+
+impl ValidatedAuditedDatabaseUpdate {
+    fn from_update(
+        request: UpdateAuditedDatabaseRequest,
+        cipher: &PasswordCipher,
+    ) -> Result<Self, StorageError> {
+        if let Some(port) = request.port {
+            validate_port(port)?;
+        }
+
+        let encrypted_password = match request.password {
+            Some(password) => Some(cipher.encrypt(&required_string("password", &password)?)?),
+            None => None,
+        };
+
+        Ok(Self {
+            name: optional_string("name", request.name)?,
+            host: optional_string("host", request.host)?,
+            port: request.port,
+            database: optional_string("database", request.database)?,
+            username: optional_string("username", request.username)?,
+            encrypted_password,
+            ssl_mode: request.ssl_mode,
+        })
+    }
+}
+
+fn parse_engine(value: &str) -> Result<AuditedDatabaseEngine, StorageError> {
+    match value {
+        "postgres" => Ok(AuditedDatabaseEngine::Postgres),
+        other => Err(StorageError::Validation(format!(
+            "unsupported audited database engine: {other}"
+        ))),
+    }
+}
+
+fn parse_ssl_mode(value: &str) -> Result<AuditedDatabaseSslMode, StorageError> {
+    match value {
+        "disable" => Ok(AuditedDatabaseSslMode::Disable),
+        "prefer" => Ok(AuditedDatabaseSslMode::Prefer),
+        "require" => Ok(AuditedDatabaseSslMode::Require),
+        other => Err(StorageError::Validation(format!(
+            "unsupported audited database ssl mode: {other}"
+        ))),
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use liquid_core::{
+        AuditedDatabaseEngine, AuditedDatabaseSslMode, CreateAuditedDatabaseRequest,
+    };
+
+    use super::*;
+
+    #[test]
+    fn create_audited_database_validation_rejects_bad_port() {
+        let request = CreateAuditedDatabaseRequest {
+            name: "Warehouse".to_owned(),
+            engine: AuditedDatabaseEngine::Postgres,
+            host: "localhost".to_owned(),
+            port: 70_000,
+            database: "warehouse".to_owned(),
+            username: "readonly".to_owned(),
+            password: "secret".to_owned(),
+            ssl_mode: AuditedDatabaseSslMode::Prefer,
+        };
+
+        let error = ValidatedAuditedDatabase::from_create(request).unwrap_err();
+
+        assert!(error.to_string().contains("port must be between"));
+    }
+}
