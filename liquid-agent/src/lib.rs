@@ -452,12 +452,35 @@ fn recommendation_for_rule(rule_id: &str) -> &'static str {
         "delete_without_where" | "update_without_where" | "tautological_where" => {
             "Add a selective predicate or split the write into a reviewed migration."
         }
-        "destructive_drop" | "destructive_truncate" | "dangerous_alter_table" => {
+        "destructive_drop"
+        | "destructive_truncate"
+        | "dangerous_alter_table"
+        | "drop_cascade"
+        | "alter_table_drop_object"
+        | "alter_table_rewrite_or_validate"
+        | "alter_table_disables_safety" => {
             "Require explicit approval, maintenance timing, and rollback planning."
+        }
+        "create_index_without_concurrently" | "refresh_matview_without_concurrently" => {
+            "Prefer PostgreSQL concurrent forms or schedule a maintenance window."
         }
         "select_star" => "Select only the columns required by the workflow.",
         "join_without_qualification" => "Add an explicit ON or USING condition.",
-        "insert_values_row_limit" => "Batch the insert or use a controlled bulk-load path.",
+        "insert_values_row_limit" | "insert_from_select" | "copy_from" => {
+            "Batch the write or use a controlled bulk-load path."
+        }
+        "merge_write_actions" => "Review source cardinality and each MERGE action predicate.",
+        "copy_program" => "Avoid server-side program execution unless it is explicitly approved.",
+        "create_extension" | "create_function" | "do_block" => {
+            "Review executable database code and required privileges before execution."
+        }
+        "grant_privileges" | "revoke_privileges" | "grant_role" | "revoke_role" | "alter_role"
+        | "alter_role_set" | "drop_role" => {
+            "Require privilege-owner review and confirm operational access impact."
+        }
+        "select_for_locking" | "explicit_lock" => {
+            "Review lock scope, transaction duration, and concurrent workload impact."
+        }
         _ => "Review this deterministic PostgreSQL risk finding before execution.",
     }
 }
