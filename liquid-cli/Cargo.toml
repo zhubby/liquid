@@ -13,6 +13,7 @@ liquid-agent = { path = "../liquid-agent" }
 liquid-api = { path = "../liquid-api" }
 liquid-config = { path = "../liquid-config" }
 liquid-llm = { path = "../liquid-llm" }
+sqlx.workspace = true
 tokio.workspace = true
 tracing.workspace = true
 tracing-subscriber.workspace = true

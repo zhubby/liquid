@@ -3,6 +3,15 @@ name = "liquid-sql"
 version.workspace = true
 edition.workspace = true
 
+[features]
+postgres-integration = []
+
 [dependencies]
+async-trait.workspace = true
 pg_query.workspace = true
 serde.workspace = true
+serde_json.workspace = true
+sqlx.workspace = true
+
+[dev-dependencies]
+tokio.workspace = true
