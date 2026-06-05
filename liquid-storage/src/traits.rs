@@ -1,9 +1,12 @@
 use async_trait::async_trait;
 use liquid_core::{
-    ApproveSqlAuditRequest, AuthResponse, CreateManagedDatabaseRequest, CreateSqlAuditRequest,
-    LoginRequest, ManagedDatabase, PublicUser, RegisterRequest, RejectSqlAuditRequest,
-    SqlAuditExecutionResult, SqlAuditRecord, SqlAuditReport, SqlAuditStatus, SqlStatementKind,
-    UpdateManagedDatabaseRequest,
+    AgentAction, AgentActionStatus, AgentConversation, AgentEventRecord, AgentEventType,
+    AgentMessage, AgentMessageRole, AgentResourceKind, AgentTurn, AgentTurnStatus,
+    ApproveSqlAuditRequest, AuthResponse, CreateAgentActionRequest, CreateAgentConversationRequest,
+    CreateAgentTurnRequest, CreateManagedDatabaseRequest, CreateSqlAuditRequest, LoginRequest,
+    ManagedDatabase, PublicUser, RegisterRequest, RejectSqlAuditRequest, SqlAuditExecutionResult,
+    SqlAuditRecord, SqlAuditReport, SqlAuditStatus, SqlStatementKind,
+    UpdateAgentConversationRequest, UpdateManagedDatabaseRequest,
 };
 use serde_json::Value;
 
@@ -91,4 +94,104 @@ pub trait LiquidStore: Send + Sync {
         id: &str,
         error: String,
     ) -> Result<SqlAuditRecord, StorageError>;
+    async fn list_agent_conversations(
+        &self,
+        owner_user_id: &str,
+        limit: i64,
+    ) -> Result<Vec<AgentConversation>, StorageError>;
+    async fn create_agent_conversation(
+        &self,
+        owner_user_id: &str,
+        request: CreateAgentConversationRequest,
+    ) -> Result<AgentConversation, StorageError>;
+    async fn get_agent_conversation(
+        &self,
+        owner_user_id: &str,
+        id: &str,
+    ) -> Result<AgentConversation, StorageError>;
+    async fn update_agent_conversation(
+        &self,
+        owner_user_id: &str,
+        id: &str,
+        request: UpdateAgentConversationRequest,
+    ) -> Result<AgentConversation, StorageError>;
+    async fn list_agent_messages(
+        &self,
+        owner_user_id: &str,
+        conversation_id: &str,
+        limit: i64,
+        before_message_id: Option<&str>,
+    ) -> Result<Vec<AgentMessage>, StorageError>;
+    async fn append_agent_message(
+        &self,
+        owner_user_id: &str,
+        conversation_id: &str,
+        turn_id: Option<&str>,
+        role: AgentMessageRole,
+        content: &str,
+        metadata: Option<Value>,
+    ) -> Result<AgentMessage, StorageError>;
+    async fn create_agent_turn(
+        &self,
+        owner_user_id: &str,
+        conversation_id: &str,
+        request: CreateAgentTurnRequest,
+    ) -> Result<AgentTurn, StorageError>;
+    async fn get_agent_turn(
+        &self,
+        owner_user_id: &str,
+        id: &str,
+    ) -> Result<AgentTurn, StorageError>;
+    async fn update_agent_turn_status(
+        &self,
+        owner_user_id: &str,
+        id: &str,
+        status: AgentTurnStatus,
+        error: Option<String>,
+    ) -> Result<AgentTurn, StorageError>;
+    async fn set_agent_turn_assistant_message(
+        &self,
+        owner_user_id: &str,
+        id: &str,
+        assistant_message_id: &str,
+    ) -> Result<AgentTurn, StorageError>;
+    async fn append_agent_turn_event(
+        &self,
+        owner_user_id: &str,
+        turn_id: &str,
+        event_type: AgentEventType,
+        payload: Value,
+    ) -> Result<AgentEventRecord, StorageError>;
+    async fn list_agent_turn_events(
+        &self,
+        owner_user_id: &str,
+        turn_id: &str,
+        after_seq: i32,
+    ) -> Result<Vec<AgentEventRecord>, StorageError>;
+    async fn create_agent_action(
+        &self,
+        owner_user_id: &str,
+        turn_id: &str,
+        request: CreateAgentActionRequest,
+    ) -> Result<AgentAction, StorageError>;
+    async fn list_agent_actions(
+        &self,
+        owner_user_id: &str,
+        conversation_id: Option<&str>,
+        status: Option<AgentActionStatus>,
+    ) -> Result<Vec<AgentAction>, StorageError>;
+    async fn get_agent_action(
+        &self,
+        owner_user_id: &str,
+        id: &str,
+    ) -> Result<AgentAction, StorageError>;
+    async fn update_agent_action_status(
+        &self,
+        owner_user_id: &str,
+        id: &str,
+        status: AgentActionStatus,
+        resource_kind: Option<AgentResourceKind>,
+        resource_id: Option<String>,
+    ) -> Result<AgentAction, StorageError>;
+    async fn fail_stale_agent_turns(&self, stale_after_seconds: i64) -> Result<u64, StorageError>;
 }

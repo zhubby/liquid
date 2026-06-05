@@ -15,12 +15,16 @@ use liquid_agent::{
 };
 use liquid_api::{ApiState, ApprovedSqlExecutionFuture, ApprovedSqlExecutor, router};
 use liquid_core::{
-    ApproveSqlAuditRequest, AuditSummary, AuthResponse, CreateManagedDatabaseRequest, LoginRequest,
-    ManagedDatabase, ManagedDatabaseConnectionLoader, ManagedDatabaseConnectionLoaderError,
-    ManagedDatabaseConnectionSpec, ManagedDatabaseEngine, ManagedDatabasePoolKey,
-    ManagedDatabasePoolPolicy, ManagedDatabaseSslMode, PublicUser, RegisterRequest,
-    RejectSqlAuditRequest, SqlAuditExecutionResult, SqlAuditRecord, SqlAuditReport,
-    SqlAuditRequest, SqlAuditStatus, UpdateManagedDatabaseRequest,
+    AgentAction, AgentActionStatus, AgentConversation, AgentEventRecord, AgentEventType,
+    AgentMessage, AgentMessageRole, AgentResourceKind, AgentTurn, AgentTurnStatus,
+    ApproveSqlAuditRequest, AuditSummary, AuthResponse, CreateAgentActionRequest,
+    CreateAgentConversationRequest, CreateAgentTurnRequest, CreateManagedDatabaseRequest,
+    LoginRequest, ManagedDatabase, ManagedDatabaseConnectionLoader,
+    ManagedDatabaseConnectionLoaderError, ManagedDatabaseConnectionSpec, ManagedDatabaseEngine,
+    ManagedDatabasePoolKey, ManagedDatabasePoolPolicy, ManagedDatabaseSslMode, PublicUser,
+    RegisterRequest, RejectSqlAuditRequest, SqlAuditExecutionResult, SqlAuditRecord,
+    SqlAuditReport, SqlAuditRequest, SqlAuditStatus, UpdateAgentConversationRequest,
+    UpdateManagedDatabaseRequest,
 };
 use liquid_sql::{PgSqlAnalysisRequest, PgSqlStatementKind, analyze_postgres_sql};
 use liquid_storage::{
@@ -41,6 +45,11 @@ struct TestStore {
     revoked: Mutex<bool>,
     databases: Mutex<Vec<ManagedDatabase>>,
     audits: Mutex<Vec<SqlAuditRecord>>,
+    conversations: Mutex<Vec<AgentConversation>>,
+    messages: Mutex<Vec<AgentMessage>>,
+    turns: Mutex<Vec<AgentTurn>>,
+    events: Mutex<Vec<AgentEventRecord>>,
+    actions: Mutex<Vec<AgentAction>>,
 }
 
 #[async_trait]
@@ -362,6 +371,394 @@ impl LiquidStore for TestStore {
         record.status = SqlAuditStatus::ExecutionFailed;
         record.execution_error = Some(error);
         Ok(record.clone())
+    }
+
+    async fn list_agent_conversations(
+        &self,
+        owner_user_id: &str,
+        limit: i64,
+    ) -> Result<Vec<AgentConversation>, StorageError> {
+        Ok(self
+            .conversations
+            .lock()
+            .unwrap()
+            .iter()
+            .filter(|conversation| conversation.owner_user_id == owner_user_id)
+            .take(limit.clamp(1, 100) as usize)
+            .cloned()
+            .collect())
+    }
+
+    async fn create_agent_conversation(
+        &self,
+        owner_user_id: &str,
+        request: CreateAgentConversationRequest,
+    ) -> Result<AgentConversation, StorageError> {
+        let mut conversations = self.conversations.lock().unwrap();
+        let conversation = AgentConversation {
+            id: format!("conversation-{}", conversations.len() + 1),
+            owner_user_id: owner_user_id.to_owned(),
+            title: request
+                .title
+                .unwrap_or_else(|| "New conversation".to_owned()),
+            created_at: time::OffsetDateTime::UNIX_EPOCH,
+            updated_at: time::OffsetDateTime::UNIX_EPOCH,
+        };
+        conversations.push(conversation.clone());
+        Ok(conversation)
+    }
+
+    async fn get_agent_conversation(
+        &self,
+        owner_user_id: &str,
+        id: &str,
+    ) -> Result<AgentConversation, StorageError> {
+        self.conversations
+            .lock()
+            .unwrap()
+            .iter()
+            .find(|conversation| {
+                conversation.id == id && conversation.owner_user_id == owner_user_id
+            })
+            .cloned()
+            .ok_or(StorageError::NotFound)
+    }
+
+    async fn update_agent_conversation(
+        &self,
+        owner_user_id: &str,
+        id: &str,
+        request: UpdateAgentConversationRequest,
+    ) -> Result<AgentConversation, StorageError> {
+        let mut conversations = self.conversations.lock().unwrap();
+        let Some(conversation) = conversations.iter_mut().find(|conversation| {
+            conversation.id == id && conversation.owner_user_id == owner_user_id
+        }) else {
+            return Err(StorageError::NotFound);
+        };
+
+        if let Some(title) = request.title {
+            conversation.title = title;
+        }
+
+        Ok(conversation.clone())
+    }
+
+    async fn list_agent_messages(
+        &self,
+        owner_user_id: &str,
+        conversation_id: &str,
+        limit: i64,
+        _before_message_id: Option<&str>,
+    ) -> Result<Vec<AgentMessage>, StorageError> {
+        self.get_agent_conversation(owner_user_id, conversation_id)
+            .await?;
+        Ok(self
+            .messages
+            .lock()
+            .unwrap()
+            .iter()
+            .filter(|message| message.conversation_id == conversation_id)
+            .take(limit.clamp(1, 200) as usize)
+            .cloned()
+            .collect())
+    }
+
+    async fn append_agent_message(
+        &self,
+        owner_user_id: &str,
+        conversation_id: &str,
+        turn_id: Option<&str>,
+        role: AgentMessageRole,
+        content: &str,
+        metadata: Option<Value>,
+    ) -> Result<AgentMessage, StorageError> {
+        self.get_agent_conversation(owner_user_id, conversation_id)
+            .await?;
+        let mut messages = self.messages.lock().unwrap();
+        let message = AgentMessage {
+            id: format!("message-{}", messages.len() + 1),
+            conversation_id: conversation_id.to_owned(),
+            turn_id: turn_id.map(str::to_owned),
+            role,
+            content: content.to_owned(),
+            metadata,
+            created_at: time::OffsetDateTime::UNIX_EPOCH,
+        };
+        messages.push(message.clone());
+        Ok(message)
+    }
+
+    async fn create_agent_turn(
+        &self,
+        owner_user_id: &str,
+        conversation_id: &str,
+        request: CreateAgentTurnRequest,
+    ) -> Result<AgentTurn, StorageError> {
+        self.get_agent_conversation(owner_user_id, conversation_id)
+            .await?;
+        let user_message = self
+            .append_agent_message(
+                owner_user_id,
+                conversation_id,
+                None,
+                AgentMessageRole::User,
+                &request.message,
+                None,
+            )
+            .await?;
+        let mut turns = self.turns.lock().unwrap();
+        let turn = AgentTurn {
+            id: format!("turn-{}", turns.len() + 1),
+            conversation_id: conversation_id.to_owned(),
+            status: AgentTurnStatus::Queued,
+            user_message_id: user_message.id.clone(),
+            assistant_message_id: None,
+            error: None,
+            client_request_id: request.client_request_id,
+            managed_database_id: request.managed_database_id,
+            dashboard_context: request.dashboard_context,
+            created_at: time::OffsetDateTime::UNIX_EPOCH,
+            updated_at: time::OffsetDateTime::UNIX_EPOCH,
+            completed_at: None,
+        };
+        turns.push(turn.clone());
+        self.messages
+            .lock()
+            .unwrap()
+            .iter_mut()
+            .find(|message| message.id == user_message.id)
+            .unwrap()
+            .turn_id = Some(turn.id.clone());
+        Ok(turn)
+    }
+
+    async fn get_agent_turn(
+        &self,
+        owner_user_id: &str,
+        id: &str,
+    ) -> Result<AgentTurn, StorageError> {
+        let turn = self
+            .turns
+            .lock()
+            .unwrap()
+            .iter()
+            .find(|turn| turn.id == id)
+            .cloned()
+            .ok_or(StorageError::NotFound)?;
+        self.get_agent_conversation(owner_user_id, &turn.conversation_id)
+            .await?;
+        Ok(turn)
+    }
+
+    async fn update_agent_turn_status(
+        &self,
+        owner_user_id: &str,
+        id: &str,
+        status: AgentTurnStatus,
+        error: Option<String>,
+    ) -> Result<AgentTurn, StorageError> {
+        let conversation_id = self
+            .turns
+            .lock()
+            .unwrap()
+            .iter()
+            .find(|turn| turn.id == id)
+            .map(|turn| turn.conversation_id.clone())
+            .ok_or(StorageError::NotFound)?;
+        self.get_agent_conversation(owner_user_id, &conversation_id)
+            .await?;
+        let mut turns = self.turns.lock().unwrap();
+        let Some(turn) = turns.iter_mut().find(|turn| turn.id == id) else {
+            return Err(StorageError::NotFound);
+        };
+        turn.status = status;
+        turn.error = error;
+        if status.is_terminal() {
+            turn.completed_at = Some(time::OffsetDateTime::UNIX_EPOCH);
+        }
+        Ok(turn.clone())
+    }
+
+    async fn set_agent_turn_assistant_message(
+        &self,
+        owner_user_id: &str,
+        id: &str,
+        assistant_message_id: &str,
+    ) -> Result<AgentTurn, StorageError> {
+        let conversation_id = self
+            .turns
+            .lock()
+            .unwrap()
+            .iter()
+            .find(|turn| turn.id == id)
+            .map(|turn| turn.conversation_id.clone())
+            .ok_or(StorageError::NotFound)?;
+        self.get_agent_conversation(owner_user_id, &conversation_id)
+            .await?;
+        let mut turns = self.turns.lock().unwrap();
+        let Some(turn) = turns.iter_mut().find(|turn| turn.id == id) else {
+            return Err(StorageError::NotFound);
+        };
+        turn.assistant_message_id = Some(assistant_message_id.to_owned());
+        Ok(turn.clone())
+    }
+
+    async fn append_agent_turn_event(
+        &self,
+        owner_user_id: &str,
+        turn_id: &str,
+        event_type: AgentEventType,
+        payload: Value,
+    ) -> Result<AgentEventRecord, StorageError> {
+        self.get_agent_turn(owner_user_id, turn_id).await?;
+        let mut events = self.events.lock().unwrap();
+        let seq = events
+            .iter()
+            .filter(|event| event.turn_id == turn_id)
+            .map(|event| event.seq)
+            .max()
+            .unwrap_or(0)
+            + 1;
+        let event = AgentEventRecord {
+            seq,
+            turn_id: turn_id.to_owned(),
+            event_type,
+            payload,
+            created_at: time::OffsetDateTime::UNIX_EPOCH,
+        };
+        events.push(event.clone());
+        Ok(event)
+    }
+
+    async fn list_agent_turn_events(
+        &self,
+        owner_user_id: &str,
+        turn_id: &str,
+        after_seq: i32,
+    ) -> Result<Vec<AgentEventRecord>, StorageError> {
+        self.get_agent_turn(owner_user_id, turn_id).await?;
+        Ok(self
+            .events
+            .lock()
+            .unwrap()
+            .iter()
+            .filter(|event| event.turn_id == turn_id && event.seq > after_seq)
+            .cloned()
+            .collect())
+    }
+
+    async fn create_agent_action(
+        &self,
+        owner_user_id: &str,
+        turn_id: &str,
+        request: CreateAgentActionRequest,
+    ) -> Result<AgentAction, StorageError> {
+        let turn = self.get_agent_turn(owner_user_id, turn_id).await?;
+        let mut actions = self.actions.lock().unwrap();
+        let action = AgentAction {
+            id: format!("action-{}", actions.len() + 1),
+            conversation_id: turn.conversation_id,
+            turn_id: turn_id.to_owned(),
+            kind: request.kind,
+            status: AgentActionStatus::Proposed,
+            title: request.title,
+            description: request.description,
+            payload: request.payload,
+            resource_kind: request.resource_kind,
+            resource_id: request.resource_id,
+            requires_confirmation: request.requires_confirmation,
+            created_at: time::OffsetDateTime::UNIX_EPOCH,
+            updated_at: time::OffsetDateTime::UNIX_EPOCH,
+        };
+        actions.push(action.clone());
+        Ok(action)
+    }
+
+    async fn list_agent_actions(
+        &self,
+        owner_user_id: &str,
+        conversation_id: Option<&str>,
+        status: Option<AgentActionStatus>,
+    ) -> Result<Vec<AgentAction>, StorageError> {
+        if let Some(conversation_id) = conversation_id {
+            self.get_agent_conversation(owner_user_id, conversation_id)
+                .await?;
+        }
+
+        Ok(self
+            .actions
+            .lock()
+            .unwrap()
+            .iter()
+            .filter(|action| {
+                conversation_id
+                    .map(|conversation_id| action.conversation_id == conversation_id)
+                    .unwrap_or(true)
+            })
+            .filter(|action| status.map(|status| action.status == status).unwrap_or(true))
+            .cloned()
+            .collect())
+    }
+
+    async fn get_agent_action(
+        &self,
+        owner_user_id: &str,
+        id: &str,
+    ) -> Result<AgentAction, StorageError> {
+        let action = self
+            .actions
+            .lock()
+            .unwrap()
+            .iter()
+            .find(|action| action.id == id)
+            .cloned()
+            .ok_or(StorageError::NotFound)?;
+        self.get_agent_conversation(owner_user_id, &action.conversation_id)
+            .await?;
+        Ok(action)
+    }
+
+    async fn update_agent_action_status(
+        &self,
+        owner_user_id: &str,
+        id: &str,
+        status: AgentActionStatus,
+        resource_kind: Option<AgentResourceKind>,
+        resource_id: Option<String>,
+    ) -> Result<AgentAction, StorageError> {
+        let conversation_id = self
+            .actions
+            .lock()
+            .unwrap()
+            .iter()
+            .find(|action| action.id == id)
+            .map(|action| action.conversation_id.clone())
+            .ok_or(StorageError::NotFound)?;
+        self.get_agent_conversation(owner_user_id, &conversation_id)
+            .await?;
+        let mut actions = self.actions.lock().unwrap();
+        let Some(action) = actions.iter_mut().find(|action| action.id == id) else {
+            return Err(StorageError::NotFound);
+        };
+        if action.status != AgentActionStatus::Proposed {
+            return Err(StorageError::Conflict(format!(
+                "agent action is already {}",
+                action.status.as_str()
+            )));
+        }
+        action.status = status;
+        if resource_kind.is_some() {
+            action.resource_kind = resource_kind;
+        }
+        if resource_id.is_some() {
+            action.resource_id = resource_id;
+        }
+        Ok(action.clone())
+    }
+
+    async fn fail_stale_agent_turns(&self, _stale_after_seconds: i64) -> Result<u64, StorageError> {
+        Ok(0)
     }
 }
 
@@ -724,6 +1121,142 @@ async fn audit_summary_returns_sample_payload_for_authenticated_user() {
     let payload = response_json(response).await;
     assert_eq!(payload["audit_score"], 92);
     assert!(payload["risk_breakdown"].is_array());
+}
+
+#[tokio::test]
+async fn agent_conversations_require_authentication() {
+    let response = test_app()
+        .oneshot(json_request(
+            "/api/v1/agent/conversations",
+            json!({ "title": "Ops" }),
+        ))
+        .await
+        .unwrap();
+
+    assert_eq!(response.status(), StatusCode::UNAUTHORIZED);
+}
+
+#[tokio::test]
+async fn agent_turn_persists_events_and_proposed_action() {
+    let app = test_app();
+    create_test_database(&app).await;
+
+    let conversation_response = app
+        .clone()
+        .oneshot(auth_json_request(
+            "POST",
+            "/api/v1/agent/conversations",
+            json!({ "title": "SQL review" }),
+        ))
+        .await
+        .unwrap();
+    assert_eq!(conversation_response.status(), StatusCode::OK);
+    let conversation = response_json(conversation_response).await;
+    assert_eq!(conversation["title"], "SQL review");
+
+    let turn_response = app
+        .clone()
+        .oneshot(auth_json_request(
+            "POST",
+            "/api/v1/agent/conversations/conversation-1/turns",
+            json!({
+                "message": "select * from users",
+                "managed_database_id": "db-1",
+                "dashboard_context": {
+                    "active_view": "ai",
+                    "date_range": "last_7_days"
+                }
+            }),
+        ))
+        .await
+        .unwrap();
+    assert_eq!(turn_response.status(), StatusCode::OK);
+    let turn = response_json(turn_response).await;
+    assert_eq!(turn["status"], "queued");
+
+    tokio::time::sleep(std::time::Duration::from_millis(50)).await;
+
+    let events_response = app
+        .clone()
+        .oneshot(auth_request(
+            "/api/v1/agent/turns/turn-1/events?after_seq=0",
+        ))
+        .await
+        .unwrap();
+    assert_eq!(events_response.status(), StatusCode::OK);
+    let events_body = axum::body::to_bytes(events_response.into_body(), usize::MAX)
+        .await
+        .unwrap();
+    let events_body = String::from_utf8(events_body.to_vec()).unwrap();
+    assert!(events_body.contains("action_proposed"));
+    assert!(events_body.contains("turn_completed"));
+
+    let actions_response = app
+        .clone()
+        .oneshot(auth_request(
+            "/api/v1/agent/actions?conversation_id=conversation-1&status=proposed",
+        ))
+        .await
+        .unwrap();
+    assert_eq!(actions_response.status(), StatusCode::OK);
+    let actions = response_json(actions_response).await;
+    assert_eq!(actions.as_array().unwrap().len(), 1);
+    assert_eq!(actions[0]["kind"], "create_sql_audit");
+    assert_eq!(actions[0]["payload"]["managed_database_id"], "db-1");
+}
+
+#[tokio::test]
+async fn applying_agent_sql_audit_action_uses_existing_audit_flow() {
+    let app = test_app();
+    create_test_database(&app).await;
+
+    let _conversation = app
+        .clone()
+        .oneshot(auth_json_request(
+            "POST",
+            "/api/v1/agent/conversations",
+            json!({ "title": "SQL review" }),
+        ))
+        .await
+        .unwrap();
+    let turn_response = app
+        .clone()
+        .oneshot(auth_json_request(
+            "POST",
+            "/api/v1/agent/conversations/conversation-1/turns",
+            json!({
+                "message": "select * from users",
+                "managed_database_id": "db-1"
+            }),
+        ))
+        .await
+        .unwrap();
+    assert_eq!(turn_response.status(), StatusCode::OK);
+    tokio::time::sleep(std::time::Duration::from_millis(50)).await;
+
+    let apply_response = app
+        .clone()
+        .oneshot(auth_json_request(
+            "POST",
+            "/api/v1/agent/actions/action-1/apply",
+            json!({}),
+        ))
+        .await
+        .unwrap();
+    assert_eq!(apply_response.status(), StatusCode::OK);
+    let action = response_json(apply_response).await;
+    assert_eq!(action["status"], "applied");
+    assert_eq!(action["resource_kind"], "sql_audit");
+    assert_eq!(action["resource_id"], "audit-1");
+
+    let audit_response = app
+        .oneshot(auth_request("/api/v1/sql-audits/audit-1"))
+        .await
+        .unwrap();
+    assert_eq!(audit_response.status(), StatusCode::OK);
+    let audit = response_json(audit_response).await;
+    assert_eq!(audit["sql"], "select * from users");
+    assert_eq!(audit["status"], "audited");
 }
 
 #[tokio::test]

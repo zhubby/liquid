@@ -9,12 +9,18 @@ async-stream.workspace = true
 async-trait.workspace = true
 futures-core.workspace = true
 futures-util.workspace = true
+hex.workspace = true
 liquid-core.workspace = true
 liquid-llm.workspace = true
 liquid-sql.workspace = true
+reqwest.workspace = true
+ring.workspace = true
 serde.workspace = true
 serde_json.workspace = true
+sha2.workspace = true
 sqlx.workspace = true
+time.workspace = true
+tokio.workspace = true
 tracing.workspace = true
 
 [dev-dependencies]

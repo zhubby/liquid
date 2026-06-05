@@ -1,7 +1,9 @@
+mod database_operations;
 pub(crate) mod postgres;
 mod registry;
 mod sql_risk;
 
+pub use database_operations::DatabaseOperationToolContext;
 pub use postgres::{
     ApprovedWriteExecutionResult, PostgresToolConfig, PostgresToolExecutionMode,
     execute_approved_write_sql_with_config,

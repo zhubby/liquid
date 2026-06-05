@@ -100,6 +100,13 @@ Environment variables override config file values.
 | `LIQUID_SQL_MANAGED_POOL_IDLE_TTL_SECONDS` | `600` | Close an unused managed database pool after this many seconds. |
 | `LIQUID_SQL_MANAGED_POOL_REAP_INTERVAL_SECONDS` | `60` | Background interval for managed database pool cleanup. |
 | `LIQUID_SQL_MANAGED_POOL_ACQUIRE_TIMEOUT_SECONDS` | `10` | SQLx acquire timeout for managed database pools. |
+| `LIQUID_BACKUP_S3_BUCKET` | unset | S3 bucket for managed database backup files; backup worker is disabled when unset. |
+| `LIQUID_BACKUP_S3_PREFIX` | `liquid/database-backups` | S3 key prefix for backup objects. |
+| `LIQUID_BACKUP_S3_REGION` | `us-east-1` | S3 signing region. |
+| `LIQUID_BACKUP_S3_ENDPOINT` | unset | Optional S3-compatible endpoint. |
+| `LIQUID_BACKUP_S3_PATH_STYLE` | `false` | Use path-style S3 URLs, useful for S3-compatible services. |
+| `LIQUID_BACKUP_WORK_DIR` | `/tmp/liquid-backups` | Local temporary directory for `pg_dump` and `pg_restore` files. |
+| `LIQUID_BACKUP_WORKER_CONCURRENCY` | `1` | Number of database backup/restore worker tasks. |
 
 The managed database SQL audit endpoint is capped at read-only execution in v1:
 `LIQUID_SQL_EXECUTION=off` disables execution tools, and `write_gated` is
@@ -107,6 +114,10 @@ downgraded to read-only.
 
 Set a real `LIQUID_ENCRYPTION_KEY` before storing managed database passwords
 outside local development.
+
+Database backup storage uses S3-compatible object storage. When
+`LIQUID_BACKUP_S3_BUCKET` is set, the API starts a background worker that uses
+`pg_dump`, `pg_restore`, and AWS credentials from the process environment.
 
 ## Docker
 

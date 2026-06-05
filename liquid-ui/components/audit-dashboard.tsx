@@ -57,11 +57,18 @@ import {
   CardTitle,
 } from "@/components/ui/card";
 import {
+  type AgentAction,
+  type AgentCapabilitiesResponse,
+  type AgentConversation,
+  type AgentEvent,
+  type AgentMessage,
+  type AgentTurn,
   type ManagedDatabase,
   type CreateManagedDatabaseRequest,
   type PublicUser,
   type UpdateManagedDatabaseRequest,
   apiRequest,
+  apiStream,
 } from "@/lib/api";
 import { cn } from "@/lib/utils";
 
@@ -71,11 +78,12 @@ type DatasetStatus = "正常" | "观察" | "需处理";
 type MetricTone = "primary" | "success" | "warning" | "danger";
 
 type ChatMessage = {
-  id: number;
+  id: string;
   role: MessageRole;
   content: string;
   time: string;
   metric?: string;
+  pending?: boolean;
 };
 
 type WorkspaceMetric = {
@@ -137,45 +145,6 @@ const emptyManagedDatabaseForm: ManagedDatabaseForm = {
   password: "",
   ssl_mode: "prefer",
 };
-
-const chatMessages: ChatMessage[] = [
-  {
-    id: 1,
-    role: "assistant",
-    content:
-      "早上好。我已经汇总最近 7 天的数据访问情况，整体通过率 96.8%，但客户明细表的敏感字段访问明显升高。",
-    time: "09:18",
-    metric: "96.8% 通过率",
-  },
-  {
-    id: 2,
-    role: "user",
-    content: "帮我看一下高风险查询主要集中在哪些数据集？",
-    time: "09:20",
-  },
-  {
-    id: 3,
-    role: "assistant",
-    content:
-      "高风险主要来自客户画像、订单流水和权限审计三个数据集。建议优先检查无筛选条件的导出查询，以及跨库关联场景。",
-    time: "09:21",
-    metric: "37 条高风险",
-  },
-  {
-    id: 4,
-    role: "user",
-    content: "生成一个今天的数据巡检摘要。",
-    time: "09:24",
-  },
-  {
-    id: 5,
-    role: "assistant",
-    content:
-      "今日查询量保持稳定，营销分析看板调用增长 12.4%。目前只有 3 个任务需要人工复核，我已在右侧表格按风险优先级排序。",
-    time: "09:25",
-    metric: "3 项待复核",
-  },
-];
 
 const quickPrompts = [
   "解释风险上升原因",
@@ -377,7 +346,7 @@ export function AuditDashboard({ token, user, onLogout }: AuditDashboardProps) {
           onPointerUp={handleWorkspacePointerUp}
           onPointerLeave={handleWorkspacePointerUp}
         >
-          <AiPanel />
+          <AiPanel token={token} />
           <SplitHandle
             isDragging={isDragging}
             onPointerDown={handleDividerPointerDown}
@@ -478,7 +447,236 @@ function SidebarIcon({
   );
 }
 
-function AiPanel() {
+function AiPanel({ token }: { token: string }) {
+  const [conversation, setConversation] =
+    useState<AgentConversation | null>(null);
+  const [messages, setMessages] = useState<ChatMessage[]>([]);
+  const [actions, setActions] = useState<AgentAction[]>([]);
+  const [databases, setDatabases] = useState<ManagedDatabase[]>([]);
+  const [selectedDatabaseId, setSelectedDatabaseId] = useState("");
+  const [agentMode, setAgentMode] = useState("agent");
+  const [input, setInput] = useState("");
+  const [isLoading, setIsLoading] = useState(true);
+  const [isSending, setIsSending] = useState(false);
+  const [error, setError] = useState<string | null>(null);
+  const initializedRef = useRef(false);
+  const activeStreamRef = useRef<AbortController | null>(null);
+
+  const loadMessagesAndActions = useCallback(
+    async (conversationId: string) => {
+      const [nextMessages, nextActions] = await Promise.all([
+        apiRequest<AgentMessage[]>(
+          `/api/v1/agent/conversations/${conversationId}/messages`,
+          { token },
+        ),
+        apiRequest<AgentAction[]>(
+          `/api/v1/agent/actions?conversation_id=${conversationId}`,
+          { token },
+        ),
+      ]);
+
+      setMessages(nextMessages.map(chatMessageFromAgentMessage));
+      setActions(nextActions);
+    },
+    [token],
+  );
+
+  const initializeWorkbench = useCallback(async () => {
+    setIsLoading(true);
+    setError(null);
+
+    try {
+      const [conversations, managedDatabases, capabilities] =
+        await Promise.all([
+          apiRequest<AgentConversation[]>("/api/v1/agent/conversations", {
+            token,
+          }),
+          apiRequest<ManagedDatabase[]>("/api/v1/managed-databases", {
+            token,
+          }),
+          apiRequest<AgentCapabilitiesResponse>("/api/v1/agent/capabilities", {
+            token,
+          }),
+        ]);
+      const activeConversation =
+        conversations[0] ??
+        (await apiRequest<AgentConversation>("/api/v1/agent/conversations", {
+          method: "POST",
+          token,
+          body: { title: "Agent workbench" },
+        }));
+
+      setConversation(activeConversation);
+      setDatabases(managedDatabases);
+      setSelectedDatabaseId((current) => current || managedDatabases[0]?.id || "");
+      setAgentMode(capabilities.mode);
+      await loadMessagesAndActions(activeConversation.id);
+    } catch (error) {
+      setError(error instanceof Error ? error.message : "加载 agent 工作台失败");
+    } finally {
+      setIsLoading(false);
+    }
+  }, [loadMessagesAndActions, token]);
+
+  useEffect(() => {
+    if (initializedRef.current) {
+      return;
+    }
+
+    initializedRef.current = true;
+    void initializeWorkbench();
+
+    return () => {
+      activeStreamRef.current?.abort();
+    };
+  }, [initializeWorkbench]);
+
+  const mergeAction = useCallback((action: AgentAction) => {
+    setActions((current) => {
+      if (current.some((item) => item.id === action.id)) {
+        return current.map((item) => (item.id === action.id ? action : item));
+      }
+
+      return [action, ...current];
+    });
+  }, []);
+
+  const submitPrompt = useCallback(
+    async (prompt?: string) => {
+      const content = (prompt ?? input).trim();
+
+      if (!content || !conversation || isSending) {
+        return;
+      }
+
+      setInput("");
+      setError(null);
+      setIsSending(true);
+      activeStreamRef.current?.abort();
+
+      const localUserMessage: ChatMessage = {
+        id: `local-user-${Date.now()}`,
+        role: "user",
+        content,
+        time: nowTimeLabel(),
+        pending: true,
+      };
+      setMessages((current) => [...current, localUserMessage]);
+
+      try {
+        const turn = await apiRequest<AgentTurn>(
+          `/api/v1/agent/conversations/${conversation.id}/turns`,
+          {
+            method: "POST",
+            token,
+            body: {
+              message: content,
+              managed_database_id: selectedDatabaseId || undefined,
+              dashboard_context: {
+                active_view: "ai",
+                date_range: "last_7_days",
+              },
+              client_request_id: localUserMessage.id,
+            },
+          },
+        );
+        const controller = new AbortController();
+        activeStreamRef.current = controller;
+
+        await apiStream<AgentEvent>(
+          `/api/v1/agent/turns/${turn.id}/events?after_seq=0`,
+          {
+            token,
+            signal: controller.signal,
+            onEvent: (event) => {
+              if (event.type === "assistant_delta") {
+                const assistantContent = eventPayloadString(
+                  event.payload,
+                  "content",
+                );
+
+                if (assistantContent) {
+                  setMessages((current) =>
+                    upsertStreamingAssistantMessage(
+                      current,
+                      turn.id,
+                      assistantContent,
+                    ),
+                  );
+                }
+              }
+
+              if (event.type === "action_proposed") {
+                const action = eventPayloadAction(event.payload);
+
+                if (action) {
+                  mergeAction(action);
+                }
+              }
+            },
+          },
+        );
+
+        await loadMessagesAndActions(conversation.id);
+      } catch (error) {
+        if (!(error instanceof DOMException && error.name === "AbortError")) {
+          setError(error instanceof Error ? error.message : "发送失败");
+        }
+      } finally {
+        setIsSending(false);
+      }
+    },
+    [
+      conversation,
+      input,
+      isSending,
+      loadMessagesAndActions,
+      mergeAction,
+      selectedDatabaseId,
+      token,
+    ],
+  );
+
+  const handleSubmit = (event: FormEvent<HTMLFormElement>) => {
+    event.preventDefault();
+    void submitPrompt();
+  };
+
+  const handleActionDecision = async (
+    action: AgentAction,
+    decision: "apply" | "reject",
+  ) => {
+    setError(null);
+
+    try {
+      const updated = await apiRequest<AgentAction>(
+        `/api/v1/agent/actions/${action.id}/${decision}`,
+        {
+          method: "POST",
+          token,
+          body: {},
+        },
+      );
+      mergeAction(updated);
+    } catch (error) {
+      setError(error instanceof Error ? error.message : "动作处理失败");
+    }
+  };
+
+  const visibleMessages =
+    messages.length > 0
+      ? messages
+      : [
+          {
+            id: "intro",
+            role: "assistant" as const,
+            content:
+              "选择一个托管数据库后，可以直接发送 SQL 或治理问题。我会把敏感操作先变成待确认动作。",
+            time: nowTimeLabel(),
+          },
+        ];
+  const proposedActions = actions.filter((action) => action.status === "proposed");
+
   return (
     <section className="flex min-h-[calc(100vh-1.5rem)] min-w-0 flex-col rounded-lg border bg-card text-card-foreground shadow-sm lg:h-[calc(100vh-1.5rem)]">
       <header className="flex shrink-0 items-center justify-between gap-3 border-b px-4 py-3">
@@ -486,11 +684,11 @@ function AiPanel() {
           <div className="flex items-center gap-2">
             <h1 className="truncate text-base font-semibold">AI 数据助手</h1>
             <Badge variant="secondary" className="h-6 rounded-md">
-              假数据
+              {agentMode === "write_gated" ? "Write gated" : "Live Agent"}
             </Badge>
           </div>
           <p className="mt-1 truncate text-xs text-muted-foreground">
-            使用模拟审计数据回答 BI 与风险治理问题
+            持久化会话、流式事件与确认式动作
           </p>
         </div>
         <Button
@@ -506,12 +704,57 @@ function AiPanel() {
 
       <div className="flex min-h-0 flex-1 flex-col">
         <div className="flex-1 space-y-4 overflow-y-auto px-4 py-4">
-          {chatMessages.map((message) => (
+          {isLoading ? (
+            <div className="flex items-center gap-2 text-sm text-muted-foreground">
+              <Loader2 className="size-4 animate-spin" aria-hidden />
+              正在加载会话
+            </div>
+          ) : null}
+          {visibleMessages.map((message) => (
             <ChatBubble key={message.id} message={message} />
           ))}
+          {proposedActions.length > 0 ? (
+            <div className="space-y-2">
+              {proposedActions.map((action) => (
+                <AgentActionCard
+                  key={action.id}
+                  action={action}
+                  onApply={() => void handleActionDecision(action, "apply")}
+                  onReject={() => void handleActionDecision(action, "reject")}
+                />
+              ))}
+            </div>
+          ) : null}
         </div>
 
         <div className="border-t bg-card px-4 py-3">
+          {error ? (
+            <div className="mb-3 rounded-md border border-destructive/30 bg-destructive/10 px-3 py-2 text-sm text-destructive">
+              {error}
+            </div>
+          ) : null}
+          <div className="mb-3 flex items-center gap-2">
+            <label
+              className="shrink-0 text-xs font-medium text-muted-foreground"
+              htmlFor="agent-database"
+            >
+              上下文数据库
+            </label>
+            <select
+              id="agent-database"
+              value={selectedDatabaseId}
+              onChange={(event) => setSelectedDatabaseId(event.target.value)}
+              className="h-8 min-w-0 flex-1 rounded-md border bg-background px-2 text-xs outline-none transition-shadow focus-visible:ring-[3px] focus-visible:ring-ring/50"
+              disabled={isLoading || isSending}
+            >
+              <option value="">不绑定数据库</option>
+              {databases.map((database) => (
+                <option key={database.id} value={database.id}>
+                  {database.name} / {database.database}
+                </option>
+              ))}
+            </select>
+          </div>
           <div className="mb-3 flex flex-wrap gap-2">
             {quickPrompts.map((prompt) => (
               <Button
@@ -520,12 +763,17 @@ function AiPanel() {
                 variant="outline"
                 size="sm"
                 className="h-8 rounded-md px-2.5 text-xs"
+                disabled={isSending || isLoading}
+                onClick={() => void submitPrompt(prompt)}
               >
                 {prompt}
               </Button>
             ))}
           </div>
-          <div className="flex items-end gap-2 rounded-lg border bg-background p-2 shadow-xs">
+          <form
+            className="flex items-end gap-2 rounded-lg border bg-background p-2 shadow-xs"
+            onSubmit={handleSubmit}
+          >
             <label className="sr-only" htmlFor="ai-message">
               输入问题
             </label>
@@ -533,17 +781,24 @@ function AiPanel() {
               id="ai-message"
               className="max-h-32 min-h-16 flex-1 resize-none bg-transparent px-2 py-1.5 text-sm outline-none placeholder:text-muted-foreground"
               placeholder="输入问题，例如：列出本周风险最高的数据集"
-              defaultValue=""
+              value={input}
+              onChange={(event) => setInput(event.target.value)}
+              disabled={isSending || isLoading}
             />
             <Button
-              type="button"
+              type="submit"
               size="icon"
               aria-label="发送问题"
               title="发送"
+              disabled={isSending || isLoading || !input.trim()}
             >
-              <Send className="size-4" aria-hidden />
+              {isSending ? (
+                <Loader2 className="size-4 animate-spin" aria-hidden />
+              ) : (
+                <Send className="size-4" aria-hidden />
+              )}
             </Button>
-          </div>
+          </form>
         </div>
       </div>
     </section>
@@ -594,10 +849,135 @@ function ChatBubble({ message }: { message: ChatMessage }) {
               {message.metric}
             </span>
           ) : null}
+          {message.pending ? <span>发送中</span> : null}
         </div>
       </div>
     </article>
   );
+}
+
+function AgentActionCard({
+  action,
+  onApply,
+  onReject,
+}: {
+  action: AgentAction;
+  onApply: () => void;
+  onReject: () => void;
+}) {
+  return (
+    <article className="rounded-lg border bg-background p-3 shadow-xs">
+      <div className="flex items-start justify-between gap-3">
+        <div className="min-w-0">
+          <div className="flex flex-wrap items-center gap-2">
+            <h3 className="text-sm font-medium">{action.title}</h3>
+            <Badge variant="outline" className="h-6 rounded-md">
+              {actionLabel(action.kind)}
+            </Badge>
+          </div>
+          <p className="mt-1 text-xs leading-5 text-muted-foreground">
+            {action.description}
+          </p>
+        </div>
+        <Badge variant="secondary" className="rounded-md">
+          {action.status}
+        </Badge>
+      </div>
+      <div className="mt-3 flex flex-wrap gap-2">
+        <Button type="button" size="sm" onClick={onApply}>
+          <CheckCircle2 className="size-4" aria-hidden />
+          确认
+        </Button>
+        <Button type="button" variant="outline" size="sm" onClick={onReject}>
+          <X className="size-4" aria-hidden />
+          拒绝
+        </Button>
+      </div>
+    </article>
+  );
+}
+
+function chatMessageFromAgentMessage(message: AgentMessage): ChatMessage {
+  return {
+    id: message.id,
+    role: message.role === "user" ? "user" : "assistant",
+    content: message.content,
+    time: timeLabel(message.created_at),
+  };
+}
+
+function upsertStreamingAssistantMessage(
+  messages: ChatMessage[],
+  turnId: string,
+  content: string,
+): ChatMessage[] {
+  const id = `stream-${turnId}`;
+
+  if (messages.some((message) => message.id === id)) {
+    return messages.map((message) =>
+      message.id === id
+        ? {
+            ...message,
+            content,
+          }
+        : message,
+    );
+  }
+
+  return [
+    ...messages,
+    {
+      id,
+      role: "assistant",
+      content,
+      time: nowTimeLabel(),
+      pending: true,
+    },
+  ];
+}
+
+function eventPayloadString(
+  payload: Record<string, unknown>,
+  key: string,
+): string | null {
+  const value = payload[key];
+
+  return typeof value === "string" ? value : null;
+}
+
+function eventPayloadAction(payload: Record<string, unknown>): AgentAction | null {
+  const value = payload.action;
+
+  if (!value || typeof value !== "object") {
+    return null;
+  }
+
+  return value as AgentAction;
+}
+
+function timeLabel(value: string): string {
+  return new Date(value).toLocaleTimeString("zh-CN", {
+    hour: "2-digit",
+    minute: "2-digit",
+  });
+}
+
+function nowTimeLabel(): string {
+  return timeLabel(new Date().toISOString());
+}
+
+function actionLabel(kind: AgentAction["kind"]): string {
+  return {
+    create_sql_audit: "创建审计",
+    approve_sql_audit: "批准审计",
+    reject_sql_audit: "拒绝审计",
+    execute_sql_audit: "执行审计",
+    create_managed_database: "新增数据库",
+    update_managed_database: "更新数据库",
+    delete_managed_database: "删除数据库",
+    start_database_backup: "备份",
+    start_database_restore: "恢复",
+  }[kind];
 }
 
 function SplitHandle({

@@ -9,6 +9,11 @@ use sqlx::PgPool;
 use crate::types::ToolOutput;
 
 use super::{
+    database_operations::{
+        DatabaseOperationToolContext, PgDeleteDatabaseBackupTool, PgGetDatabaseBackupTool,
+        PgGetDatabaseRestoreTool, PgListDatabaseBackupsTool, PgListDatabaseRestoresTool,
+        PgStartDatabaseBackupTool, PgStartDatabaseRestoreTool,
+    },
     postgres::{
         PgDescribeRelationTool, PgExecuteReadonlySqlTool, PgExecuteWriteSqlTool, PgExplainSqlTool,
         PgListRelationsTool, PgListSchemasTool, PostgresToolConfig, PostgresToolContext,
@@ -79,6 +84,18 @@ impl ToolRegistry {
         registry
     }
 
+    pub fn with_database_operation_tools(context: DatabaseOperationToolContext) -> Self {
+        let mut registry = Self::new();
+        registry.register(PgStartDatabaseBackupTool::new(context.clone()));
+        registry.register(PgGetDatabaseBackupTool::new(context.clone()));
+        registry.register(PgListDatabaseBackupsTool::new(context.clone()));
+        registry.register(PgDeleteDatabaseBackupTool::new(context.clone()));
+        registry.register(PgStartDatabaseRestoreTool::new(context.clone()));
+        registry.register(PgGetDatabaseRestoreTool::new(context.clone()));
+        registry.register(PgListDatabaseRestoresTool::new(context));
+        registry
+    }
+
     pub fn register<T>(&mut self, tool: T)
     where
         T: AgentTool + 'static,
@@ -106,6 +123,13 @@ impl ToolRegistry {
 
 #[cfg(test)]
 mod tests {
+    use std::sync::Arc;
+
+    use async_trait::async_trait;
+    use liquid_core::{
+        CompleteDatabaseBackup, DatabaseBackupMetadataStore, DatabaseBackupMetadataStoreError,
+        DatabaseBackupRecord, DatabaseBackupStatus, DatabaseRestoreRecord,
+    };
     use liquid_llm::ToolCall;
     use serde_json::{Value, json};
 
@@ -160,5 +184,179 @@ mod tests {
             .unwrap_err();
 
         assert!(error.to_string().contains("unknown agent tool"));
+    }
+
+    #[tokio::test]
+    async fn database_operation_tool_registry_registers_backup_and_restore_tools() {
+        let registry = ToolRegistry::with_database_operation_tools(
+            DatabaseOperationToolContext::new("user-1", Arc::new(NoopBackupMetadataStore)),
+        );
+
+        for name in [
+            "pg_start_database_backup",
+            "pg_get_database_backup",
+            "pg_list_database_backups",
+            "pg_delete_database_backup",
+            "pg_start_database_restore",
+            "pg_get_database_restore",
+            "pg_list_database_restores",
+        ] {
+            assert!(has_tool(&registry, name), "missing tool {name}");
+        }
+    }
+
+    #[tokio::test]
+    async fn postgres_tool_registry_does_not_register_database_operation_tools() {
+        let registry = ToolRegistry::with_default_sql_tools();
+
+        assert!(has_tool(&registry, "inspect_sql_risk"));
+        assert!(!has_tool(&registry, "pg_start_database_backup"));
+        assert!(!has_tool(&registry, "pg_start_database_restore"));
+    }
+
+    fn has_tool(registry: &ToolRegistry, name: &str) -> bool {
+        registry
+            .definitions()
+            .into_iter()
+            .any(|definition| definition.name == name)
+    }
+
+    struct NoopBackupMetadataStore;
+
+    #[async_trait]
+    impl DatabaseBackupMetadataStore for NoopBackupMetadataStore {
+        async fn create_database_backup(
+            &self,
+            _owner_user_id: &str,
+            _source_managed_database_id: &str,
+            _purpose: Option<String>,
+        ) -> Result<DatabaseBackupRecord, DatabaseBackupMetadataStoreError> {
+            unreachable!()
+        }
+
+        async fn get_database_backup(
+            &self,
+            _owner_user_id: &str,
+            _id: &str,
+        ) -> Result<DatabaseBackupRecord, DatabaseBackupMetadataStoreError> {
+            unreachable!()
+        }
+
+        async fn list_database_backups(
+            &self,
+            _owner_user_id: &str,
+            _source_managed_database_id: Option<&str>,
+            _status: Option<DatabaseBackupStatus>,
+            _limit: i64,
+        ) -> Result<Vec<DatabaseBackupRecord>, DatabaseBackupMetadataStoreError> {
+            unreachable!()
+        }
+
+        async fn delete_database_backup(
+            &self,
+            _owner_user_id: &str,
+            _id: &str,
+        ) -> Result<DatabaseBackupRecord, DatabaseBackupMetadataStoreError> {
+            unreachable!()
+        }
+
+        async fn create_database_restore(
+            &self,
+            _owner_user_id: &str,
+            _backup_id: &str,
+            _target_managed_database_id: &str,
+            _purpose: String,
+        ) -> Result<DatabaseRestoreRecord, DatabaseBackupMetadataStoreError> {
+            unreachable!()
+        }
+
+        async fn get_database_restore(
+            &self,
+            _owner_user_id: &str,
+            _id: &str,
+        ) -> Result<DatabaseRestoreRecord, DatabaseBackupMetadataStoreError> {
+            unreachable!()
+        }
+
+        async fn list_database_restores(
+            &self,
+            _owner_user_id: &str,
+            _backup_id: Option<&str>,
+            _target_managed_database_id: Option<&str>,
+            _status: Option<DatabaseBackupStatus>,
+            _limit: i64,
+        ) -> Result<Vec<DatabaseRestoreRecord>, DatabaseBackupMetadataStoreError> {
+            unreachable!()
+        }
+
+        async fn claim_next_database_backup(
+            &self,
+            _worker_id: &str,
+        ) -> Result<Option<DatabaseBackupRecord>, DatabaseBackupMetadataStoreError> {
+            unreachable!()
+        }
+
+        async fn update_database_backup_progress(
+            &self,
+            _id: &str,
+            _phase: &str,
+            _progress_percent: i32,
+        ) -> Result<DatabaseBackupRecord, DatabaseBackupMetadataStoreError> {
+            unreachable!()
+        }
+
+        async fn complete_database_backup(
+            &self,
+            _id: &str,
+            _result: CompleteDatabaseBackup,
+        ) -> Result<DatabaseBackupRecord, DatabaseBackupMetadataStoreError> {
+            unreachable!()
+        }
+
+        async fn fail_database_backup(
+            &self,
+            _id: &str,
+            _error: String,
+        ) -> Result<DatabaseBackupRecord, DatabaseBackupMetadataStoreError> {
+            unreachable!()
+        }
+
+        async fn claim_next_database_restore(
+            &self,
+            _worker_id: &str,
+        ) -> Result<Option<DatabaseRestoreRecord>, DatabaseBackupMetadataStoreError> {
+            unreachable!()
+        }
+
+        async fn update_database_restore_progress(
+            &self,
+            _id: &str,
+            _phase: &str,
+            _progress_percent: i32,
+        ) -> Result<DatabaseRestoreRecord, DatabaseBackupMetadataStoreError> {
+            unreachable!()
+        }
+
+        async fn complete_database_restore(
+            &self,
+            _id: &str,
+        ) -> Result<DatabaseRestoreRecord, DatabaseBackupMetadataStoreError> {
+            unreachable!()
+        }
+
+        async fn fail_database_restore(
+            &self,
+            _id: &str,
+            _error: String,
+        ) -> Result<DatabaseRestoreRecord, DatabaseBackupMetadataStoreError> {
+            unreachable!()
+        }
+
+        async fn fail_stale_database_jobs(
+            &self,
+            _stale_after_seconds: i64,
+        ) -> Result<u64, DatabaseBackupMetadataStoreError> {
+            unreachable!()
+        }
     }
 }

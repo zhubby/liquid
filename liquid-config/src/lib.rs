@@ -15,6 +15,11 @@ const DEFAULT_SQL_MANAGED_POOL_MAX_CONNECTIONS: u32 = 2;
 const DEFAULT_SQL_MANAGED_POOL_IDLE_TTL_SECONDS: u64 = 10 * 60;
 const DEFAULT_SQL_MANAGED_POOL_REAP_INTERVAL_SECONDS: u64 = 60;
 const DEFAULT_SQL_MANAGED_POOL_ACQUIRE_TIMEOUT_SECONDS: u64 = 10;
+const DEFAULT_BACKUP_S3_PREFIX: &str = "liquid/database-backups";
+const DEFAULT_BACKUP_S3_REGION: &str = "us-east-1";
+const DEFAULT_BACKUP_S3_PATH_STYLE: bool = false;
+const DEFAULT_BACKUP_WORK_DIR: &str = "/tmp/liquid-backups";
+const DEFAULT_BACKUP_WORKER_CONCURRENCY: usize = 1;
 
 pub fn default_config_toml() -> String {
     format!(
@@ -44,6 +49,13 @@ managed_pool_max_connections = {DEFAULT_SQL_MANAGED_POOL_MAX_CONNECTIONS}
 managed_pool_idle_ttl_seconds = {DEFAULT_SQL_MANAGED_POOL_IDLE_TTL_SECONDS}
 managed_pool_reap_interval_seconds = {DEFAULT_SQL_MANAGED_POOL_REAP_INTERVAL_SECONDS}
 managed_pool_acquire_timeout_seconds = {DEFAULT_SQL_MANAGED_POOL_ACQUIRE_TIMEOUT_SECONDS}
+
+[backup]
+s3_prefix = "{DEFAULT_BACKUP_S3_PREFIX}"
+s3_region = "{DEFAULT_BACKUP_S3_REGION}"
+s3_path_style = {DEFAULT_BACKUP_S3_PATH_STYLE}
+work_dir = "{DEFAULT_BACKUP_WORK_DIR}"
+worker_concurrency = {DEFAULT_BACKUP_WORKER_CONCURRENCY}
 "#
     )
 }
@@ -58,6 +70,7 @@ pub struct LiquidConfig {
     pub sql_metadata: SqlMetadataMode,
     pub sql_execution: SqlExecutionMode,
     pub managed_database_pool: ManagedDatabasePoolConfig,
+    pub database_backup: DatabaseBackupConfig,
     pub llm: LlmConfig,
 }
 
@@ -94,6 +107,17 @@ pub struct ManagedDatabasePoolConfig {
     pub acquire_timeout_seconds: u64,
 }
 
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct DatabaseBackupConfig {
+    pub s3_bucket: Option<String>,
+    pub s3_prefix: String,
+    pub s3_region: String,
+    pub s3_endpoint: Option<String>,
+    pub s3_path_style: bool,
+    pub work_dir: String,
+    pub worker_concurrency: usize,
+}
+
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
 pub enum LlmApiMode {
     #[default]
@@ -125,6 +149,7 @@ struct FileConfig {
     security: Option<FileSecurityConfig>,
     llm: Option<FileLlmConfig>,
     sql: Option<FileSqlConfig>,
+    backup: Option<FileBackupConfig>,
 }
 
 #[derive(Debug, Default, Deserialize)]
@@ -166,6 +191,17 @@ struct FileSqlConfig {
     managed_pool_idle_ttl_seconds: Option<u64>,
     managed_pool_reap_interval_seconds: Option<u64>,
     managed_pool_acquire_timeout_seconds: Option<u64>,
+}
+
+#[derive(Debug, Default, Deserialize)]
+struct FileBackupConfig {
+    s3_bucket: Option<String>,
+    s3_prefix: Option<String>,
+    s3_region: Option<String>,
+    s3_endpoint: Option<String>,
+    s3_path_style: Option<bool>,
+    work_dir: Option<String>,
+    worker_concurrency: Option<usize>,
 }
 
 impl FromStr for SqlMetadataMode {
@@ -237,6 +273,7 @@ impl LiquidConfig {
         let file_security = file_config.security.unwrap_or_default();
         let file_llm = file_config.llm.unwrap_or_default();
         let file_sql = file_config.sql.unwrap_or_default();
+        let file_backup = file_config.backup.unwrap_or_default();
 
         let api_addr = env_or_file(
             get("LIQUID_API_ADDR"),
@@ -323,6 +360,39 @@ impl LiquidConfig {
             file_sql.managed_pool_acquire_timeout_seconds,
             DEFAULT_SQL_MANAGED_POOL_ACQUIRE_TIMEOUT_SECONDS,
         )?;
+        let backup_s3_bucket = get("LIQUID_BACKUP_S3_BUCKET")
+            .or(file_backup.s3_bucket)
+            .and_then(non_empty);
+        let backup_s3_prefix = env_or_file(
+            get("LIQUID_BACKUP_S3_PREFIX"),
+            file_backup.s3_prefix,
+            DEFAULT_BACKUP_S3_PREFIX.to_owned(),
+        );
+        let backup_s3_region = env_or_file(
+            get("LIQUID_BACKUP_S3_REGION"),
+            file_backup.s3_region,
+            DEFAULT_BACKUP_S3_REGION.to_owned(),
+        );
+        let backup_s3_endpoint = get("LIQUID_BACKUP_S3_ENDPOINT")
+            .or(file_backup.s3_endpoint)
+            .and_then(non_empty);
+        let backup_s3_path_style = parse_bool(
+            "LIQUID_BACKUP_S3_PATH_STYLE",
+            get("LIQUID_BACKUP_S3_PATH_STYLE"),
+            file_backup.s3_path_style,
+            DEFAULT_BACKUP_S3_PATH_STYLE,
+        )?;
+        let backup_work_dir = env_or_file(
+            get("LIQUID_BACKUP_WORK_DIR"),
+            file_backup.work_dir,
+            DEFAULT_BACKUP_WORK_DIR.to_owned(),
+        );
+        let backup_worker_concurrency = parse_usize(
+            "LIQUID_BACKUP_WORKER_CONCURRENCY",
+            get("LIQUID_BACKUP_WORKER_CONCURRENCY"),
+            file_backup.worker_concurrency,
+            DEFAULT_BACKUP_WORKER_CONCURRENCY,
+        )?;
 
         if token_ttl_seconds <= 0 {
             anyhow::bail!("LIQUID_AUTH_TOKEN_TTL_SECONDS must be positive");
@@ -338,6 +408,9 @@ impl LiquidConfig {
         }
         if managed_pool_acquire_timeout_seconds == 0 {
             anyhow::bail!("LIQUID_SQL_MANAGED_POOL_ACQUIRE_TIMEOUT_SECONDS must be positive");
+        }
+        if backup_worker_concurrency == 0 {
+            anyhow::bail!("LIQUID_BACKUP_WORKER_CONCURRENCY must be positive");
         }
 
         Ok(Self {
@@ -359,6 +432,15 @@ impl LiquidConfig {
                 idle_ttl_seconds: managed_pool_idle_ttl_seconds,
                 reap_interval_seconds: managed_pool_reap_interval_seconds,
                 acquire_timeout_seconds: managed_pool_acquire_timeout_seconds,
+            },
+            database_backup: DatabaseBackupConfig {
+                s3_bucket: backup_s3_bucket,
+                s3_prefix: backup_s3_prefix,
+                s3_region: backup_s3_region,
+                s3_endpoint: backup_s3_endpoint,
+                s3_path_style: backup_s3_path_style,
+                work_dir: backup_work_dir,
+                worker_concurrency: backup_worker_concurrency,
             },
             llm: LlmConfig {
                 api_key,
@@ -431,6 +513,20 @@ fn parse_u64(
     }
 }
 
+fn parse_usize(
+    env_name: &str,
+    env_value: Option<String>,
+    file_value: Option<usize>,
+    default_value: usize,
+) -> Result<usize> {
+    match env_value.and_then(non_empty) {
+        Some(value) => value
+            .parse()
+            .with_context(|| format!("invalid {env_name}: {value}")),
+        None => Ok(file_value.unwrap_or(default_value)),
+    }
+}
+
 fn parse_bool(
     env_name: &str,
     env_value: Option<String>,
@@ -483,6 +579,12 @@ mod tests {
         assert_eq!(config.llm.api_mode, LlmApiMode::ChatCompletions);
         assert_eq!(config.sql_metadata, SqlMetadataMode::Auto);
         assert_eq!(config.sql_execution, SqlExecutionMode::Readonly);
+        assert_eq!(config.database_backup.s3_bucket, None);
+        assert_eq!(config.database_backup.s3_prefix, DEFAULT_BACKUP_S3_PREFIX);
+        assert_eq!(
+            config.database_backup.worker_concurrency,
+            DEFAULT_BACKUP_WORKER_CONCURRENCY
+        );
     }
 
     #[test]
@@ -533,6 +635,15 @@ managed_pool_max_connections = 4
 managed_pool_idle_ttl_seconds = 120
 managed_pool_reap_interval_seconds = 15
 managed_pool_acquire_timeout_seconds = 3
+
+[backup]
+s3_bucket = "liquid-backups"
+s3_prefix = "custom/prefix"
+s3_region = "ap-east-1"
+s3_endpoint = "http://localhost:9000"
+s3_path_style = true
+work_dir = "/tmp/liquid-test-backups"
+worker_concurrency = 2
 "#,
         )
         .unwrap();
@@ -556,6 +667,19 @@ managed_pool_acquire_timeout_seconds = 3
         assert_eq!(config.managed_database_pool.idle_ttl_seconds, 120);
         assert_eq!(config.managed_database_pool.reap_interval_seconds, 15);
         assert_eq!(config.managed_database_pool.acquire_timeout_seconds, 3);
+        assert_eq!(
+            config.database_backup.s3_bucket.as_deref(),
+            Some("liquid-backups")
+        );
+        assert_eq!(config.database_backup.s3_prefix, "custom/prefix");
+        assert_eq!(config.database_backup.s3_region, "ap-east-1");
+        assert_eq!(
+            config.database_backup.s3_endpoint.as_deref(),
+            Some("http://localhost:9000")
+        );
+        assert!(config.database_backup.s3_path_style);
+        assert_eq!(config.database_backup.work_dir, "/tmp/liquid-test-backups");
+        assert_eq!(config.database_backup.worker_concurrency, 2);
 
         let _ = fs::remove_file(path);
     }
@@ -620,6 +744,35 @@ managed_pool_acquire_timeout_seconds = 3
         assert_eq!(config.managed_database_pool.idle_ttl_seconds, 90);
         assert_eq!(config.managed_database_pool.reap_interval_seconds, 9);
         assert_eq!(config.managed_database_pool.acquire_timeout_seconds, 2);
+    }
+
+    #[test]
+    fn parses_database_backup_env_values() {
+        let config = LiquidConfig::from_env_values(None, |key| match key {
+            "LIQUID_BACKUP_S3_BUCKET" => Some("env-bucket".to_owned()),
+            "LIQUID_BACKUP_S3_PREFIX" => Some("env-prefix".to_owned()),
+            "LIQUID_BACKUP_S3_REGION" => Some("eu-west-1".to_owned()),
+            "LIQUID_BACKUP_S3_ENDPOINT" => Some("http://localhost:9000".to_owned()),
+            "LIQUID_BACKUP_S3_PATH_STYLE" => Some("true".to_owned()),
+            "LIQUID_BACKUP_WORK_DIR" => Some("/tmp/liquid-env-backups".to_owned()),
+            "LIQUID_BACKUP_WORKER_CONCURRENCY" => Some("3".to_owned()),
+            _ => None,
+        })
+        .unwrap();
+
+        assert_eq!(
+            config.database_backup.s3_bucket.as_deref(),
+            Some("env-bucket")
+        );
+        assert_eq!(config.database_backup.s3_prefix, "env-prefix");
+        assert_eq!(config.database_backup.s3_region, "eu-west-1");
+        assert_eq!(
+            config.database_backup.s3_endpoint.as_deref(),
+            Some("http://localhost:9000")
+        );
+        assert!(config.database_backup.s3_path_style);
+        assert_eq!(config.database_backup.work_dir, "/tmp/liquid-env-backups");
+        assert_eq!(config.database_backup.worker_concurrency, 3);
     }
 
     #[test]

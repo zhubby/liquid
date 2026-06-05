@@ -1,9 +1,14 @@
-use std::sync::Arc;
-use std::time::Duration;
+use std::{path::PathBuf, sync::Arc, time::Duration};
 
-use liquid_agent::{PostgresToolExecutionMode, SqlAuditAgent};
+use liquid_agent::{
+    DatabaseBackupWorkerConfig, DatabaseOperationWorker, DefaultDatabaseProcessExecutor,
+    PostgresToolExecutionMode, S3BackupObjectStore, S3BackupObjectStoreConfig, SqlAuditAgent,
+};
 use liquid_config::{LiquidConfig, SqlExecutionMode, SqlMetadataMode};
-use liquid_core::{ManagedDatabaseConnectionLoader, ManagedDatabasePoolPolicy};
+use liquid_core::{
+    DatabaseBackupMetadataStore, ManagedDatabaseConnectionLoader, ManagedDatabasePoolPolicy,
+};
+use liquid_storage::LiquidStore;
 use liquid_storage::{ManagedDatabasePoolManager, Storage};
 use tokio::net::TcpListener;
 
@@ -21,6 +26,8 @@ pub async fn serve(
         managed_database_pool_policy(&config),
     ));
     managed_database_pools.spawn_reaper();
+    store.fail_stale_agent_turns(1).await?;
+    spawn_database_operation_worker(&config, store.clone())?;
     let app = router_with_cors(
         ApiState::with_pool_manager(
             agent,
@@ -33,6 +40,40 @@ pub async fn serve(
     )?;
 
     axum::serve(listener, app).await?;
+    Ok(())
+}
+
+fn spawn_database_operation_worker(
+    config: &LiquidConfig,
+    store: Arc<Storage>,
+) -> anyhow::Result<()> {
+    let Some(bucket) = config.database_backup.s3_bucket.clone() else {
+        return Ok(());
+    };
+
+    let s3_config =
+        S3BackupObjectStoreConfig::new(bucket, config.database_backup.s3_region.clone())
+            .with_prefix(config.database_backup.s3_prefix.clone())
+            .with_endpoint(config.database_backup.s3_endpoint.clone())
+            .with_path_style(config.database_backup.s3_path_style);
+    let object_store = Arc::new(S3BackupObjectStore::from_env(s3_config)?);
+    let metadata_store: Arc<dyn DatabaseBackupMetadataStore> = store.clone();
+    let connection_loader: Arc<dyn ManagedDatabaseConnectionLoader> = store;
+    let worker_config = DatabaseBackupWorkerConfig::new(
+        format!("liquid-{}", std::process::id()),
+        PathBuf::from(&config.database_backup.work_dir),
+    )
+    .with_object_key_prefix(config.database_backup.s3_prefix.clone())
+    .with_concurrency(config.database_backup.worker_concurrency);
+    let worker = DatabaseOperationWorker::new(
+        metadata_store,
+        connection_loader,
+        object_store,
+        Arc::new(DefaultDatabaseProcessExecutor),
+        worker_config,
+    );
+    let _handles = worker.spawn();
+
     Ok(())
 }
 

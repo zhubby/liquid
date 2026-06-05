@@ -1,14 +1,25 @@
 mod agent;
+mod database_operations;
 mod mock;
 mod prompt;
 mod tools;
 mod types;
+mod workbench;
 
 pub use agent::{SqlAuditAgent, ToolCallingSqlAuditAgent};
+pub use database_operations::{
+    BackupObjectStore, DatabaseBackupWorkerConfig, DatabaseDumpResult, DatabaseOperationWorker,
+    DatabaseProcessExecutor, DatabaseRestoreResult, DefaultDatabaseProcessExecutor,
+    ObjectStoreReadResult, ObjectStoreWriteResult, S3BackupObjectStore, S3BackupObjectStoreConfig,
+};
 pub use liquid_core::{SqlAuditFinding, SqlAuditReport, SqlAuditRequest};
 pub use mock::MockSqlAuditAgent;
 pub use tools::{
-    AgentTool, ApprovedWriteExecutionResult, PostgresToolConfig, PostgresToolExecutionMode,
-    SqlRiskInspectionTool, ToolRegistry, execute_approved_write_sql_with_config,
+    AgentTool, ApprovedWriteExecutionResult, DatabaseOperationToolContext, PostgresToolConfig,
+    PostgresToolExecutionMode, SqlRiskInspectionTool, ToolRegistry,
+    execute_approved_write_sql_with_config,
 };
 pub use types::{AgentEvent, AgentStream, ToolOutput};
+pub use workbench::{
+    RuleBasedWorkbenchAgent, WorkbenchActionSuggestion, WorkbenchContext, WorkbenchResponse,
+};

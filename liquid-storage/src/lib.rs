@@ -1,5 +1,7 @@
+mod agent_workbench;
 mod auth;
 mod crypto;
+mod database_backups;
 mod error;
 mod managed_databases;
 mod managed_pools;

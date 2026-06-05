@@ -1,5 +1,6 @@
 use axum::Router;
 
+mod agent_workbench;
 mod audit;
 mod auth;
 mod cors;
@@ -16,6 +17,7 @@ pub use state::{ApiState, ApprovedSqlExecutionFuture, ApprovedSqlExecutor};
 pub fn router(state: ApiState) -> Router {
     Router::new()
         .merge(health::routes())
+        .merge(agent_workbench::routes())
         .merge(auth::routes())
         .merge(audit::routes())
         .merge(managed_databases::routes())

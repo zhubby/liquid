@@ -46,9 +46,23 @@ async fn create_sql_audit(
     Json(request): Json<CreateSqlAuditRequest>,
 ) -> Result<(StatusCode, Json<SqlAuditRecord>), ApiError> {
     let user = authenticated_user(&state, &headers).await?;
+    let record = create_sql_audit_for_user(&state, &user.id, &id, request).await?;
+
+    Ok((StatusCode::CREATED, Json(record)))
+}
+
+pub(crate) async fn create_sql_audit_for_user(
+    state: &ApiState,
+    owner_user_id: &str,
+    managed_database_id: &str,
+    request: CreateSqlAuditRequest,
+) -> Result<SqlAuditRecord, ApiError> {
     let pool = state
         .managed_database_pools
-        .get_pool(ManagedDatabasePoolKey::new(user.id.clone(), id.clone()))
+        .get_pool(ManagedDatabasePoolKey::new(
+            owner_user_id.to_owned(),
+            managed_database_id.to_owned(),
+        ))
         .await?;
     let analysis = analyze_postgres_sql(PgSqlAnalysisRequest::new(&request.sql));
     let statement_kind = audit_statement_kind(&analysis);
@@ -71,8 +85,8 @@ async fn create_sql_audit(
     let record = state
         .store
         .create_sql_audit(
-            &user.id,
-            &id,
+            owner_user_id,
+            managed_database_id,
             CreateSqlAuditRecord {
                 request,
                 report,
@@ -84,7 +98,7 @@ async fn create_sql_audit(
         )
         .await?;
 
-    Ok((StatusCode::CREATED, Json(record)))
+    Ok(record)
 }
 
 async fn list_sql_audits(
@@ -150,23 +164,35 @@ async fn execute_sql_audit(
     Path(id): Path<String>,
 ) -> Result<Json<SqlAuditRecord>, ApiError> {
     let user = authenticated_user(&state, &headers).await?;
+    let record = execute_sql_audit_for_user(&state, &user.id, &id).await?;
 
+    Ok(Json(record))
+}
+
+pub(crate) async fn execute_sql_audit_for_user(
+    state: &ApiState,
+    owner_user_id: &str,
+    id: &str,
+) -> Result<SqlAuditRecord, ApiError> {
     if !state.approved_write_execution_enabled {
         return Err(ApiError::forbidden(
             "approved SQL audit execution requires LIQUID_SQL_EXECUTION=write_gated",
         ));
     }
 
-    let record = state.store.get_sql_audit(&user.id, &id).await?;
-    ensure_database_snapshot_matches(&state, &user.id, &record).await?;
+    let record = state.store.get_sql_audit(owner_user_id, id).await?;
+    ensure_database_snapshot_matches(state, owner_user_id, &record).await?;
     let pool = state
         .managed_database_pools
         .get_pool(ManagedDatabasePoolKey::new(
-            user.id.clone(),
+            owner_user_id.to_owned(),
             record.managed_database_id.clone(),
         ))
         .await?;
-    let executing = state.store.start_sql_audit_execution(&user.id, &id).await?;
+    let executing = state
+        .store
+        .start_sql_audit_execution(owner_user_id, id)
+        .await?;
     let config = PostgresToolConfig::new(
         Some(pool),
         state.sql_metadata_required,
@@ -182,8 +208,8 @@ async fn execute_sql_audit(
             let record = state
                 .store
                 .complete_sql_audit_execution(
-                    &user.id,
-                    &id,
+                    owner_user_id,
+                    id,
                     SqlAuditExecutionResult {
                         statement_kind: sql_statement_kind_from_pg(result.statement_kind),
                         affected_rows: result.affected_rows,
@@ -200,19 +226,19 @@ async fn execute_sql_audit(
                 )
                 .await?;
 
-            Ok(Json(record))
+            Ok(record)
         }
         Err(error) => {
             let message = error.to_string();
             let record = state
                 .store
-                .fail_sql_audit_execution(&user.id, &id, message.clone())
+                .fail_sql_audit_execution(owner_user_id, id, message.clone())
                 .await?;
 
             if deterministic_execution_rejection(&message) {
                 Err(ApiError::conflict(message))
             } else {
-                Ok(Json(record))
+                Ok(record)
             }
         }
     }

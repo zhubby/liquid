@@ -1,6 +1,6 @@
 use liquid_core::{
     CreateManagedDatabaseRequest, ManagedDatabase, ManagedDatabaseConnectionSpec,
-    ManagedDatabaseEngine, ManagedDatabasePoolKey, ManagedDatabaseSslMode,
+    ManagedDatabaseEngine, ManagedDatabasePoolKey, ManagedDatabaseSnapshot, ManagedDatabaseSslMode,
     UpdateManagedDatabaseRequest,
 };
 
@@ -255,18 +255,6 @@ impl ManagedDatabaseConnectionRow {
             ssl_mode: parse_ssl_mode(&self.ssl_mode)?,
         })
     }
-}
-
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub(crate) struct ManagedDatabaseSnapshot {
-    pub id: String,
-    pub name: String,
-    pub engine: ManagedDatabaseEngine,
-    pub host: String,
-    pub port: i32,
-    pub database: String,
-    pub username: String,
-    pub ssl_mode: ManagedDatabaseSslMode,
 }
 
 pub(crate) async fn load_managed_database_snapshot(

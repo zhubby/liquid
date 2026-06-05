@@ -1,16 +1,23 @@
 use async_trait::async_trait;
 use liquid_core::{
-    ApproveSqlAuditRequest, AuthResponse, CreateManagedDatabaseRequest, LoginRequest,
-    ManagedDatabase, ManagedDatabaseConnectionLoader, ManagedDatabaseConnectionLoaderError,
+    AgentAction, AgentActionStatus, AgentConversation, AgentEventRecord, AgentEventType,
+    AgentMessage, AgentMessageRole, AgentResourceKind, AgentTurn, AgentTurnStatus,
+    ApproveSqlAuditRequest, AuthResponse, CompleteDatabaseBackup, CreateAgentActionRequest,
+    CreateAgentConversationRequest, CreateAgentTurnRequest, CreateManagedDatabaseRequest,
+    DatabaseBackupMetadataStore, DatabaseBackupMetadataStoreError, DatabaseBackupRecord,
+    DatabaseBackupStatus, DatabaseRestoreRecord, LoginRequest, ManagedDatabase,
+    ManagedDatabaseConnectionLoader, ManagedDatabaseConnectionLoaderError,
     ManagedDatabaseConnectionSpec, ManagedDatabasePoolKey, PublicUser, RegisterRequest,
     RejectSqlAuditRequest, SqlAuditExecutionResult, SqlAuditRecord, SqlAuditStatus,
-    UpdateManagedDatabaseRequest,
+    UpdateAgentConversationRequest, UpdateManagedDatabaseRequest,
 };
+use serde_json::Value;
 use sqlx::{PgPool, postgres::PgPoolOptions};
 
 use crate::{
-    auth,
+    agent_workbench, auth,
     crypto::PasswordCipher,
+    database_backups,
     error::StorageError,
     managed_databases,
     options::StorageOptions,
@@ -68,6 +75,199 @@ impl ManagedDatabaseConnectionLoader for Storage {
         managed_databases::load_managed_database_connection(self, key)
             .await
             .map_err(managed_database_loader_error)
+    }
+}
+
+#[async_trait]
+impl DatabaseBackupMetadataStore for Storage {
+    async fn create_database_backup(
+        &self,
+        owner_user_id: &str,
+        source_managed_database_id: &str,
+        purpose: Option<String>,
+    ) -> Result<DatabaseBackupRecord, DatabaseBackupMetadataStoreError> {
+        database_backups::create_database_backup(
+            self,
+            owner_user_id,
+            source_managed_database_id,
+            purpose,
+        )
+        .await
+        .map_err(database_backups::metadata_store_error)
+    }
+
+    async fn get_database_backup(
+        &self,
+        owner_user_id: &str,
+        id: &str,
+    ) -> Result<DatabaseBackupRecord, DatabaseBackupMetadataStoreError> {
+        database_backups::get_database_backup(self, owner_user_id, id)
+            .await
+            .map_err(database_backups::metadata_store_error)
+    }
+
+    async fn list_database_backups(
+        &self,
+        owner_user_id: &str,
+        source_managed_database_id: Option<&str>,
+        status: Option<DatabaseBackupStatus>,
+        limit: i64,
+    ) -> Result<Vec<DatabaseBackupRecord>, DatabaseBackupMetadataStoreError> {
+        database_backups::list_database_backups(
+            self,
+            owner_user_id,
+            source_managed_database_id,
+            status,
+            limit,
+        )
+        .await
+        .map_err(database_backups::metadata_store_error)
+    }
+
+    async fn delete_database_backup(
+        &self,
+        owner_user_id: &str,
+        id: &str,
+    ) -> Result<DatabaseBackupRecord, DatabaseBackupMetadataStoreError> {
+        database_backups::delete_database_backup(self, owner_user_id, id)
+            .await
+            .map_err(database_backups::metadata_store_error)
+    }
+
+    async fn create_database_restore(
+        &self,
+        owner_user_id: &str,
+        backup_id: &str,
+        target_managed_database_id: &str,
+        purpose: String,
+    ) -> Result<DatabaseRestoreRecord, DatabaseBackupMetadataStoreError> {
+        database_backups::create_database_restore(
+            self,
+            owner_user_id,
+            backup_id,
+            target_managed_database_id,
+            purpose,
+        )
+        .await
+        .map_err(database_backups::metadata_store_error)
+    }
+
+    async fn get_database_restore(
+        &self,
+        owner_user_id: &str,
+        id: &str,
+    ) -> Result<DatabaseRestoreRecord, DatabaseBackupMetadataStoreError> {
+        database_backups::get_database_restore(self, owner_user_id, id)
+            .await
+            .map_err(database_backups::metadata_store_error)
+    }
+
+    async fn list_database_restores(
+        &self,
+        owner_user_id: &str,
+        backup_id: Option<&str>,
+        target_managed_database_id: Option<&str>,
+        status: Option<DatabaseBackupStatus>,
+        limit: i64,
+    ) -> Result<Vec<DatabaseRestoreRecord>, DatabaseBackupMetadataStoreError> {
+        database_backups::list_database_restores(
+            self,
+            owner_user_id,
+            backup_id,
+            target_managed_database_id,
+            status,
+            limit,
+        )
+        .await
+        .map_err(database_backups::metadata_store_error)
+    }
+
+    async fn claim_next_database_backup(
+        &self,
+        worker_id: &str,
+    ) -> Result<Option<DatabaseBackupRecord>, DatabaseBackupMetadataStoreError> {
+        database_backups::claim_next_database_backup(self, worker_id)
+            .await
+            .map_err(database_backups::metadata_store_error)
+    }
+
+    async fn update_database_backup_progress(
+        &self,
+        id: &str,
+        phase: &str,
+        progress_percent: i32,
+    ) -> Result<DatabaseBackupRecord, DatabaseBackupMetadataStoreError> {
+        database_backups::update_database_backup_progress(self, id, phase, progress_percent)
+            .await
+            .map_err(database_backups::metadata_store_error)
+    }
+
+    async fn complete_database_backup(
+        &self,
+        id: &str,
+        result: CompleteDatabaseBackup,
+    ) -> Result<DatabaseBackupRecord, DatabaseBackupMetadataStoreError> {
+        database_backups::complete_database_backup(self, id, result)
+            .await
+            .map_err(database_backups::metadata_store_error)
+    }
+
+    async fn fail_database_backup(
+        &self,
+        id: &str,
+        error: String,
+    ) -> Result<DatabaseBackupRecord, DatabaseBackupMetadataStoreError> {
+        database_backups::fail_database_backup(self, id, error)
+            .await
+            .map_err(database_backups::metadata_store_error)
+    }
+
+    async fn claim_next_database_restore(
+        &self,
+        worker_id: &str,
+    ) -> Result<Option<DatabaseRestoreRecord>, DatabaseBackupMetadataStoreError> {
+        database_backups::claim_next_database_restore(self, worker_id)
+            .await
+            .map_err(database_backups::metadata_store_error)
+    }
+
+    async fn update_database_restore_progress(
+        &self,
+        id: &str,
+        phase: &str,
+        progress_percent: i32,
+    ) -> Result<DatabaseRestoreRecord, DatabaseBackupMetadataStoreError> {
+        database_backups::update_database_restore_progress(self, id, phase, progress_percent)
+            .await
+            .map_err(database_backups::metadata_store_error)
+    }
+
+    async fn complete_database_restore(
+        &self,
+        id: &str,
+    ) -> Result<DatabaseRestoreRecord, DatabaseBackupMetadataStoreError> {
+        database_backups::complete_database_restore(self, id)
+            .await
+            .map_err(database_backups::metadata_store_error)
+    }
+
+    async fn fail_database_restore(
+        &self,
+        id: &str,
+        error: String,
+    ) -> Result<DatabaseRestoreRecord, DatabaseBackupMetadataStoreError> {
+        database_backups::fail_database_restore(self, id, error)
+            .await
+            .map_err(database_backups::metadata_store_error)
+    }
+
+    async fn fail_stale_database_jobs(
+        &self,
+        stale_after_seconds: i64,
+    ) -> Result<u64, DatabaseBackupMetadataStoreError> {
+        database_backups::fail_stale_database_jobs(self, stale_after_seconds)
+            .await
+            .map_err(database_backups::metadata_store_error)
     }
 }
 
@@ -190,6 +390,188 @@ impl LiquidStore for Storage {
         error: String,
     ) -> Result<SqlAuditRecord, StorageError> {
         sql_audits::fail_sql_audit_execution(self, owner_user_id, id, error).await
+    }
+
+    async fn list_agent_conversations(
+        &self,
+        owner_user_id: &str,
+        limit: i64,
+    ) -> Result<Vec<AgentConversation>, StorageError> {
+        agent_workbench::list_agent_conversations(self, owner_user_id, limit).await
+    }
+
+    async fn create_agent_conversation(
+        &self,
+        owner_user_id: &str,
+        request: CreateAgentConversationRequest,
+    ) -> Result<AgentConversation, StorageError> {
+        agent_workbench::create_agent_conversation(self, owner_user_id, request).await
+    }
+
+    async fn get_agent_conversation(
+        &self,
+        owner_user_id: &str,
+        id: &str,
+    ) -> Result<AgentConversation, StorageError> {
+        agent_workbench::get_agent_conversation(self, owner_user_id, id).await
+    }
+
+    async fn update_agent_conversation(
+        &self,
+        owner_user_id: &str,
+        id: &str,
+        request: UpdateAgentConversationRequest,
+    ) -> Result<AgentConversation, StorageError> {
+        agent_workbench::update_agent_conversation(self, owner_user_id, id, request).await
+    }
+
+    async fn list_agent_messages(
+        &self,
+        owner_user_id: &str,
+        conversation_id: &str,
+        limit: i64,
+        before_message_id: Option<&str>,
+    ) -> Result<Vec<AgentMessage>, StorageError> {
+        agent_workbench::list_agent_messages(
+            self,
+            owner_user_id,
+            conversation_id,
+            limit,
+            before_message_id,
+        )
+        .await
+    }
+
+    async fn append_agent_message(
+        &self,
+        owner_user_id: &str,
+        conversation_id: &str,
+        turn_id: Option<&str>,
+        role: AgentMessageRole,
+        content: &str,
+        metadata: Option<Value>,
+    ) -> Result<AgentMessage, StorageError> {
+        agent_workbench::append_agent_message(
+            self,
+            owner_user_id,
+            conversation_id,
+            turn_id,
+            role,
+            content,
+            metadata,
+        )
+        .await
+    }
+
+    async fn create_agent_turn(
+        &self,
+        owner_user_id: &str,
+        conversation_id: &str,
+        request: CreateAgentTurnRequest,
+    ) -> Result<AgentTurn, StorageError> {
+        agent_workbench::create_agent_turn(self, owner_user_id, conversation_id, request).await
+    }
+
+    async fn get_agent_turn(
+        &self,
+        owner_user_id: &str,
+        id: &str,
+    ) -> Result<AgentTurn, StorageError> {
+        agent_workbench::get_agent_turn(self, owner_user_id, id).await
+    }
+
+    async fn update_agent_turn_status(
+        &self,
+        owner_user_id: &str,
+        id: &str,
+        status: AgentTurnStatus,
+        error: Option<String>,
+    ) -> Result<AgentTurn, StorageError> {
+        agent_workbench::update_agent_turn_status(self, owner_user_id, id, status, error).await
+    }
+
+    async fn set_agent_turn_assistant_message(
+        &self,
+        owner_user_id: &str,
+        id: &str,
+        assistant_message_id: &str,
+    ) -> Result<AgentTurn, StorageError> {
+        agent_workbench::set_agent_turn_assistant_message(
+            self,
+            owner_user_id,
+            id,
+            assistant_message_id,
+        )
+        .await
+    }
+
+    async fn append_agent_turn_event(
+        &self,
+        owner_user_id: &str,
+        turn_id: &str,
+        event_type: AgentEventType,
+        payload: Value,
+    ) -> Result<AgentEventRecord, StorageError> {
+        agent_workbench::append_agent_turn_event(self, owner_user_id, turn_id, event_type, payload)
+            .await
+    }
+
+    async fn list_agent_turn_events(
+        &self,
+        owner_user_id: &str,
+        turn_id: &str,
+        after_seq: i32,
+    ) -> Result<Vec<AgentEventRecord>, StorageError> {
+        agent_workbench::list_agent_turn_events(self, owner_user_id, turn_id, after_seq).await
+    }
+
+    async fn create_agent_action(
+        &self,
+        owner_user_id: &str,
+        turn_id: &str,
+        request: CreateAgentActionRequest,
+    ) -> Result<AgentAction, StorageError> {
+        agent_workbench::create_agent_action(self, owner_user_id, turn_id, request).await
+    }
+
+    async fn list_agent_actions(
+        &self,
+        owner_user_id: &str,
+        conversation_id: Option<&str>,
+        status: Option<AgentActionStatus>,
+    ) -> Result<Vec<AgentAction>, StorageError> {
+        agent_workbench::list_agent_actions(self, owner_user_id, conversation_id, status).await
+    }
+
+    async fn get_agent_action(
+        &self,
+        owner_user_id: &str,
+        id: &str,
+    ) -> Result<AgentAction, StorageError> {
+        agent_workbench::get_agent_action(self, owner_user_id, id).await
+    }
+
+    async fn update_agent_action_status(
+        &self,
+        owner_user_id: &str,
+        id: &str,
+        status: AgentActionStatus,
+        resource_kind: Option<AgentResourceKind>,
+        resource_id: Option<String>,
+    ) -> Result<AgentAction, StorageError> {
+        agent_workbench::update_agent_action_status(
+            self,
+            owner_user_id,
+            id,
+            status,
+            resource_kind,
+            resource_id,
+        )
+        .await
+    }
+
+    async fn fail_stale_agent_turns(&self, stale_after_seconds: i64) -> Result<u64, StorageError> {
+        agent_workbench::fail_stale_agent_turns(self, stale_after_seconds).await
     }
 }
 

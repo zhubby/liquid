@@ -1,3 +1,5 @@
+use std::{error::Error, fmt};
+
 use axum::{
     Json,
     http::StatusCode,
@@ -39,6 +41,13 @@ impl ApiError {
         }
     }
 
+    pub(crate) fn bad_request(message: impl Into<String>) -> Self {
+        Self {
+            status: StatusCode::BAD_REQUEST,
+            message: message.into(),
+        }
+    }
+
     pub(crate) fn conflict(message: impl Into<String>) -> Self {
         Self {
             status: StatusCode::CONFLICT,
@@ -46,6 +55,14 @@ impl ApiError {
         }
     }
 }
+
+impl fmt::Display for ApiError {
+    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        write!(formatter, "{}", self.message)
+    }
+}
+
+impl Error for ApiError {}
 
 impl From<StorageError> for ApiError {
     fn from(error: StorageError) -> Self {
