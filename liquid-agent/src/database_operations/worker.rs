@@ -332,12 +332,10 @@ impl DatabaseOperationWorker {
             .await
             .with_context(|| format!("failed to stat restore file: {}", file_path.display()))?;
         let size_bytes = i64::try_from(file_meta.len()).unwrap_or(i64::MAX);
-        if let Some(expected_size) = object.size_bytes {
-            if size_bytes != expected_size {
-                bail!(
-                    "downloaded backup size mismatch: expected {expected_size}, got {size_bytes}"
-                );
-            }
+        if let Some(expected_size) = object.size_bytes
+            && size_bytes != expected_size
+        {
+            bail!("downloaded backup size mismatch: expected {expected_size}, got {size_bytes}");
         }
         if let Some(expected_checksum) = object.checksum_sha256.as_deref() {
             let actual_checksum = sha256_file(&file_path).await?;
