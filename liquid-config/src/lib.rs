@@ -360,11 +360,12 @@ mod tests {
 
     #[test]
     fn defaults_are_valid() {
+        let config = LiquidConfig::from_env_values(None, |_| None).unwrap();
         let addr: SocketAddr = DEFAULT_API_ADDR.parse().expect("default api addr");
 
         assert_eq!(addr.port(), 3001);
         assert!(DEFAULT_DATABASE_URL.starts_with("postgres://"));
-        assert!(DEFAULT_AUTH_TOKEN_TTL_SECONDS > 0);
+        assert!(config.auth.token_ttl_seconds > 0);
     }
 
     #[test]

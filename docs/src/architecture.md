@@ -2,7 +2,7 @@
 
 The Rust backend is split into focused crates:
 
-- `liquid-cli` owns process startup.
+- `liquid-cli` owns Clap command parsing and process startup.
 - `liquid-api` owns Axum routes and HTTP server composition.
 - `liquid-config` owns environment-backed configuration.
 - `liquid-core` owns shared domain and transport types.
