@@ -24,14 +24,11 @@ import {
   LogOut,
   MessageSquare,
   PanelsLeftRight,
-  Plus,
-  Save,
   Search,
   Send,
   ShieldCheck,
   Sparkles,
   Table2,
-  Trash2,
   TrendingUp,
   X,
 } from "lucide-react";
@@ -64,9 +61,7 @@ import {
   type AgentMessage,
   type AgentTurn,
   type ManagedDatabase,
-  type CreateManagedDatabaseRequest,
   type PublicUser,
-  type UpdateManagedDatabaseRequest,
   apiRequest,
   apiStream,
 } from "@/lib/api";
@@ -119,32 +114,13 @@ type DatasetRow = {
 type AuditDashboardProps = {
   token: string;
   user: PublicUser;
-  onLogout: () => void;
-};
-
-type ManagedDatabaseForm = {
-  name: string;
-  host: string;
-  port: string;
-  database: string;
-  username: string;
-  password: string;
-  ssl_mode: ManagedDatabase["ssl_mode"];
+  selectedDatabase: ManagedDatabase;
+  onDatabaseExit: () => void;
 };
 
 const MIN_AI_WIDTH = 320;
 const MIN_BI_WIDTH = 520;
 const DEFAULT_AI_PERCENT = 38;
-
-const emptyManagedDatabaseForm: ManagedDatabaseForm = {
-  name: "",
-  host: "",
-  port: "5432",
-  database: "",
-  username: "",
-  password: "",
-  ssl_mode: "prefer",
-};
 
 const quickPrompts = [
   "解释风险上升原因",
@@ -264,7 +240,12 @@ const riskColors: Record<RiskLevel, string> = {
   严重: "var(--destructive)",
 };
 
-export function AuditDashboard({ token, user, onLogout }: AuditDashboardProps) {
+export function AuditDashboard({
+  token,
+  user,
+  selectedDatabase,
+  onDatabaseExit,
+}: AuditDashboardProps) {
   const workspaceRef = useRef<HTMLDivElement>(null);
   const [aiWidth, setAiWidth] = useState(DEFAULT_AI_PERCENT);
   const [isDragging, setIsDragging] = useState(false);
@@ -334,7 +315,7 @@ export function AuditDashboard({ token, user, onLogout }: AuditDashboardProps) {
   return (
     <main className="min-h-screen bg-background text-foreground">
       <div className="flex min-h-screen">
-        <IconSidebar user={user} onLogout={onLogout} />
+        <IconSidebar user={user} onDatabaseExit={onDatabaseExit} />
         <section
           ref={workspaceRef}
           className={cn(
@@ -346,13 +327,13 @@ export function AuditDashboard({ token, user, onLogout }: AuditDashboardProps) {
           onPointerUp={handleWorkspacePointerUp}
           onPointerLeave={handleWorkspacePointerUp}
         >
-          <AiPanel token={token} />
+          <AiPanel token={token} selectedDatabase={selectedDatabase} />
           <SplitHandle
             isDragging={isDragging}
             onPointerDown={handleDividerPointerDown}
             onDoubleClick={handleDividerDoubleClick}
           />
-          <BiPanel token={token} />
+          <BiPanel selectedDatabase={selectedDatabase} />
         </section>
       </div>
     </main>
@@ -361,10 +342,10 @@ export function AuditDashboard({ token, user, onLogout }: AuditDashboardProps) {
 
 function IconSidebar({
   user,
-  onLogout,
+  onDatabaseExit,
 }: {
   user: PublicUser;
-  onLogout: () => void;
+  onDatabaseExit: () => void;
 }) {
   const initials = user.display_name
     .split(/\s+/)
@@ -409,9 +390,9 @@ function IconSidebar({
           variant="ghost"
           size="icon"
           className="size-10 rounded-md text-sidebar-foreground/70 hover:bg-sidebar-accent hover:text-sidebar-accent-foreground"
-          aria-label="退出登录"
-          title="退出登录"
-          onClick={onLogout}
+          aria-label="返回数据库选择"
+          title="返回数据库选择"
+          onClick={onDatabaseExit}
         >
           <LogOut className="size-5" aria-hidden />
         </Button>
@@ -447,13 +428,17 @@ function SidebarIcon({
   );
 }
 
-function AiPanel({ token }: { token: string }) {
+function AiPanel({
+  token,
+  selectedDatabase,
+}: {
+  token: string;
+  selectedDatabase: ManagedDatabase;
+}) {
   const [conversation, setConversation] =
     useState<AgentConversation | null>(null);
   const [messages, setMessages] = useState<ChatMessage[]>([]);
   const [actions, setActions] = useState<AgentAction[]>([]);
-  const [databases, setDatabases] = useState<ManagedDatabase[]>([]);
-  const [selectedDatabaseId, setSelectedDatabaseId] = useState("");
   const [agentMode, setAgentMode] = useState("agent");
   const [input, setInput] = useState("");
   const [isLoading, setIsLoading] = useState(true);
@@ -486,18 +471,14 @@ function AiPanel({ token }: { token: string }) {
     setError(null);
 
     try {
-      const [conversations, managedDatabases, capabilities] =
-        await Promise.all([
-          apiRequest<AgentConversation[]>("/api/v1/agent/conversations", {
-            token,
-          }),
-          apiRequest<ManagedDatabase[]>("/api/v1/managed-databases", {
-            token,
-          }),
-          apiRequest<AgentCapabilitiesResponse>("/api/v1/agent/capabilities", {
-            token,
-          }),
-        ]);
+      const [conversations, capabilities] = await Promise.all([
+        apiRequest<AgentConversation[]>("/api/v1/agent/conversations", {
+          token,
+        }),
+        apiRequest<AgentCapabilitiesResponse>("/api/v1/agent/capabilities", {
+          token,
+        }),
+      ]);
       const activeConversation =
         conversations[0] ??
         (await apiRequest<AgentConversation>("/api/v1/agent/conversations", {
@@ -507,8 +488,6 @@ function AiPanel({ token }: { token: string }) {
         }));
 
       setConversation(activeConversation);
-      setDatabases(managedDatabases);
-      setSelectedDatabaseId((current) => current || managedDatabases[0]?.id || "");
       setAgentMode(capabilities.mode);
       await loadMessagesAndActions(activeConversation.id);
     } catch (error) {
@@ -571,7 +550,7 @@ function AiPanel({ token }: { token: string }) {
             token,
             body: {
               message: content,
-              managed_database_id: selectedDatabaseId || undefined,
+              managed_database_id: selectedDatabase.id,
               dashboard_context: {
                 active_view: "ai",
                 date_range: "last_7_days",
@@ -632,7 +611,7 @@ function AiPanel({ token }: { token: string }) {
       isSending,
       loadMessagesAndActions,
       mergeAction,
-      selectedDatabaseId,
+      selectedDatabase.id,
       token,
     ],
   );
@@ -671,7 +650,7 @@ function AiPanel({ token }: { token: string }) {
             id: "intro",
             role: "assistant" as const,
             content:
-              "选择一个托管数据库后，可以直接发送 SQL 或治理问题。我会把敏感操作先变成待确认动作。",
+              `当前绑定 ${selectedDatabase.name}，可以直接发送 SQL 或治理问题。敏感操作会先变成待确认动作。`,
             time: nowTimeLabel(),
           },
         ];
@@ -688,7 +667,7 @@ function AiPanel({ token }: { token: string }) {
             </Badge>
           </div>
           <p className="mt-1 truncate text-xs text-muted-foreground">
-            持久化会话、流式事件与确认式动作
+            {selectedDatabase.name} / {selectedDatabase.database}
           </p>
         </div>
         <Button
@@ -733,27 +712,17 @@ function AiPanel({ token }: { token: string }) {
               {error}
             </div>
           ) : null}
-          <div className="mb-3 flex items-center gap-2">
-            <label
-              className="shrink-0 text-xs font-medium text-muted-foreground"
-              htmlFor="agent-database"
-            >
-              上下文数据库
-            </label>
-            <select
-              id="agent-database"
-              value={selectedDatabaseId}
-              onChange={(event) => setSelectedDatabaseId(event.target.value)}
-              className="h-8 min-w-0 flex-1 rounded-md border bg-background px-2 text-xs outline-none transition-shadow focus-visible:ring-[3px] focus-visible:ring-ring/50"
-              disabled={isLoading || isSending}
-            >
-              <option value="">不绑定数据库</option>
-              {databases.map((database) => (
-                <option key={database.id} value={database.id}>
-                  {database.name} / {database.database}
-                </option>
-              ))}
-            </select>
+          <div className="mb-3 flex items-center gap-2 rounded-md border bg-background px-3 py-2">
+            <Database className="size-4 shrink-0 text-muted-foreground" aria-hidden />
+            <div className="min-w-0">
+              <div className="truncate text-xs font-medium">
+                {selectedDatabase.name}
+              </div>
+              <div className="mt-0.5 truncate text-xs text-muted-foreground">
+                {selectedDatabase.host}:{selectedDatabase.port} /{" "}
+                {selectedDatabase.database}
+              </div>
+            </div>
           </div>
           <div className="mb-3 flex flex-wrap gap-2">
             {quickPrompts.map((prompt) => (
@@ -1008,7 +977,7 @@ function SplitHandle({
   );
 }
 
-function BiPanel({ token }: { token: string }) {
+function BiPanel({ selectedDatabase }: { selectedDatabase: ManagedDatabase }) {
   return (
     <section className="mt-3 flex min-h-[calc(100vh-1.5rem)] min-w-0 flex-col overflow-hidden rounded-lg border bg-card text-card-foreground shadow-sm lg:mt-0 lg:h-[calc(100vh-1.5rem)]">
       <header className="flex shrink-0 flex-col gap-3 border-b px-4 py-3 xl:flex-row xl:items-center xl:justify-between">
@@ -1016,11 +985,12 @@ function BiPanel({ token }: { token: string }) {
           <div className="flex items-center gap-2">
             <h2 className="truncate text-base font-semibold">BI 数据看板</h2>
             <Badge variant="outline" className="h-6 rounded-md">
-              最近 7 天
+              {selectedDatabase.name}
             </Badge>
           </div>
           <p className="mt-1 truncate text-xs text-muted-foreground">
-            查询趋势、风险分布与数据集明细
+            {selectedDatabase.host}:{selectedDatabase.port} /{" "}
+            {selectedDatabase.database}
           </p>
         </div>
         <div className="flex flex-wrap items-center gap-2">
@@ -1051,7 +1021,6 @@ function BiPanel({ token }: { token: string }) {
           <CategoryChart />
         </div>
 
-        <ManagedDatabaseManager token={token} />
         <DatasetTable />
       </div>
     </section>
@@ -1205,414 +1174,6 @@ function CategoryChart() {
         </div>
       </CardContent>
     </Card>
-  );
-}
-
-function ManagedDatabaseManager({ token }: { token: string }) {
-  const [databases, setDatabases] = useState<ManagedDatabase[]>([]);
-  const [form, setForm] = useState<ManagedDatabaseForm>(
-    emptyManagedDatabaseForm,
-  );
-  const [editingId, setEditingId] = useState<string | null>(null);
-  const [isLoading, setIsLoading] = useState(true);
-  const [isSubmitting, setIsSubmitting] = useState(false);
-  const [error, setError] = useState<string | null>(null);
-  const [status, setStatus] = useState<string | null>(null);
-
-  const loadDatabases = useCallback(async () => {
-    setIsLoading(true);
-    setError(null);
-
-    try {
-      const response = await apiRequest<ManagedDatabase[]>(
-        "/api/v1/managed-databases",
-        { token },
-      );
-      setDatabases(response);
-    } catch (error) {
-      setError(error instanceof Error ? error.message : "加载数据库失败");
-    } finally {
-      setIsLoading(false);
-    }
-  }, [token]);
-
-  useEffect(() => {
-    void loadDatabases();
-  }, [loadDatabases]);
-
-  const resetForm = () => {
-    setForm(emptyManagedDatabaseForm);
-    setEditingId(null);
-  };
-
-  const handleSubmit = async (event: FormEvent<HTMLFormElement>) => {
-    event.preventDefault();
-    setError(null);
-    setStatus(null);
-    setIsSubmitting(true);
-
-    const port = Number.parseInt(form.port, 10);
-
-    if (!Number.isInteger(port)) {
-      setError("端口必须是数字");
-      setIsSubmitting(false);
-      return;
-    }
-
-    try {
-      if (editingId) {
-        const body: UpdateManagedDatabaseRequest = {
-          name: form.name,
-          host: form.host,
-          port,
-          database: form.database,
-          username: form.username,
-          ssl_mode: form.ssl_mode,
-        };
-
-        if (form.password.trim()) {
-          body.password = form.password;
-        }
-
-        const updated = await apiRequest<ManagedDatabase>(
-          `/api/v1/managed-databases/${editingId}`,
-          {
-            method: "PATCH",
-            token,
-            body,
-          },
-        );
-
-        setDatabases((current) =>
-          current.map((database) =>
-            database.id === updated.id ? updated : database,
-          ),
-        );
-        setStatus("连接记录已更新");
-      } else {
-        if (!form.password.trim()) {
-          setError("密码是必填项");
-          setIsSubmitting(false);
-          return;
-        }
-
-        const body: CreateManagedDatabaseRequest = {
-          name: form.name,
-          engine: "postgres",
-          host: form.host,
-          port,
-          database: form.database,
-          username: form.username,
-          password: form.password,
-          ssl_mode: form.ssl_mode,
-        };
-        const created = await apiRequest<ManagedDatabase>(
-          "/api/v1/managed-databases",
-          {
-            method: "POST",
-            token,
-            body,
-          },
-        );
-
-        setDatabases((current) => [...current, created]);
-        setStatus("连接记录已创建");
-      }
-
-      resetForm();
-    } catch (error) {
-      setError(error instanceof Error ? error.message : "保存数据库失败");
-    } finally {
-      setIsSubmitting(false);
-    }
-  };
-
-  const handleEdit = (database: ManagedDatabase) => {
-    setEditingId(database.id);
-    setForm({
-      name: database.name,
-      host: database.host,
-      port: String(database.port),
-      database: database.database,
-      username: database.username,
-      password: "",
-      ssl_mode: database.ssl_mode,
-    });
-    setStatus(null);
-    setError(null);
-  };
-
-  const handleDelete = async (database: ManagedDatabase) => {
-    setError(null);
-    setStatus(null);
-
-    try {
-      await apiRequest<void>(`/api/v1/managed-databases/${database.id}`, {
-        method: "DELETE",
-        token,
-      });
-      setDatabases((current) =>
-        current.filter((item) => item.id !== database.id),
-      );
-
-      if (editingId === database.id) {
-        resetForm();
-      }
-
-      setStatus("连接记录已删除");
-    } catch (error) {
-      setError(error instanceof Error ? error.message : "删除数据库失败");
-    }
-  };
-
-  return (
-    <Card className="mt-4 rounded-lg py-4 shadow-xs">
-      <CardHeader className="flex flex-row items-center justify-between gap-3 px-4">
-        <div>
-          <CardTitle className="text-sm">托管数据库</CardTitle>
-          <p className="mt-1 text-xs text-muted-foreground">
-            存储连接记录，密码加密保存；元数据同步后续开启
-          </p>
-        </div>
-        <Badge variant="secondary" className="rounded-md">
-          Postgres
-        </Badge>
-      </CardHeader>
-      <CardContent className="px-4">
-        <form
-          className="grid gap-3 rounded-lg border bg-background p-3 lg:grid-cols-12"
-          onSubmit={handleSubmit}
-        >
-          <DatabaseField
-            className="lg:col-span-3"
-            id="managed-name"
-            label="名称"
-            value={form.name}
-            onChange={(name) => setForm((current) => ({ ...current, name }))}
-            required
-          />
-          <DatabaseField
-            className="lg:col-span-3"
-            id="managed-host"
-            label="主机"
-            value={form.host}
-            onChange={(host) => setForm((current) => ({ ...current, host }))}
-            required
-          />
-          <DatabaseField
-            className="lg:col-span-2"
-            id="managed-port"
-            label="端口"
-            value={form.port}
-            onChange={(port) => setForm((current) => ({ ...current, port }))}
-            inputMode="numeric"
-            required
-          />
-          <DatabaseField
-            className="lg:col-span-4"
-            id="managed-database"
-            label="数据库"
-            value={form.database}
-            onChange={(database) =>
-              setForm((current) => ({ ...current, database }))
-            }
-            required
-          />
-          <DatabaseField
-            className="lg:col-span-3"
-            id="managed-username"
-            label="用户名"
-            value={form.username}
-            onChange={(username) =>
-              setForm((current) => ({ ...current, username }))
-            }
-            required
-          />
-          <DatabaseField
-            className="lg:col-span-3"
-            id="managed-password"
-            label={editingId ? "新密码" : "密码"}
-            type="password"
-            value={form.password}
-            onChange={(password) =>
-              setForm((current) => ({ ...current, password }))
-            }
-            placeholder={editingId ? "留空则保持原密码" : ""}
-            required={!editingId}
-          />
-          <div className="space-y-1.5 lg:col-span-3">
-            <label
-              className="text-xs font-medium text-muted-foreground"
-              htmlFor="managed-ssl"
-            >
-              SSL
-            </label>
-            <select
-              id="managed-ssl"
-              value={form.ssl_mode}
-              onChange={(event) =>
-                setForm((current) => ({
-                  ...current,
-                  ssl_mode: event.target.value as ManagedDatabase["ssl_mode"],
-                }))
-              }
-              className="h-9 w-full rounded-md border bg-background px-3 text-sm outline-none transition-shadow focus-visible:ring-[3px] focus-visible:ring-ring/50"
-            >
-              <option value="disable">disable</option>
-              <option value="prefer">prefer</option>
-              <option value="require">require</option>
-            </select>
-          </div>
-          <div className="flex items-end gap-2 lg:col-span-3">
-            <Button type="submit" size="sm" disabled={isSubmitting}>
-              {isSubmitting ? (
-                <Loader2 className="size-4 animate-spin" aria-hidden />
-              ) : editingId ? (
-                <Save className="size-4" aria-hidden />
-              ) : (
-                <Plus className="size-4" aria-hidden />
-              )}
-              {editingId ? "保存" : "新增"}
-            </Button>
-            {editingId ? (
-              <Button
-                type="button"
-                variant="outline"
-                size="sm"
-                onClick={resetForm}
-              >
-                <X className="size-4" aria-hidden />
-                取消
-              </Button>
-            ) : null}
-          </div>
-        </form>
-
-        {error ? (
-          <div className="mt-3 rounded-md border border-destructive/30 bg-destructive/10 px-3 py-2 text-sm text-destructive">
-            {error}
-          </div>
-        ) : null}
-        {status ? (
-          <div className="mt-3 rounded-md border bg-secondary px-3 py-2 text-sm text-secondary-foreground">
-            {status}
-          </div>
-        ) : null}
-
-        <div className="mt-3 overflow-x-auto">
-          <table className="w-full min-w-[760px] border-collapse text-sm">
-            <thead>
-              <tr className="border-y bg-muted/60 text-left text-xs text-muted-foreground">
-                <th className="px-3 py-2.5 font-medium">名称</th>
-                <th className="px-3 py-2.5 font-medium">主机</th>
-                <th className="px-3 py-2.5 font-medium">数据库</th>
-                <th className="px-3 py-2.5 font-medium">用户</th>
-                <th className="px-3 py-2.5 font-medium">SSL</th>
-                <th className="px-3 py-2.5 text-right font-medium">操作</th>
-              </tr>
-            </thead>
-            <tbody>
-              {isLoading ? (
-                <tr>
-                  <td className="px-3 py-5 text-muted-foreground" colSpan={6}>
-                    正在加载连接记录
-                  </td>
-                </tr>
-              ) : databases.length === 0 ? (
-                <tr>
-                  <td className="px-3 py-5 text-muted-foreground" colSpan={6}>
-                    暂无连接记录
-                  </td>
-                </tr>
-              ) : (
-                databases.map((database) => (
-                  <tr
-                    key={database.id}
-                    className="border-b transition-colors hover:bg-muted/40"
-                  >
-                    <td className="px-3 py-3 font-medium">{database.name}</td>
-                    <td className="px-3 py-3 text-muted-foreground">
-                      {database.host}:{database.port}
-                    </td>
-                    <td className="px-3 py-3">{database.database}</td>
-                    <td className="px-3 py-3 text-muted-foreground">
-                      {database.username}
-                    </td>
-                    <td className="px-3 py-3">
-                      <Badge variant="outline" className="rounded-md">
-                        {database.ssl_mode}
-                      </Badge>
-                    </td>
-                    <td className="px-3 py-3">
-                      <div className="flex justify-end gap-2">
-                        <Button
-                          type="button"
-                          variant="outline"
-                          size="sm"
-                          onClick={() => handleEdit(database)}
-                        >
-                          编辑
-                        </Button>
-                        <Button
-                          type="button"
-                          variant="ghost"
-                          size="icon"
-                          aria-label={`删除 ${database.name}`}
-                          title="删除"
-                          onClick={() => void handleDelete(database)}
-                        >
-                          <Trash2 className="size-4" aria-hidden />
-                        </Button>
-                      </div>
-                    </td>
-                  </tr>
-                ))
-              )}
-            </tbody>
-          </table>
-        </div>
-      </CardContent>
-    </Card>
-  );
-}
-
-function DatabaseField({
-  id,
-  label,
-  value,
-  onChange,
-  type = "text",
-  placeholder,
-  inputMode,
-  required,
-  className,
-}: {
-  id: string;
-  label: string;
-  value: string;
-  onChange: (value: string) => void;
-  type?: string;
-  placeholder?: string;
-  inputMode?: "numeric";
-  required?: boolean;
-  className?: string;
-}) {
-  return (
-    <div className={cn("space-y-1.5", className)}>
-      <label className="text-xs font-medium text-muted-foreground" htmlFor={id}>
-        {label}
-      </label>
-      <input
-        id={id}
-        type={type}
-        value={value}
-        onChange={(event) => onChange(event.target.value)}
-        placeholder={placeholder}
-        inputMode={inputMode}
-        required={required}
-        className="h-9 w-full rounded-md border bg-background px-3 text-sm outline-none transition-shadow placeholder:text-muted-foreground focus-visible:ring-[3px] focus-visible:ring-ring/50"
-      />
-    </div>
   );
 }
 

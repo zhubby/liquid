@@ -12,7 +12,10 @@ mod sql_audits;
 mod state;
 
 pub use server::serve;
-pub use state::{ApiState, ApprovedSqlExecutionFuture, ApprovedSqlExecutor};
+pub use state::{
+    ApiState, ApprovedSqlExecutionFuture, ApprovedSqlExecutor, ManagedDatabaseConnectionTestFuture,
+    ManagedDatabaseConnectionTester,
+};
 
 pub fn router(state: ApiState) -> Router {
     Router::new()

@@ -296,6 +296,29 @@ impl LiquidStore for Storage {
         managed_databases::list_managed_databases(self, owner_user_id).await
     }
 
+    async fn get_current_managed_database(
+        &self,
+        owner_user_id: &str,
+    ) -> Result<Option<ManagedDatabase>, StorageError> {
+        managed_databases::get_current_managed_database(self, owner_user_id).await
+    }
+
+    async fn set_current_managed_database(
+        &self,
+        owner_user_id: &str,
+        managed_database_id: &str,
+    ) -> Result<ManagedDatabase, StorageError> {
+        managed_databases::set_current_managed_database(self, owner_user_id, managed_database_id)
+            .await
+    }
+
+    async fn clear_current_managed_database(
+        &self,
+        owner_user_id: &str,
+    ) -> Result<(), StorageError> {
+        managed_databases::clear_current_managed_database(self, owner_user_id).await
+    }
+
     async fn create_managed_database(
         &self,
         owner_user_id: &str,

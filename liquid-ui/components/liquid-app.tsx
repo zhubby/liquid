@@ -4,6 +4,7 @@ import { type FormEvent, useEffect, useState } from "react";
 import { Database, Loader2, LockKeyhole, ShieldCheck } from "lucide-react";
 
 import { AuditDashboard } from "@/components/audit-dashboard";
+import { ManagedDatabasePicker } from "@/components/managed-database-picker";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import {
@@ -14,6 +15,8 @@ import {
 } from "@/components/ui/card";
 import {
   type AuthResponse,
+  type CurrentManagedDatabaseResponse,
+  type ManagedDatabase,
   type PublicUser,
   apiRequest,
 } from "@/lib/api";
@@ -26,6 +29,8 @@ type AuthMode = "login" | "register";
 export function LiquidApp() {
   const [token, setToken] = useState<string | null>(null);
   const [user, setUser] = useState<PublicUser | null>(null);
+  const [selectedDatabase, setSelectedDatabase] =
+    useState<ManagedDatabase | null>(null);
   const [checkingSession, setCheckingSession] = useState(true);
 
   useEffect(() => {
@@ -39,9 +44,11 @@ export function LiquidApp() {
     apiRequest<{ user: PublicUser }>("/api/v1/auth/me", {
       token: storedToken,
     })
-      .then((response) => {
+      .then(async (response) => {
+        const currentDatabase = await loadCurrentDatabase(storedToken);
         setToken(storedToken);
         setUser(response.user);
+        setSelectedDatabase(currentDatabase);
       })
       .catch(() => {
         window.localStorage.removeItem(TOKEN_STORAGE_KEY);
@@ -51,10 +58,12 @@ export function LiquidApp() {
       });
   }, []);
 
-  const handleAuthenticated = (response: AuthResponse) => {
+  const handleAuthenticated = async (response: AuthResponse) => {
     window.localStorage.setItem(TOKEN_STORAGE_KEY, response.token);
+    const currentDatabase = await loadCurrentDatabase(response.token);
     setToken(response.token);
     setUser(response.user);
+    setSelectedDatabase(currentDatabase);
   };
 
   const handleLogout = async () => {
@@ -72,6 +81,22 @@ export function LiquidApp() {
     window.localStorage.removeItem(TOKEN_STORAGE_KEY);
     setToken(null);
     setUser(null);
+    setSelectedDatabase(null);
+  };
+
+  const handleReturnToDatabasePicker = async () => {
+    if (token) {
+      try {
+        await apiRequest<void>("/api/v1/managed-databases/current", {
+          method: "DELETE",
+          token,
+        });
+      } catch {
+        // Keep the local navigation responsive if the API is briefly unavailable.
+      }
+    }
+
+    setSelectedDatabase(null);
   };
 
   if (checkingSession) {
@@ -82,7 +107,38 @@ export function LiquidApp() {
     return <AuthScreen onAuthenticated={handleAuthenticated} />;
   }
 
-  return <AuditDashboard token={token} user={user} onLogout={handleLogout} />;
+  if (!selectedDatabase) {
+    return (
+      <ManagedDatabasePicker
+        token={token}
+        user={user}
+        onDatabaseSelected={setSelectedDatabase}
+        onLogout={handleLogout}
+      />
+    );
+  }
+
+  return (
+    <AuditDashboard
+      token={token}
+      user={user}
+      selectedDatabase={selectedDatabase}
+      onDatabaseExit={handleReturnToDatabasePicker}
+    />
+  );
+}
+
+async function loadCurrentDatabase(token: string): Promise<ManagedDatabase | null> {
+  try {
+    const response = await apiRequest<CurrentManagedDatabaseResponse>(
+      "/api/v1/managed-databases/current",
+      { token },
+    );
+
+    return response.database;
+  } catch {
+    return null;
+  }
 }
 
 function SessionLoading() {
@@ -108,7 +164,7 @@ function SessionLoading() {
 function AuthScreen({
   onAuthenticated,
 }: {
-  onAuthenticated: (response: AuthResponse) => void;
+  onAuthenticated: (response: AuthResponse) => void | Promise<void>;
 }) {
   const [mode, setMode] = useState<AuthMode>("login");
   const [email, setEmail] = useState("");
@@ -142,7 +198,7 @@ function AuthScreen({
         },
       );
 
-      onAuthenticated(response);
+      await onAuthenticated(response);
     } catch (error) {
       setError(error instanceof Error ? error.message : "认证失败");
     } finally {

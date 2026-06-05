@@ -23,6 +23,19 @@ export type ManagedDatabase = {
   has_password: boolean;
 };
 
+export type CurrentManagedDatabaseResponse = {
+  database: ManagedDatabase | null;
+};
+
+export type SetCurrentManagedDatabaseRequest = {
+  managed_database_id: string;
+};
+
+export type ManagedDatabaseConnectionTestResponse = {
+  ok: boolean;
+  message: string;
+};
+
 export type CreateManagedDatabaseRequest = {
   name: string;
   engine: "postgres";

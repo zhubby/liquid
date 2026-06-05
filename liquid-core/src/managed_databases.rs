@@ -50,6 +50,22 @@ pub struct ManagedDatabase {
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+pub struct CurrentManagedDatabaseResponse {
+    pub database: Option<ManagedDatabase>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+pub struct SetCurrentManagedDatabaseRequest {
+    pub managed_database_id: String,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+pub struct ManagedDatabaseConnectionTestResponse {
+    pub ok: bool,
+    pub message: String,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 pub struct CreateManagedDatabaseRequest {
     pub name: String,
     pub engine: ManagedDatabaseEngine,

@@ -13,7 +13,10 @@ use liquid_agent::{
     AgentStream, ApprovedWriteExecutionResult, MockSqlAuditAgent, PostgresToolConfig,
     PostgresToolExecutionMode, SqlAuditAgent, ToolRegistry,
 };
-use liquid_api::{ApiState, ApprovedSqlExecutionFuture, ApprovedSqlExecutor, router};
+use liquid_api::{
+    ApiState, ApprovedSqlExecutionFuture, ApprovedSqlExecutor, ManagedDatabaseConnectionTestFuture,
+    ManagedDatabaseConnectionTester, router,
+};
 use liquid_core::{
     AgentAction, AgentActionStatus, AgentConversation, AgentEventRecord, AgentEventType,
     AgentMessage, AgentMessageRole, AgentResourceKind, AgentTurn, AgentTurnStatus,
@@ -44,6 +47,7 @@ const VALID_TOKEN: &str = "valid-token";
 struct TestStore {
     revoked: Mutex<bool>,
     databases: Mutex<Vec<ManagedDatabase>>,
+    current_database_id: Mutex<Option<String>>,
     audits: Mutex<Vec<SqlAuditRecord>>,
     conversations: Mutex<Vec<AgentConversation>>,
     messages: Mutex<Vec<AgentMessage>>,
@@ -90,6 +94,52 @@ impl LiquidStore for TestStore {
         _owner_user_id: &str,
     ) -> Result<Vec<ManagedDatabase>, StorageError> {
         Ok(self.databases.lock().unwrap().clone())
+    }
+
+    async fn get_current_managed_database(
+        &self,
+        _owner_user_id: &str,
+    ) -> Result<Option<ManagedDatabase>, StorageError> {
+        let current_id = self.current_database_id.lock().unwrap().clone();
+        let Some(current_id) = current_id else {
+            return Ok(None);
+        };
+
+        Ok(self
+            .databases
+            .lock()
+            .unwrap()
+            .iter()
+            .find(|database| database.id == current_id)
+            .cloned())
+    }
+
+    async fn set_current_managed_database(
+        &self,
+        _owner_user_id: &str,
+        managed_database_id: &str,
+    ) -> Result<ManagedDatabase, StorageError> {
+        let database = self
+            .databases
+            .lock()
+            .unwrap()
+            .iter()
+            .find(|database| database.id == managed_database_id)
+            .cloned()
+            .ok_or(StorageError::NotFound)?;
+
+        *self.current_database_id.lock().unwrap() = Some(managed_database_id.to_owned());
+
+        Ok(database)
+    }
+
+    async fn clear_current_managed_database(
+        &self,
+        _owner_user_id: &str,
+    ) -> Result<(), StorageError> {
+        *self.current_database_id.lock().unwrap() = None;
+
+        Ok(())
     }
 
     async fn create_managed_database(
@@ -157,6 +207,10 @@ impl LiquidStore for TestStore {
 
         if databases.len() == before {
             return Err(StorageError::NotFound);
+        }
+
+        if self.current_database_id.lock().unwrap().as_deref() == Some(id) {
+            *self.current_database_id.lock().unwrap() = None;
         }
 
         Ok(())
@@ -871,6 +925,15 @@ impl ApprovedSqlExecutor for FakeApprovedSqlExecutor {
     }
 }
 
+#[derive(Default)]
+struct FakeManagedDatabaseConnectionTester;
+
+impl ManagedDatabaseConnectionTester for FakeManagedDatabaseConnectionTester {
+    fn test<'a>(&'a self, _pool: PgPool) -> ManagedDatabaseConnectionTestFuture<'a> {
+        Box::pin(async { Ok(()) })
+    }
+}
+
 fn test_app() -> Router {
     test_app_with_agent(Arc::new(MockSqlAuditAgent))
 }
@@ -903,13 +966,14 @@ fn test_app_with_agent_execution_and_executor(
         ManagedDatabasePoolPolicy::default(),
     ));
 
-    router(ApiState::with_pool_manager_and_executor(
+    router(ApiState::with_pool_manager_executor_and_connection_tester(
         agent,
         store,
         pool_manager,
         false,
         sql_execution,
         executor,
+        Arc::new(FakeManagedDatabaseConnectionTester),
     ))
 }
 
@@ -1326,6 +1390,175 @@ async fn managed_database_crud_is_bearer_protected() {
         .unwrap();
 
     assert_eq!(delete_response.status(), StatusCode::NO_CONTENT);
+}
+
+#[tokio::test]
+async fn current_managed_database_can_be_set_read_and_cleared() {
+    let app = test_app();
+    create_test_database(&app).await;
+
+    let initial_response = app
+        .clone()
+        .oneshot(auth_request("/api/v1/managed-databases/current"))
+        .await
+        .unwrap();
+    assert_eq!(initial_response.status(), StatusCode::OK);
+    let payload = response_json(initial_response).await;
+    assert!(payload["database"].is_null());
+
+    let set_response = app
+        .clone()
+        .oneshot(auth_json_request(
+            "PUT",
+            "/api/v1/managed-databases/current",
+            json!({
+                "managed_database_id": "db-1"
+            }),
+        ))
+        .await
+        .unwrap();
+    assert_eq!(set_response.status(), StatusCode::OK);
+    let payload = response_json(set_response).await;
+    assert_eq!(payload["database"]["id"], "db-1");
+
+    let current_response = app
+        .clone()
+        .oneshot(auth_request("/api/v1/managed-databases/current"))
+        .await
+        .unwrap();
+    assert_eq!(current_response.status(), StatusCode::OK);
+    let payload = response_json(current_response).await;
+    assert_eq!(payload["database"]["name"], "Warehouse");
+
+    let clear_response = app
+        .clone()
+        .oneshot(
+            Request::builder()
+                .method("DELETE")
+                .uri("/api/v1/managed-databases/current")
+                .header(AUTHORIZATION, format!("Bearer {VALID_TOKEN}"))
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(clear_response.status(), StatusCode::NO_CONTENT);
+
+    let current_response = app
+        .oneshot(auth_request("/api/v1/managed-databases/current"))
+        .await
+        .unwrap();
+    let payload = response_json(current_response).await;
+    assert!(payload["database"].is_null());
+}
+
+#[tokio::test]
+async fn current_managed_database_requires_authentication_and_existing_database() {
+    let app = test_app();
+
+    let unauthenticated_response = app
+        .clone()
+        .oneshot(
+            Request::builder()
+                .method("PUT")
+                .uri("/api/v1/managed-databases/current")
+                .header(CONTENT_TYPE, "application/json")
+                .body(Body::from(
+                    json!({
+                        "managed_database_id": "db-1"
+                    })
+                    .to_string(),
+                ))
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(unauthenticated_response.status(), StatusCode::UNAUTHORIZED);
+
+    let missing_response = app
+        .oneshot(auth_json_request(
+            "PUT",
+            "/api/v1/managed-databases/current",
+            json!({
+                "managed_database_id": "db-missing"
+            }),
+        ))
+        .await
+        .unwrap();
+    assert_eq!(missing_response.status(), StatusCode::NOT_FOUND);
+}
+
+#[tokio::test]
+async fn deleting_current_managed_database_clears_current_selection() {
+    let app = test_app();
+    create_test_database(&app).await;
+
+    let set_response = app
+        .clone()
+        .oneshot(auth_json_request(
+            "PUT",
+            "/api/v1/managed-databases/current",
+            json!({
+                "managed_database_id": "db-1"
+            }),
+        ))
+        .await
+        .unwrap();
+    assert_eq!(set_response.status(), StatusCode::OK);
+
+    let delete_response = app
+        .clone()
+        .oneshot(
+            Request::builder()
+                .method("DELETE")
+                .uri("/api/v1/managed-databases/db-1")
+                .header(AUTHORIZATION, format!("Bearer {VALID_TOKEN}"))
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(delete_response.status(), StatusCode::NO_CONTENT);
+
+    let current_response = app
+        .oneshot(auth_request("/api/v1/managed-databases/current"))
+        .await
+        .unwrap();
+    let payload = response_json(current_response).await;
+    assert!(payload["database"].is_null());
+}
+
+#[tokio::test]
+async fn managed_database_test_connection_uses_managed_database_pool() {
+    let app = test_app();
+    create_test_database(&app).await;
+
+    let response = app
+        .oneshot(auth_json_request(
+            "POST",
+            "/api/v1/managed-databases/db-1/test-connection",
+            json!({}),
+        ))
+        .await
+        .unwrap();
+
+    assert_eq!(response.status(), StatusCode::OK);
+    let payload = response_json(response).await;
+    assert_eq!(payload["ok"], true);
+}
+
+#[tokio::test]
+async fn managed_database_test_connection_returns_not_found_for_missing_database() {
+    let response = test_app()
+        .oneshot(auth_json_request(
+            "POST",
+            "/api/v1/managed-databases/db-missing/test-connection",
+            json!({}),
+        ))
+        .await
+        .unwrap();
+
+    assert_eq!(response.status(), StatusCode::NOT_FOUND);
 }
 
 #[tokio::test]

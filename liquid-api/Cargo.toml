@@ -15,6 +15,7 @@ liquid-sql.workspace = true
 liquid-storage.workspace = true
 serde.workspace = true
 serde_json.workspace = true
+sqlx.workspace = true
 tokio.workspace = true
 tower-http.workspace = true
 tracing.workspace = true
@@ -22,6 +23,5 @@ tracing.workspace = true
 [dev-dependencies]
 async-trait.workspace = true
 serde_json.workspace = true
-sqlx.workspace = true
 time.workspace = true
 tower = { workspace = true, features = ["util"] }

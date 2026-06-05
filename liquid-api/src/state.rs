@@ -6,9 +6,13 @@ use liquid_agent::{
 };
 use liquid_core::{ManagedDatabaseConnectionLoader, ManagedDatabasePoolPolicy};
 use liquid_storage::{LiquidStore, ManagedDatabasePoolManager};
+use sqlx::PgPool;
 
 pub type ApprovedSqlExecutionFuture<'a> =
     Pin<Box<dyn Future<Output = anyhow::Result<ApprovedWriteExecutionResult>> + Send + 'a>>;
+
+pub type ManagedDatabaseConnectionTestFuture<'a> =
+    Pin<Box<dyn Future<Output = anyhow::Result<()>> + Send + 'a>>;
 
 pub trait ApprovedSqlExecutor: Send + Sync {
     fn execute<'a>(
@@ -16,6 +20,10 @@ pub trait ApprovedSqlExecutor: Send + Sync {
         config: PostgresToolConfig,
         sql: &'a str,
     ) -> ApprovedSqlExecutionFuture<'a>;
+}
+
+pub trait ManagedDatabaseConnectionTester: Send + Sync {
+    fn test<'a>(&'a self, pool: PgPool) -> ManagedDatabaseConnectionTestFuture<'a>;
 }
 
 #[derive(Debug, Default)]
@@ -31,6 +39,22 @@ impl ApprovedSqlExecutor for DefaultApprovedSqlExecutor {
     }
 }
 
+#[derive(Debug, Default)]
+pub struct DefaultManagedDatabaseConnectionTester;
+
+impl ManagedDatabaseConnectionTester for DefaultManagedDatabaseConnectionTester {
+    fn test<'a>(&'a self, pool: PgPool) -> ManagedDatabaseConnectionTestFuture<'a> {
+        Box::pin(async move {
+            let mut connection = pool.acquire().await?;
+            sqlx::query_scalar::<_, i32>("select 1")
+                .fetch_one(&mut *connection)
+                .await?;
+
+            Ok(())
+        })
+    }
+}
+
 #[derive(Clone)]
 pub struct ApiState {
     pub(crate) agent: Arc<dyn SqlAuditAgent>,
@@ -40,6 +64,7 @@ pub struct ApiState {
     pub(crate) sql_execution: PostgresToolExecutionMode,
     pub(crate) approved_write_execution_enabled: bool,
     pub(crate) approved_sql_executor: Arc<dyn ApprovedSqlExecutor>,
+    pub(crate) managed_database_connection_tester: Arc<dyn ManagedDatabaseConnectionTester>,
 }
 
 impl ApiState {
@@ -92,6 +117,29 @@ impl ApiState {
     where
         S: LiquidStore + 'static,
     {
+        Self::with_pool_manager_executor_and_connection_tester(
+            agent,
+            store,
+            managed_database_pools,
+            sql_metadata_required,
+            sql_execution,
+            approved_sql_executor,
+            Arc::new(DefaultManagedDatabaseConnectionTester),
+        )
+    }
+
+    pub fn with_pool_manager_executor_and_connection_tester<S>(
+        agent: Arc<dyn SqlAuditAgent>,
+        store: Arc<S>,
+        managed_database_pools: Arc<ManagedDatabasePoolManager>,
+        sql_metadata_required: bool,
+        sql_execution: PostgresToolExecutionMode,
+        approved_sql_executor: Arc<dyn ApprovedSqlExecutor>,
+        managed_database_connection_tester: Arc<dyn ManagedDatabaseConnectionTester>,
+    ) -> Self
+    where
+        S: LiquidStore + 'static,
+    {
         Self {
             agent,
             store,
@@ -103,6 +151,7 @@ impl ApiState {
             ),
             sql_execution: managed_database_audit_execution(sql_execution),
             approved_sql_executor,
+            managed_database_connection_tester,
         }
     }
 }

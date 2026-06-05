@@ -31,6 +31,17 @@ pub trait LiquidStore: Send + Sync {
         &self,
         owner_user_id: &str,
     ) -> Result<Vec<ManagedDatabase>, StorageError>;
+    async fn get_current_managed_database(
+        &self,
+        owner_user_id: &str,
+    ) -> Result<Option<ManagedDatabase>, StorageError>;
+    async fn set_current_managed_database(
+        &self,
+        owner_user_id: &str,
+        managed_database_id: &str,
+    ) -> Result<ManagedDatabase, StorageError>;
+    async fn clear_current_managed_database(&self, owner_user_id: &str)
+    -> Result<(), StorageError>;
     async fn create_managed_database(
         &self,
         owner_user_id: &str,

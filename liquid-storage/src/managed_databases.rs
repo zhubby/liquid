@@ -31,6 +31,97 @@ pub(crate) async fn list_managed_databases(
     rows.into_iter().map(ManagedDatabase::try_from).collect()
 }
 
+pub(crate) async fn get_current_managed_database(
+    storage: &Storage,
+    owner_user_id: &str,
+) -> Result<Option<ManagedDatabase>, StorageError> {
+    let row = sqlx::query_as::<_, ManagedDatabaseRow>(
+        r#"
+        select managed_databases.id::text, managed_databases.name, managed_databases.engine,
+               managed_databases.host, managed_databases.port,
+               managed_databases.database_name, managed_databases.username,
+               managed_databases.ssl_mode,
+               managed_databases.encrypted_password <> '' as has_password
+        from user_managed_database_preferences
+        join managed_databases
+          on managed_databases.id = user_managed_database_preferences.current_managed_database_id
+         and managed_databases.owner_user_id = user_managed_database_preferences.owner_user_id
+        where user_managed_database_preferences.owner_user_id = $1::uuid
+        "#,
+    )
+    .bind(owner_user_id)
+    .fetch_optional(&storage.pool)
+    .await
+    .map_err(map_database_error)?;
+
+    row.map(ManagedDatabase::try_from).transpose()
+}
+
+pub(crate) async fn set_current_managed_database(
+    storage: &Storage,
+    owner_user_id: &str,
+    managed_database_id: &str,
+) -> Result<ManagedDatabase, StorageError> {
+    let mut transaction = storage.pool.begin().await?;
+    let row = sqlx::query_as::<_, ManagedDatabaseRow>(
+        r#"
+        select id::text, name, engine, host, port, database_name, username, ssl_mode,
+               encrypted_password <> '' as has_password
+        from managed_databases
+        where id = $1::uuid
+          and owner_user_id = $2::uuid
+        "#,
+    )
+    .bind(managed_database_id)
+    .bind(owner_user_id)
+    .fetch_optional(&mut *transaction)
+    .await
+    .map_err(map_database_error)?;
+
+    let Some(row) = row else {
+        return Err(StorageError::NotFound);
+    };
+
+    sqlx::query(
+        r#"
+        insert into user_managed_database_preferences (
+            owner_user_id, current_managed_database_id, updated_at
+        )
+        values ($1::uuid, $2::uuid, now())
+        on conflict (owner_user_id) do update
+        set current_managed_database_id = excluded.current_managed_database_id,
+            updated_at = now()
+        "#,
+    )
+    .bind(owner_user_id)
+    .bind(managed_database_id)
+    .execute(&mut *transaction)
+    .await
+    .map_err(map_database_error)?;
+
+    transaction.commit().await?;
+
+    ManagedDatabase::try_from(row)
+}
+
+pub(crate) async fn clear_current_managed_database(
+    storage: &Storage,
+    owner_user_id: &str,
+) -> Result<(), StorageError> {
+    sqlx::query(
+        r#"
+        delete from user_managed_database_preferences
+        where owner_user_id = $1::uuid
+        "#,
+    )
+    .bind(owner_user_id)
+    .execute(&storage.pool)
+    .await
+    .map_err(map_database_error)?;
+
+    Ok(())
+}
+
 pub(crate) async fn create_managed_database(
     storage: &Storage,
     owner_user_id: &str,
