@@ -196,10 +196,10 @@ pub(crate) async fn list_sql_audits(
         r#"
         select {SQL_AUDIT_COLUMNS}
         from sql_audits
-        where owner_user_id = $1::uuid
-          and ($2::uuid is null or managed_database_id = $2::uuid)
-          and ($3::text is null or status = $3)
-        order by created_at desc
+        where sql_audits.owner_user_id = $1::uuid
+          and ($2::uuid is null or sql_audits.managed_database_id = $2::uuid)
+          and ($3::text is null or sql_audits.status = $3)
+        order by sql_audits.created_at desc
         limit $4
         "#,
     );

@@ -1,17 +1,8 @@
 export type { AgentAction } from "./generated/api-types/AgentAction";
-export type { AgentActionDecisionRequest } from "./generated/api-types/AgentActionDecisionRequest";
 export type { AgentActionKind } from "./generated/api-types/AgentActionKind";
 export type { AgentActionStatus } from "./generated/api-types/AgentActionStatus";
 export type { AgentActiveView } from "./generated/api-types/AgentActiveView";
-export type { AgentCapabilitiesResponse } from "./generated/api-types/AgentCapabilitiesResponse";
-export type { AgentCapability } from "./generated/api-types/AgentCapability";
-export type { AgentConversation } from "./generated/api-types/AgentConversation";
-export type { AgentDashboardContext } from "./generated/api-types/AgentDashboardContext";
 export type { AgentDateRange } from "./generated/api-types/AgentDateRange";
-export type {
-  AgentEventRecord,
-  AgentEventRecord as AgentEvent,
-} from "./generated/api-types/AgentEventRecord";
 export type { AgentEventType } from "./generated/api-types/AgentEventType";
 export type { AgentMessage } from "./generated/api-types/AgentMessage";
 export type { AgentMessageRole } from "./generated/api-types/AgentMessageRole";
@@ -22,9 +13,22 @@ export type { ApproveSqlAuditRequest } from "./generated/api-types/ApproveSqlAud
 export type { AuditSummary } from "./generated/api-types/AuditSummary";
 export type { AuditTrendPoint } from "./generated/api-types/AuditTrendPoint";
 export type { AuthResponse } from "./generated/api-types/AuthResponse";
+export type { ChatAction } from "./generated/api-types/ChatAction";
+export type { ChatActionDecisionRequest } from "./generated/api-types/ChatActionDecisionRequest";
+export type { ChatActionPreview } from "./generated/api-types/ChatActionPreview";
+export type { ChatConversation } from "./generated/api-types/ChatConversation";
+export type { ChatErrorCode } from "./generated/api-types/ChatErrorCode";
+export type { ChatManagedDatabaseSummary } from "./generated/api-types/ChatManagedDatabaseSummary";
+export type { ChatMessage } from "./generated/api-types/ChatMessage";
+export type { ChatMessagePart } from "./generated/api-types/ChatMessagePart";
+export type { ChatMessageStatus } from "./generated/api-types/ChatMessageStatus";
+export type { ChatStreamEvent } from "./generated/api-types/ChatStreamEvent";
+export type { ChatStreamStage } from "./generated/api-types/ChatStreamStage";
+export type { ChatTurn } from "./generated/api-types/ChatTurn";
+export type { ChatTurnDashboardContext } from "./generated/api-types/ChatTurnDashboardContext";
 export type { CreateAgentActionRequest } from "./generated/api-types/CreateAgentActionRequest";
-export type { CreateAgentConversationRequest } from "./generated/api-types/CreateAgentConversationRequest";
-export type { CreateAgentTurnRequest } from "./generated/api-types/CreateAgentTurnRequest";
+export type { CreateChatConversationRequest } from "./generated/api-types/CreateChatConversationRequest";
+export type { CreateChatTurnRequest } from "./generated/api-types/CreateChatTurnRequest";
 export type { CreateManagedDatabaseRequest } from "./generated/api-types/CreateManagedDatabaseRequest";
 export type { CreateSqlAuditRequest } from "./generated/api-types/CreateSqlAuditRequest";
 export type { CurrentManagedDatabaseResponse } from "./generated/api-types/CurrentManagedDatabaseResponse";
@@ -57,7 +61,7 @@ export type { SqlAuditReport } from "./generated/api-types/SqlAuditReport";
 export type { SqlAuditRequest } from "./generated/api-types/SqlAuditRequest";
 export type { SqlAuditStatus } from "./generated/api-types/SqlAuditStatus";
 export type { SqlStatementKind } from "./generated/api-types/SqlStatementKind";
-export type { UpdateAgentConversationRequest } from "./generated/api-types/UpdateAgentConversationRequest";
+export type { UpdateChatConversationRequest } from "./generated/api-types/UpdateChatConversationRequest";
 export type { UpdateCurrentUserRequest } from "./generated/api-types/UpdateCurrentUserRequest";
 export type { UpdateLlmProviderSettingsRequest } from "./generated/api-types/UpdateLlmProviderSettingsRequest";
 export type { UpdateManagedDatabaseRequest } from "./generated/api-types/UpdateManagedDatabaseRequest";

@@ -54,6 +54,14 @@ payload,
 created_at
 "#;
 
+const AGENT_EVENT_COLUMNS_QUALIFIED: &str = r#"
+e.seq,
+e.turn_id::text,
+e.event_type,
+e.payload,
+e.created_at
+"#;
+
 const AGENT_ACTION_COLUMNS: &str = r#"
 id::text,
 conversation_id::text,
@@ -201,21 +209,21 @@ pub(crate) async fn list_agent_messages(
     let rows = sqlx::query_as::<_, AgentMessageRow>(&format!(
         r#"
         with before_message as (
-            select created_at, id
-            from agent_messages
-            where id = $4::uuid
-              and conversation_id = $1::uuid
-              and owner_user_id = $2::uuid
+            select before_agent_messages.created_at, before_agent_messages.id
+            from agent_messages before_agent_messages
+            where before_agent_messages.id = $4::uuid
+              and before_agent_messages.conversation_id = $1::uuid
+              and before_agent_messages.owner_user_id = $2::uuid
         )
         select {AGENT_MESSAGE_COLUMNS}
         from agent_messages
-        where conversation_id = $1::uuid
-          and owner_user_id = $2::uuid
+        where agent_messages.conversation_id = $1::uuid
+          and agent_messages.owner_user_id = $2::uuid
           and (
             $4::uuid is null
-            or (created_at, id) < (select created_at, id from before_message)
+            or (agent_messages.created_at, agent_messages.id) < (select before_message.created_at, before_message.id from before_message)
           )
-        order by created_at desc, id desc
+        order by agent_messages.created_at desc, agent_messages.id desc
         limit $3
         "#
     ))
@@ -480,7 +488,7 @@ pub(crate) async fn list_agent_turn_events(
 ) -> Result<Vec<AgentEventRecord>, StorageError> {
     let rows = sqlx::query_as::<_, AgentEventRow>(&format!(
         r#"
-        select {AGENT_EVENT_COLUMNS}
+        select {AGENT_EVENT_COLUMNS_QUALIFIED}
         from agent_turn_events e
         join agent_turns t on t.id = e.turn_id
         where e.turn_id = $1::uuid
@@ -569,10 +577,10 @@ pub(crate) async fn list_agent_actions(
         r#"
         select {AGENT_ACTION_COLUMNS}
         from agent_actions
-        where owner_user_id = $1::uuid
-          and ($2::uuid is null or conversation_id = $2::uuid)
-          and ($3::text is null or status = $3)
-        order by created_at desc
+        where agent_actions.owner_user_id = $1::uuid
+          and ($2::uuid is null or agent_actions.conversation_id = $2::uuid)
+          and ($3::text is null or agent_actions.status = $3)
+        order by agent_actions.created_at desc
         limit 100
         "#
     ))

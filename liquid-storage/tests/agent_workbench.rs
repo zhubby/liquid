@@ -56,6 +56,13 @@ async fn agent_workbench_store_persists_turn_events_and_actions() {
         .unwrap();
     assert_eq!(event.seq, 1);
 
+    let events = storage
+        .list_agent_turn_events(&auth.user.id, &turn.id, 0)
+        .await
+        .unwrap();
+    assert_eq!(events.len(), 1);
+    assert_eq!(events[0].event_type, AgentEventType::TurnStarted);
+
     let assistant = storage
         .append_agent_message(
             &auth.user.id,

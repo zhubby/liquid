@@ -2,7 +2,6 @@
 
 import {
   type CSSProperties,
-  type FormEvent,
   type MouseEvent,
   type MouseEventHandler,
   type PointerEvent,
@@ -15,7 +14,6 @@ import {
 } from "react";
 import {
   Activity,
-  AlertTriangle,
   Bot,
   CheckCircle2,
   ChevronDown,
@@ -23,17 +21,13 @@ import {
   FileText,
   Loader2,
   LogOut,
-  MessageSquare,
   PanelsLeftRight,
   Plus,
   Search,
-  Send,
   ShieldCheck,
   Sparkles,
   Table2,
   TrendingUp,
-  Trash2,
-  X,
 } from "lucide-react";
 import { toast } from "sonner";
 import {
@@ -57,22 +51,16 @@ import {
   CardHeader,
   CardTitle,
 } from "@/components/ui/card";
+import { ChatPanel } from "@/components/chat-workspace";
 import {
-  type AgentAction,
-  type AgentConversation,
-  type AgentEvent,
-  type AgentMessage,
-  type AgentTurn,
+  type ChatConversation,
   type ManagedDatabase,
   type PublicUser,
-  type UpdateAgentConversationRequest,
   apiRequest,
-  apiStream,
 } from "@/lib/api";
-import { type Locale, useI18n } from "@/lib/i18n";
+import { useI18n } from "@/lib/i18n";
 import { cn } from "@/lib/utils";
 
-type MessageRole = "assistant" | "user";
 type RiskLevel = "low" | "medium" | "high" | "critical";
 type DatasetStatus = "normal" | "watch" | "needsAction";
 type MetricTone = "primary" | "success" | "warning" | "danger";
@@ -102,15 +90,6 @@ type UpdatedAtKey =
   | "twentyFourMinutes"
   | "fortyTwoMinutes"
   | "oneHour";
-
-type ChatMessage = {
-  id: string;
-  role: MessageRole;
-  content: string;
-  time: string;
-  metric?: string;
-  pending?: boolean;
-};
 
 type WorkspaceMetric = {
   label: string;
@@ -252,9 +231,9 @@ export function AuditDashboard({
   const workspaceRef = useRef<HTMLDivElement>(null);
   const [aiWidth, setAiWidth] = useState(DEFAULT_AI_PERCENT);
   const [isDragging, setIsDragging] = useState(false);
-  const [conversations, setConversations] = useState<AgentConversation[]>([]);
+  const [conversations, setConversations] = useState<ChatConversation[]>([]);
   const [activeConversation, setActiveConversation] =
-    useState<AgentConversation | null>(null);
+    useState<ChatConversation | null>(null);
   const [isWorkspaceLoading, setIsWorkspaceLoading] = useState(true);
   const [isCreatingWorkspace, setIsCreatingWorkspace] = useState(false);
   const [isDeletingWorkspace, setIsDeletingWorkspace] = useState(false);
@@ -274,13 +253,13 @@ export function AuditDashboard({
       setIsWorkspaceLoading(true);
 
       try {
-        const existingConversations = await apiRequest<AgentConversation[]>(
-          "/api/v1/agent/conversations",
+        const existingConversations = await apiRequest<ChatConversation[]>(
+          "/api/v1/chat/conversations",
           { token },
         );
         const initialConversation =
           existingConversations[0] ??
-          (await apiRequest<AgentConversation>("/api/v1/agent/conversations", {
+          (await apiRequest<ChatConversation>("/api/v1/chat/conversations", {
             method: "POST",
             token,
             body: { title: newWorkspaceTitle(t.workspace.defaultTitlePrefix) },
@@ -324,8 +303,8 @@ export function AuditDashboard({
     setIsCreatingWorkspace(true);
 
     try {
-      const nextConversation = await apiRequest<AgentConversation>(
-        "/api/v1/agent/conversations",
+      const nextConversation = await apiRequest<ChatConversation>(
+        "/api/v1/chat/conversations",
         {
           method: "POST",
           token,
@@ -355,14 +334,14 @@ export function AuditDashboard({
   ]);
 
   const handleSelectWorkspace = useCallback(
-    (conversation: AgentConversation) => {
+    (conversation: ChatConversation) => {
       setActiveConversation(conversation);
     },
     [],
   );
 
   const handleConversationUpdated = useCallback(
-    (updatedConversation: AgentConversation) => {
+    (updatedConversation: ChatConversation) => {
       setConversations((current) =>
         current.map((conversation) =>
           conversation.id === updatedConversation.id
@@ -386,13 +365,10 @@ export function AuditDashboard({
       setIsDeletingWorkspace(true);
 
       try {
-        await apiRequest<void>(
-          `/api/v1/agent/conversations/${conversationId}`,
-          {
-            method: "DELETE",
-            token,
-          },
-        );
+        await apiRequest<void>(`/api/v1/chat/conversations/${conversationId}`, {
+          method: "DELETE",
+          token,
+        });
 
         const remainingConversations = conversations.filter(
           (conversation) => conversation.id !== conversationId,
@@ -404,8 +380,8 @@ export function AuditDashboard({
             : activeConversation;
 
         if (nextConversations.length === 0) {
-          const replacementConversation = await apiRequest<AgentConversation>(
-            "/api/v1/agent/conversations",
+          const replacementConversation = await apiRequest<ChatConversation>(
+            "/api/v1/chat/conversations",
             {
               method: "POST",
               token,
@@ -519,7 +495,7 @@ export function AuditDashboard({
             <WorkspaceLoadingPanel />
           ) : (
             <>
-              <AiPanel
+              <ChatPanel
                 key={`ai-${activeConversation.id}`}
                 token={token}
                 selectedDatabase={selectedDatabase}
@@ -569,12 +545,12 @@ function IconSidebar({
   onDatabaseExit,
 }: {
   user: PublicUser;
-  conversations: AgentConversation[];
+  conversations: ChatConversation[];
   activeConversationId: string | null;
   isCreatingWorkspace: boolean;
   isWorkspaceLoading: boolean;
   onCreateWorkspace: () => void;
-  onSelectWorkspace: (conversation: AgentConversation) => void;
+  onSelectWorkspace: (conversation: ChatConversation) => void;
   onDatabaseExit: () => void;
 }) {
   const { t } = useI18n();
@@ -676,703 +652,6 @@ function SidebarIcon({
       {icon}
     </Button>
   );
-}
-
-function AiPanel({
-  token,
-  selectedDatabase,
-  conversation,
-  isDeletingWorkspace,
-  onConversationUpdated,
-  onDeleteConversation,
-}: {
-  token: string;
-  selectedDatabase: ManagedDatabase;
-  conversation: AgentConversation;
-  isDeletingWorkspace: boolean;
-  onConversationUpdated: (conversation: AgentConversation) => void;
-  onDeleteConversation: (conversationId: string) => void | Promise<void>;
-}) {
-  const { locale, t } = useI18n();
-  const [messages, setMessages] = useState<ChatMessage[]>([]);
-  const [actions, setActions] = useState<AgentAction[]>([]);
-  const [titleInput, setTitleInput] = useState(conversation.title);
-  const [isSavingTitle, setIsSavingTitle] = useState(false);
-  const [isDeleteDialogOpen, setIsDeleteDialogOpen] = useState(false);
-  const [input, setInput] = useState("");
-  const [isLoading, setIsLoading] = useState(true);
-  const [isSending, setIsSending] = useState(false);
-  const activeStreamRef = useRef<AbortController | null>(null);
-  const activeConversationIdRef = useRef(conversation.id);
-  const activeSendRef = useRef<string | null>(null);
-  const loadVersionRef = useRef(0);
-
-  const loadMessagesAndActions = useCallback(
-    async (conversationId: string) => {
-      const [nextMessages, nextActions] = await Promise.all([
-        apiRequest<AgentMessage[]>(
-          `/api/v1/agent/conversations/${conversationId}/messages`,
-          { token },
-        ),
-        apiRequest<AgentAction[]>(
-          `/api/v1/agent/actions?conversation_id=${conversationId}`,
-          { token },
-        ),
-      ]);
-
-      return {
-        actions: nextActions,
-        messages: nextMessages.map((message) =>
-          chatMessageFromAgentMessage(message, locale),
-        ),
-      };
-    },
-    [locale, token],
-  );
-
-  useEffect(() => {
-    setTitleInput(conversation.title);
-  }, [conversation.id, conversation.title]);
-
-  useEffect(() => {
-    let cancelled = false;
-    const loadVersion = loadVersionRef.current + 1;
-
-    loadVersionRef.current = loadVersion;
-    activeConversationIdRef.current = conversation.id;
-    activeSendRef.current = null;
-    activeStreamRef.current?.abort();
-    activeStreamRef.current = null;
-    setInput("");
-    setIsSending(false);
-    setMessages([]);
-    setActions([]);
-    setIsLoading(true);
-
-    const loadConversationState = async () => {
-      try {
-        const nextState = await loadMessagesAndActions(conversation.id);
-
-        if (cancelled || loadVersionRef.current !== loadVersion) {
-          return;
-        }
-
-        setMessages(nextState.messages);
-        setActions(nextState.actions);
-      } catch (error) {
-        if (!cancelled && loadVersionRef.current === loadVersion) {
-          toast.error(
-            error instanceof Error ? error.message : t.workspace.agentLoadFailed,
-          );
-        }
-      } finally {
-        if (!cancelled && loadVersionRef.current === loadVersion) {
-          setIsLoading(false);
-        }
-      }
-    };
-
-    void loadConversationState();
-
-    return () => {
-      cancelled = true;
-      activeSendRef.current = null;
-      activeStreamRef.current?.abort();
-      activeStreamRef.current = null;
-    };
-  }, [conversation.id, loadMessagesAndActions, t.workspace.agentLoadFailed]);
-
-  const mergeAction = useCallback((action: AgentAction) => {
-    setActions((current) => {
-      if (current.some((item) => item.id === action.id)) {
-        return current.map((item) => (item.id === action.id ? action : item));
-      }
-
-      return [action, ...current];
-    });
-  }, []);
-
-  const commitWorkspaceTitle = useCallback(async () => {
-    const title = titleInput.trim();
-
-    if (!title) {
-      setTitleInput(conversation.title);
-      return;
-    }
-
-    if (title === conversation.title || isSavingTitle) {
-      return;
-    }
-
-    setIsSavingTitle(true);
-
-    try {
-      const body: UpdateAgentConversationRequest = { title };
-      const updatedConversation = await apiRequest<AgentConversation>(
-        `/api/v1/agent/conversations/${conversation.id}`,
-        {
-          method: "PATCH",
-          token,
-          body,
-        },
-      );
-
-      setTitleInput(updatedConversation.title);
-      onConversationUpdated(updatedConversation);
-    } catch (error) {
-      setTitleInput(conversation.title);
-      toast.error(
-        error instanceof Error ? error.message : t.workspace.renameFailed,
-      );
-    } finally {
-      setIsSavingTitle(false);
-    }
-  }, [
-    conversation.id,
-    conversation.title,
-    isSavingTitle,
-    onConversationUpdated,
-    t.workspace.renameFailed,
-    titleInput,
-    token,
-  ]);
-
-  const submitPrompt = useCallback(
-    async (prompt?: string) => {
-      const content = (prompt ?? input).trim();
-
-      if (!content || isSending || activeSendRef.current) {
-        return;
-      }
-
-      const conversationId = conversation.id;
-      setInput("");
-      setIsSending(true);
-      activeStreamRef.current?.abort();
-
-      const localUserMessage: ChatMessage = {
-        id: `local-user-${Date.now()}`,
-        role: "user",
-        content,
-        time: nowTimeLabel(locale),
-        pending: true,
-      };
-      const sendKey = `${conversationId}:${localUserMessage.id}`;
-
-      activeSendRef.current = sendKey;
-      setMessages((current) => [...current, localUserMessage]);
-
-      try {
-        const turn = await apiRequest<AgentTurn>(
-          `/api/v1/agent/conversations/${conversationId}/turns`,
-          {
-            method: "POST",
-            token,
-            body: {
-              message: content,
-              managed_database_id: selectedDatabase.id,
-              dashboard_context: {
-                active_view: "ai",
-                date_range: "last_7_days",
-              },
-              client_request_id: localUserMessage.id,
-            },
-          },
-        );
-        const controller = new AbortController();
-        activeStreamRef.current = controller;
-
-        await apiStream<AgentEvent>(
-          `/api/v1/agent/turns/${turn.id}/events?after_seq=0`,
-          {
-            token,
-            signal: controller.signal,
-            onEvent: (event) => {
-              if (activeConversationIdRef.current !== conversationId) {
-                return;
-              }
-
-              if (event.type === "assistant_delta") {
-                const assistantContent = eventPayloadString(
-                  event.payload,
-                  "content",
-                );
-
-                if (assistantContent) {
-                  setMessages((current) =>
-                    upsertStreamingAssistantMessage(
-                      current,
-                      turn.id,
-                      assistantContent,
-                      locale,
-                    ),
-                  );
-                }
-              }
-
-              if (event.type === "action_proposed") {
-                const action = eventPayloadAction(event.payload);
-
-                if (action) {
-                  mergeAction(action);
-                }
-              }
-            },
-          },
-        );
-
-        const nextState = await loadMessagesAndActions(conversationId);
-
-        if (
-          activeConversationIdRef.current === conversationId &&
-          activeSendRef.current === sendKey
-        ) {
-          setMessages(nextState.messages);
-          setActions(nextState.actions);
-        }
-      } catch (error) {
-        if (
-          !(error instanceof DOMException && error.name === "AbortError") &&
-          activeConversationIdRef.current === conversationId
-        ) {
-          toast.error(error instanceof Error ? error.message : t.workspace.sendFailed);
-        }
-      } finally {
-        if (activeSendRef.current === sendKey) {
-          activeSendRef.current = null;
-          activeStreamRef.current = null;
-          setIsSending(false);
-        }
-      }
-    },
-    [
-      conversation.id,
-      input,
-      isSending,
-      loadMessagesAndActions,
-      locale,
-      mergeAction,
-      selectedDatabase.id,
-      t.workspace.sendFailed,
-      token,
-    ],
-  );
-
-  const handleSubmit = (event: FormEvent<HTMLFormElement>) => {
-    event.preventDefault();
-    void submitPrompt();
-  };
-
-  const handleActionDecision = async (
-    action: AgentAction,
-    decision: "apply" | "reject",
-  ) => {
-    try {
-      const updated = await apiRequest<AgentAction>(
-        `/api/v1/agent/actions/${action.id}/${decision}`,
-        {
-          method: "POST",
-          token,
-          body: {},
-        },
-      );
-      mergeAction(updated);
-    } catch (error) {
-      toast.error(error instanceof Error ? error.message : t.workspace.actionFailed);
-    }
-  };
-
-  const visibleMessages =
-    messages.length > 0
-      ? messages
-      : [
-          {
-            id: "intro",
-            role: "assistant" as const,
-            content: t.workspace.introMessage(selectedDatabase.name),
-            time: nowTimeLabel(locale),
-          },
-        ];
-  const proposedActions = actions.filter((action) => action.status === "proposed");
-
-  return (
-    <section className="flex min-h-[calc(100vh-1.5rem)] min-w-0 flex-col rounded-lg border bg-card text-card-foreground shadow-sm lg:h-[calc(100vh-1.5rem)]">
-      <header className="flex shrink-0 items-center justify-between gap-3 border-b px-4 py-3">
-        <div className="min-w-0 flex-1">
-          <div className="flex min-w-0 items-center gap-2">
-            <label
-              className="sr-only"
-              htmlFor={`workspace-title-${conversation.id}`}
-            >
-              {t.workspace.workspaceName}
-            </label>
-            <input
-              id={`workspace-title-${conversation.id}`}
-              className="min-w-0 flex-1 truncate rounded-sm bg-transparent text-base font-semibold outline-none transition-colors hover:bg-muted/50 focus-visible:bg-background focus-visible:ring-[3px] focus-visible:ring-ring/50 disabled:opacity-70"
-              value={titleInput}
-              disabled={isSavingTitle}
-              onChange={(event) => setTitleInput(event.target.value)}
-              onBlur={() => void commitWorkspaceTitle()}
-              onKeyDown={(event) => {
-                if (event.key === "Enter") {
-                  event.preventDefault();
-                  event.currentTarget.blur();
-                }
-
-                if (event.key === "Escape") {
-                  setTitleInput(conversation.title);
-                  event.currentTarget.blur();
-                }
-              }}
-            />
-          </div>
-          <div className="mt-1 flex min-w-0 items-center gap-1.5 text-xs text-muted-foreground">
-            <Database className="size-3.5 shrink-0" aria-hidden />
-            <span className="truncate">
-              {selectedDatabase.name} / {selectedDatabase.database}
-            </span>
-          </div>
-        </div>
-        <Button
-          type="button"
-          variant="outline"
-          size="icon"
-          className="size-9 shrink-0 rounded-md text-destructive hover:bg-destructive/10 hover:text-destructive"
-          aria-label={t.workspace.deleteWorkspaceLabel(conversation.title)}
-          title={t.workspace.deleteWorkspaceTitle}
-          disabled={isDeletingWorkspace}
-          onClick={() => setIsDeleteDialogOpen(true)}
-        >
-          {isDeletingWorkspace ? (
-            <Loader2 className="size-4 animate-spin" aria-hidden />
-          ) : (
-            <Trash2 className="size-4" aria-hidden />
-          )}
-        </Button>
-      </header>
-
-      {isDeleteDialogOpen ? (
-        <ConfirmDeleteWorkspaceDialog
-          conversationTitle={conversation.title}
-          isDeleting={isDeletingWorkspace}
-          onCancel={() => setIsDeleteDialogOpen(false)}
-          onConfirm={() => {
-            void onDeleteConversation(conversation.id);
-          }}
-        />
-      ) : null}
-
-      <div className="flex min-h-0 flex-1 flex-col">
-        <div className="flex-1 space-y-4 overflow-y-auto px-4 py-4">
-          {isLoading ? (
-            <div className="flex items-center gap-2 text-sm text-muted-foreground">
-              <Loader2 className="size-4 animate-spin" aria-hidden />
-              {t.workspace.loadingConversation}
-            </div>
-          ) : null}
-          {visibleMessages.map((message) => (
-            <ChatBubble key={message.id} message={message} />
-          ))}
-          {proposedActions.length > 0 ? (
-            <div className="space-y-2">
-              {proposedActions.map((action) => (
-                <AgentActionCard
-                  key={action.id}
-                  action={action}
-                  onApply={() => void handleActionDecision(action, "apply")}
-                  onReject={() => void handleActionDecision(action, "reject")}
-                />
-              ))}
-            </div>
-          ) : null}
-        </div>
-
-        <div className="border-t bg-card px-4 py-3">
-          <div className="mb-3 flex flex-wrap gap-2">
-            {t.workspace.quickPrompts.map((prompt) => (
-              <Button
-                key={prompt}
-                type="button"
-                variant="outline"
-                size="sm"
-                className="h-8 rounded-md px-2.5 text-xs"
-                disabled={isSending || isLoading}
-                onClick={() => void submitPrompt(prompt)}
-              >
-                {prompt}
-              </Button>
-            ))}
-          </div>
-          <form
-            className="flex items-end gap-2 rounded-lg border bg-background p-2 shadow-xs"
-            onSubmit={handleSubmit}
-          >
-            <label className="sr-only" htmlFor="ai-message">
-              {t.workspace.inputLabel}
-            </label>
-            <textarea
-              id="ai-message"
-              className="max-h-32 min-h-16 flex-1 resize-none bg-transparent px-2 py-1.5 text-sm outline-none placeholder:text-muted-foreground"
-              placeholder={t.workspace.inputPlaceholder}
-              value={input}
-              onChange={(event) => setInput(event.target.value)}
-              disabled={isSending || isLoading}
-            />
-            <Button
-              type="submit"
-              size="icon"
-              aria-label={t.workspace.sendQuestion}
-              title={t.workspace.send}
-              disabled={isSending || isLoading || !input.trim()}
-            >
-              {isSending ? (
-                <Loader2 className="size-4 animate-spin" aria-hidden />
-              ) : (
-                <Send className="size-4" aria-hidden />
-              )}
-            </Button>
-          </form>
-        </div>
-      </div>
-    </section>
-  );
-}
-
-function ConfirmDeleteWorkspaceDialog({
-  conversationTitle,
-  isDeleting,
-  onCancel,
-  onConfirm,
-}: {
-  conversationTitle: string;
-  isDeleting: boolean;
-  onCancel: () => void;
-  onConfirm: () => void;
-}) {
-  const { t } = useI18n();
-
-  return (
-    <div
-      className="fixed inset-0 z-50 flex items-center justify-center bg-background/70 p-4"
-      role="dialog"
-      aria-modal="true"
-      aria-labelledby="delete-workspace-title"
-    >
-      <div className="w-full max-w-sm rounded-lg border bg-card p-4 text-card-foreground shadow-lg">
-        <div className="flex items-start gap-3">
-          <div className="flex size-9 shrink-0 items-center justify-center rounded-md border border-destructive/25 bg-destructive/10 text-destructive">
-            <AlertTriangle className="size-4" aria-hidden />
-          </div>
-          <div className="min-w-0">
-            <h2 id="delete-workspace-title" className="text-sm font-semibold">
-              {t.workspace.deleteWorkspaceTitle}
-            </h2>
-            <p className="mt-1 text-sm leading-6 text-muted-foreground">
-              {t.workspace.deleteConfirm(conversationTitle)}
-            </p>
-          </div>
-        </div>
-        <div className="mt-4 flex justify-end gap-2">
-          <Button
-            type="button"
-            variant="outline"
-            size="sm"
-            disabled={isDeleting}
-            onClick={onCancel}
-          >
-            {t.common.cancel}
-          </Button>
-          <Button
-            type="button"
-            variant="destructive"
-            size="sm"
-            disabled={isDeleting}
-            onClick={onConfirm}
-          >
-            {isDeleting ? (
-              <Loader2 className="size-4 animate-spin" aria-hidden />
-            ) : (
-              <Trash2 className="size-4" aria-hidden />
-            )}
-            {t.common.delete}
-          </Button>
-        </div>
-      </div>
-    </div>
-  );
-}
-
-function ChatBubble({ message }: { message: ChatMessage }) {
-  const { t } = useI18n();
-  const isUser = message.role === "user";
-
-  return (
-    <article
-      className={cn("flex gap-3", isUser && "flex-row-reverse text-right")}
-    >
-      <div
-        className={cn(
-          "mt-1 flex size-8 shrink-0 items-center justify-center rounded-md border",
-          isUser
-            ? "bg-primary text-primary-foreground"
-            : "bg-secondary text-secondary-foreground",
-        )}
-      >
-        {isUser ? (
-          <MessageSquare className="size-4" aria-hidden />
-        ) : (
-          <Bot className="size-4" aria-hidden />
-        )}
-      </div>
-      <div className={cn("min-w-0 max-w-[86%]", isUser && "items-end")}>
-        <div
-          className={cn(
-            "rounded-lg border px-3 py-2 text-sm leading-6 shadow-xs",
-            isUser
-              ? "bg-primary text-primary-foreground"
-              : "bg-background text-foreground",
-          )}
-        >
-          {message.content}
-        </div>
-        <div
-          className={cn(
-            "mt-1 flex items-center gap-2 text-xs text-muted-foreground",
-            isUser && "justify-end",
-          )}
-        >
-          <span>{message.time}</span>
-          {message.metric ? (
-            <span className="rounded-sm bg-secondary px-1.5 py-0.5 text-secondary-foreground">
-              {message.metric}
-            </span>
-          ) : null}
-          {message.pending ? <span>{t.workspace.pending}</span> : null}
-        </div>
-      </div>
-    </article>
-  );
-}
-
-function AgentActionCard({
-  action,
-  onApply,
-  onReject,
-}: {
-  action: AgentAction;
-  onApply: () => void;
-  onReject: () => void;
-}) {
-  const { t } = useI18n();
-
-  return (
-    <article className="rounded-lg border bg-background p-3 shadow-xs">
-      <div className="flex items-start justify-between gap-3">
-        <div className="min-w-0">
-          <div className="flex flex-wrap items-center gap-2">
-            <h3 className="text-sm font-medium">{action.title}</h3>
-            <Badge variant="outline" className="h-6 rounded-md">
-              {t.workspace.actionLabels[action.kind]}
-            </Badge>
-          </div>
-          <p className="mt-1 text-xs leading-5 text-muted-foreground">
-            {action.description}
-          </p>
-        </div>
-        <Badge variant="secondary" className="rounded-md">
-          {t.workspace.actionStatuses[action.status]}
-        </Badge>
-      </div>
-      <div className="mt-3 flex flex-wrap gap-2">
-        <Button type="button" size="sm" onClick={onApply}>
-          <CheckCircle2 className="size-4" aria-hidden />
-          {t.workspace.confirm}
-        </Button>
-        <Button type="button" variant="outline" size="sm" onClick={onReject}>
-          <X className="size-4" aria-hidden />
-          {t.workspace.reject}
-        </Button>
-      </div>
-    </article>
-  );
-}
-
-function chatMessageFromAgentMessage(
-  message: AgentMessage,
-  locale: Locale,
-): ChatMessage {
-  return {
-    id: message.id,
-    role: message.role === "user" ? "user" : "assistant",
-    content: message.content,
-    time: timeLabel(message.created_at, locale),
-  };
-}
-
-function upsertStreamingAssistantMessage(
-  messages: ChatMessage[],
-  turnId: string,
-  content: string,
-  locale: Locale,
-): ChatMessage[] {
-  const id = `stream-${turnId}`;
-
-  if (messages.some((message) => message.id === id)) {
-    return messages.map((message) =>
-      message.id === id
-        ? {
-            ...message,
-            content,
-          }
-        : message,
-    );
-  }
-
-  return [
-    ...messages,
-    {
-      id,
-      role: "assistant",
-      content,
-      time: nowTimeLabel(locale),
-      pending: true,
-    },
-  ];
-}
-
-function eventPayloadString(payload: unknown, key: string): string | null {
-  if (!payload || typeof payload !== "object") {
-    return null;
-  }
-
-  const value = (payload as Record<string, unknown>)[key];
-
-  return typeof value === "string" ? value : null;
-}
-
-function eventPayloadAction(payload: unknown): AgentAction | null {
-  if (!payload || typeof payload !== "object") {
-    return null;
-  }
-
-  const value = (payload as Record<string, unknown>).action;
-
-  if (!value || typeof value !== "object") {
-    return null;
-  }
-
-  return value as AgentAction;
-}
-
-function timeLabel(value: string, locale: Locale): string {
-  return new Date(value).toLocaleTimeString(locale, {
-    hour: "2-digit",
-    minute: "2-digit",
-  });
-}
-
-function nowTimeLabel(locale: Locale): string {
-  return timeLabel(new Date().toISOString(), locale);
 }
 
 function SplitHandle({

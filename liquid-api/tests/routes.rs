@@ -1,4 +1,7 @@
-use std::sync::{Arc, Mutex};
+use std::{
+    collections::VecDeque,
+    sync::{Arc, Mutex},
+};
 
 use async_trait::async_trait;
 use axum::{
@@ -26,14 +29,13 @@ use liquid_core::{
     AgentMessage, AgentMessageRole, AgentResourceKind, AgentTurn, AgentTurnStatus,
     ApproveSqlAuditRequest, AuditSummary, AuthResponse, CreateAgentActionRequest,
     CreateAgentConversationRequest, CreateAgentTurnRequest, CreateManagedDatabaseRequest,
-    LlmProviderApiMode, LlmProviderKind, LlmProviderSettings, LoginRequest, ManagedDatabase,
-    ManagedDatabaseConnectionLoader, ManagedDatabaseConnectionLoaderError,
-    ManagedDatabaseConnectionSpec, ManagedDatabaseEngine, ManagedDatabasePoolKey,
-    ManagedDatabasePoolPolicy, ManagedDatabaseSslMode, PublicUser, RegisterRequest,
-    RejectSqlAuditRequest, ResolvedLlmProviderSettings, SqlAuditExecutionResult, SqlAuditRecord,
-    SqlAuditReport, SqlAuditRequest, SqlAuditStatus, UpdateAgentConversationRequest,
-    UpdateCurrentUserRequest, UpdateLlmProviderSettingsRequest, UpdateManagedDatabaseRequest,
-    UpdatePasswordRequest,
+    LlmProviderSettings, LoginRequest, ManagedDatabase, ManagedDatabaseConnectionLoader,
+    ManagedDatabaseConnectionLoaderError, ManagedDatabaseConnectionSpec, ManagedDatabaseEngine,
+    ManagedDatabasePoolKey, ManagedDatabasePoolPolicy, ManagedDatabaseSslMode, PublicUser,
+    RegisterRequest, RejectSqlAuditRequest, ResolvedLlmProviderSettings, SqlAuditExecutionResult,
+    SqlAuditRecord, SqlAuditReport, SqlAuditRequest, SqlAuditStatus,
+    UpdateAgentConversationRequest, UpdateCurrentUserRequest, UpdateLlmProviderSettingsRequest,
+    UpdateManagedDatabaseRequest, UpdatePasswordRequest,
 };
 use liquid_sql::{PgSqlAnalysisRequest, PgSqlStatementKind, analyze_postgres_sql};
 use liquid_storage::{
@@ -1066,42 +1068,162 @@ impl ManagedDatabaseConnectionTester for FakeManagedDatabaseConnectionTester {
 }
 
 async fn spawn_openai_compatible_mock() -> (String, Arc<Mutex<Option<Value>>>) {
+    spawn_openai_compatible_mock_with_content(
+        "{\"summary\":\"User configured model\",\"risk_score\":7,\"findings\":[]}",
+    )
+    .await
+}
+
+async fn spawn_openai_compatible_mock_with_content(
+    content: impl Into<String>,
+) -> (String, Arc<Mutex<Option<Value>>>) {
+    spawn_openai_compatible_mock_with_contents([content.into()]).await
+}
+
+async fn spawn_delayed_openai_compatible_mock_with_content(
+    content: impl Into<String>,
+) -> (
+    String,
+    Arc<Mutex<Option<Value>>>,
+    tokio::sync::oneshot::Sender<()>,
+) {
     let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
     let addr = listener.local_addr().unwrap();
     let captured_body = Arc::new(Mutex::new(None));
     let captured_for_task = captured_body.clone();
+    let (release_response, mut wait_for_release) = tokio::sync::oneshot::channel::<()>();
+    let content = content.into();
 
     tokio::spawn(async move {
-        let Ok((mut socket, _addr)) = listener.accept().await else {
-            return;
-        };
-        let mut buffer = vec![0; 16 * 1024];
-        let Ok(read) = socket.read(&mut buffer).await else {
-            return;
-        };
-        let request = String::from_utf8_lossy(&buffer[..read]);
-        if let Some((_, body)) = request.split_once("\r\n\r\n") {
-            if let Ok(json) = serde_json::from_str::<Value>(body) {
-                *captured_for_task.lock().unwrap() = Some(json);
-            }
-        }
-        let body = json!({
-            "choices": [{
-                "message": {
-                    "content": "{\"summary\":\"User configured model\",\"risk_score\":7,\"findings\":[]}"
+        loop {
+            let Ok((mut socket, _addr)) = listener.accept().await else {
+                return;
+            };
+            let mut buffer = vec![0; 16 * 1024];
+            let Ok(read) = socket.read(&mut buffer).await else {
+                return;
+            };
+            let request = String::from_utf8_lossy(&buffer[..read]);
+            if let Some((_, body)) = request.split_once("\r\n\r\n") {
+                if let Ok(json) = serde_json::from_str::<Value>(body) {
+                    *captured_for_task.lock().unwrap() = Some(json);
                 }
-            }]
-        })
-        .to_string();
-        let response = format!(
-            "HTTP/1.1 200 OK\r\ncontent-type: application/json\r\ncontent-length: {}\r\n\r\n{}",
-            body.len(),
-            body
-        );
-        let _ = socket.write_all(response.as_bytes()).await;
+            }
+
+            let _ = (&mut wait_for_release).await;
+            let body = json!({
+                "choices": [{
+                    "message": {
+                        "content": content
+                    }
+                }]
+            })
+            .to_string();
+            let response = format!(
+                "HTTP/1.1 200 OK\r\ncontent-type: application/json\r\ncontent-length: {}\r\n\r\n{}",
+                body.len(),
+                body
+            );
+            let _ = socket.write_all(response.as_bytes()).await;
+        }
+    });
+
+    (
+        format!("http://{addr}/v1/chat/completions"),
+        captured_body,
+        release_response,
+    )
+}
+
+async fn spawn_openai_compatible_mock_with_contents<I, S>(
+    contents: I,
+) -> (String, Arc<Mutex<Option<Value>>>)
+where
+    I: IntoIterator<Item = S>,
+    S: Into<String>,
+{
+    let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let addr = listener.local_addr().unwrap();
+    let captured_body = Arc::new(Mutex::new(None));
+    let captured_for_task = captured_body.clone();
+    let mut contents = contents
+        .into_iter()
+        .map(Into::into)
+        .collect::<VecDeque<_>>();
+    let fallback_content = contents.back().cloned().unwrap_or_else(|| "{}".to_owned());
+
+    tokio::spawn(async move {
+        loop {
+            let Ok((mut socket, _addr)) = listener.accept().await else {
+                return;
+            };
+            let mut buffer = vec![0; 16 * 1024];
+            let Ok(read) = socket.read(&mut buffer).await else {
+                return;
+            };
+            let request = String::from_utf8_lossy(&buffer[..read]);
+            if let Some((_, body)) = request.split_once("\r\n\r\n") {
+                if let Ok(json) = serde_json::from_str::<Value>(body) {
+                    *captured_for_task.lock().unwrap() = Some(json);
+                }
+            }
+            let content = contents
+                .pop_front()
+                .unwrap_or_else(|| fallback_content.clone());
+            let body = json!({
+                "choices": [{
+                    "message": {
+                        "content": content
+                    }
+                }]
+            })
+            .to_string();
+            let response = format!(
+                "HTTP/1.1 200 OK\r\ncontent-type: application/json\r\ncontent-length: {}\r\n\r\n{}",
+                body.len(),
+                body
+            );
+            let _ = socket.write_all(response.as_bytes()).await;
+        }
     });
 
     (format!("http://{addr}/v1/chat/completions"), captured_body)
+}
+
+async fn configure_workbench_llm_provider(
+    app: &Router,
+    content: impl Into<String>,
+) -> Arc<Mutex<Option<Value>>> {
+    configure_workbench_llm_provider_with_contents(app, [content.into()]).await
+}
+
+async fn configure_workbench_llm_provider_with_contents<I, S>(
+    app: &Router,
+    contents: I,
+) -> Arc<Mutex<Option<Value>>>
+where
+    I: IntoIterator<Item = S>,
+    S: Into<String>,
+{
+    let (base_url, captured_body) = spawn_openai_compatible_mock_with_contents(contents).await;
+    let settings_response = app
+        .clone()
+        .oneshot(auth_json_request(
+            "PUT",
+            "/api/v1/settings/llm-provider",
+            json!({
+                "provider": "openai_compatible",
+                "base_url": base_url,
+                "model": "chat-model",
+                "api_mode": "chat_completions",
+                "api_key": "sk-user"
+            }),
+        ))
+        .await
+        .unwrap();
+    assert_eq!(settings_response.status(), StatusCode::OK);
+
+    captured_body
 }
 
 fn test_app() -> Router {
@@ -1523,10 +1645,10 @@ async fn audit_summary_returns_sample_payload_for_authenticated_user() {
 }
 
 #[tokio::test]
-async fn agent_conversations_require_authentication() {
+async fn chat_conversations_require_authentication() {
     let response = test_app()
         .oneshot(json_request(
-            "/api/v1/agent/conversations",
+            "/api/v1/chat/conversations",
             json!({ "title": "Ops" }),
         ))
         .await
@@ -1536,13 +1658,42 @@ async fn agent_conversations_require_authentication() {
 }
 
 #[tokio::test]
-async fn agent_conversation_can_be_deleted() {
+async fn legacy_agent_routes_are_not_mounted() {
     let app = test_app();
+
+    let list_response = app
+        .clone()
+        .oneshot(auth_request("/api/v1/agent/conversations"))
+        .await
+        .unwrap();
+    assert_eq!(list_response.status(), StatusCode::NOT_FOUND);
+
     let create_response = app
         .clone()
         .oneshot(auth_json_request(
             "POST",
             "/api/v1/agent/conversations",
+            json!({ "title": "Legacy workspace" }),
+        ))
+        .await
+        .unwrap();
+    assert_eq!(create_response.status(), StatusCode::NOT_FOUND);
+
+    let capabilities_response = app
+        .oneshot(auth_request("/api/v1/agent/capabilities"))
+        .await
+        .unwrap();
+    assert_eq!(capabilities_response.status(), StatusCode::NOT_FOUND);
+}
+
+#[tokio::test]
+async fn chat_conversation_can_be_deleted() {
+    let app = test_app();
+    let create_response = app
+        .clone()
+        .oneshot(auth_json_request(
+            "POST",
+            "/api/v1/chat/conversations",
             json!({ "title": "Disposable workspace" }),
         ))
         .await
@@ -1554,7 +1705,7 @@ async fn agent_conversation_can_be_deleted() {
         .oneshot(
             Request::builder()
                 .method("DELETE")
-                .uri("/api/v1/agent/conversations/conversation-1")
+                .uri("/api/v1/chat/conversations/conversation-1")
                 .header(AUTHORIZATION, format!("Bearer {VALID_TOKEN}"))
                 .body(Body::empty())
                 .unwrap(),
@@ -1564,7 +1715,7 @@ async fn agent_conversation_can_be_deleted() {
     assert_eq!(delete_response.status(), StatusCode::NO_CONTENT);
 
     let list_response = app
-        .oneshot(auth_request("/api/v1/agent/conversations"))
+        .oneshot(auth_request("/api/v1/chat/conversations"))
         .await
         .unwrap();
     assert_eq!(list_response.status(), StatusCode::OK);
@@ -1573,35 +1724,51 @@ async fn agent_conversation_can_be_deleted() {
 }
 
 #[tokio::test]
-async fn agent_turn_persists_events_and_proposed_action() {
+async fn chat_turn_streams_typed_events_and_action() {
     let app = test_app();
     create_test_database(&app).await;
+    configure_workbench_llm_provider(
+        &app,
+        r#"{
+            "message": "I prepared a Markdown audit.\n\n```sql\nselect * from users\n```",
+            "actions": [{
+                "kind": "create_sql_audit",
+                "title": "Create SQL audit",
+                "description": "Review SQL from chat",
+                "sql": "select * from users",
+                "context": "chat requested review"
+            }]
+        }"#,
+    )
+    .await;
 
     let conversation_response = app
         .clone()
         .oneshot(auth_json_request(
             "POST",
-            "/api/v1/agent/conversations",
-            json!({ "title": "SQL review" }),
+            "/api/v1/chat/conversations",
+            json!({ "title": "Chat review" }),
         ))
         .await
         .unwrap();
     assert_eq!(conversation_response.status(), StatusCode::OK);
     let conversation = response_json(conversation_response).await;
-    assert_eq!(conversation["title"], "SQL review");
+    assert_eq!(conversation["title"], "Chat review");
+    assert_eq!(conversation["selected_database"]["id"], "db-1");
 
     let turn_response = app
         .clone()
         .oneshot(auth_json_request(
             "POST",
-            "/api/v1/agent/conversations/conversation-1/turns",
+            "/api/v1/chat/conversations/conversation-1/turns",
             json!({
-                "message": "select * from users",
+                "message": "audit this query",
                 "managed_database_id": "db-1",
                 "dashboard_context": {
                     "active_view": "ai",
                     "date_range": "last_7_days"
-                }
+                },
+                "client_request_id": "client-chat-1"
             }),
         ))
         .await
@@ -1609,28 +1776,32 @@ async fn agent_turn_persists_events_and_proposed_action() {
     assert_eq!(turn_response.status(), StatusCode::OK);
     let turn = response_json(turn_response).await;
     assert_eq!(turn["status"], "queued");
+    assert_eq!(turn["input_message_id"], "message-1");
 
     tokio::time::sleep(std::time::Duration::from_millis(50)).await;
 
-    let events_response = app
+    let stream_response = app
         .clone()
-        .oneshot(auth_request(
-            "/api/v1/agent/turns/turn-1/events?after_seq=0",
-        ))
+        .oneshot(auth_request("/api/v1/chat/turns/turn-1/stream?after_seq=0"))
         .await
         .unwrap();
-    assert_eq!(events_response.status(), StatusCode::OK);
-    let events_body = axum::body::to_bytes(events_response.into_body(), usize::MAX)
+    assert_eq!(stream_response.status(), StatusCode::OK);
+    let stream_body = axum::body::to_bytes(stream_response.into_body(), usize::MAX)
         .await
         .unwrap();
-    let events_body = String::from_utf8(events_body.to_vec()).unwrap();
-    assert!(events_body.contains("action_proposed"));
-    assert!(events_body.contains("turn_completed"));
+    let stream_body = String::from_utf8(stream_body.to_vec()).unwrap();
+    assert!(stream_body.contains("event: chat.event"));
+    assert!(stream_body.contains(r#""type":"status_changed""#));
+    assert!(stream_body.contains(r#""type":"assistant_delta""#));
+    assert!(stream_body.contains(r#""type":"assistant_done""#));
+    assert!(stream_body.contains(r#""type":"action_proposed""#));
+    assert!(stream_body.contains(r#""type":"turn_completed""#));
+    assert!(stream_body.contains(r#""preview":{"kind":"sql_audit""#));
 
     let actions_response = app
         .clone()
         .oneshot(auth_request(
-            "/api/v1/agent/actions?conversation_id=conversation-1&status=proposed",
+            "/api/v1/chat/conversations/conversation-1/actions",
         ))
         .await
         .unwrap();
@@ -1638,19 +1809,583 @@ async fn agent_turn_persists_events_and_proposed_action() {
     let actions = response_json(actions_response).await;
     assert_eq!(actions.as_array().unwrap().len(), 1);
     assert_eq!(actions[0]["kind"], "create_sql_audit");
-    assert_eq!(actions[0]["payload"]["managed_database_id"], "db-1");
+    assert_eq!(actions[0]["preview"]["kind"], "sql_audit");
+    assert_eq!(actions[0]["preview"]["sql"], "select * from users");
+
+    let messages_response = app
+        .oneshot(auth_request(
+            "/api/v1/chat/conversations/conversation-1/messages",
+        ))
+        .await
+        .unwrap();
+    assert_eq!(messages_response.status(), StatusCode::OK);
+    let messages = response_json(messages_response).await;
+    assert_eq!(messages.as_array().unwrap().len(), 2);
+    assert_eq!(messages[1]["parts"][0]["kind"], "markdown");
 }
 
 #[tokio::test]
-async fn applying_agent_sql_audit_action_uses_existing_audit_flow() {
+async fn chat_turn_reports_provider_not_configured_without_assistant_message() {
     let app = test_app();
     create_test_database(&app).await;
+
+    let settings_response = app
+        .clone()
+        .oneshot(auth_json_request(
+            "PUT",
+            "/api/v1/settings/llm-provider",
+            json!({
+                "provider": "openai_compatible",
+                "base_url": "http://127.0.0.1:9/v1/chat/completions",
+                "model": "chat-model",
+                "api_mode": "chat_completions"
+            }),
+        ))
+        .await
+        .unwrap();
+    assert_eq!(settings_response.status(), StatusCode::OK);
 
     let _conversation = app
         .clone()
         .oneshot(auth_json_request(
             "POST",
-            "/api/v1/agent/conversations",
+            "/api/v1/chat/conversations",
+            json!({ "title": "Provider required chat" }),
+        ))
+        .await
+        .unwrap();
+    let turn_response = app
+        .clone()
+        .oneshot(auth_json_request(
+            "POST",
+            "/api/v1/chat/conversations/conversation-1/turns",
+            json!({
+                "message": "hello",
+                "managed_database_id": "db-1"
+            }),
+        ))
+        .await
+        .unwrap();
+    assert_eq!(turn_response.status(), StatusCode::OK);
+    tokio::time::sleep(std::time::Duration::from_millis(50)).await;
+
+    let stream_response = app
+        .clone()
+        .oneshot(auth_request("/api/v1/chat/turns/turn-1/stream?after_seq=0"))
+        .await
+        .unwrap();
+    assert_eq!(stream_response.status(), StatusCode::OK);
+    let stream_body = axum::body::to_bytes(stream_response.into_body(), usize::MAX)
+        .await
+        .unwrap();
+    let stream_body = String::from_utf8(stream_body.to_vec()).unwrap();
+    assert!(stream_body.contains(r#""type":"turn_failed""#));
+    assert!(stream_body.contains(r#""error_code":"provider_not_configured""#));
+    assert!(stream_body.contains("workspace.providerNotConfigured"));
+
+    let messages_response = app
+        .clone()
+        .oneshot(auth_request(
+            "/api/v1/chat/conversations/conversation-1/messages",
+        ))
+        .await
+        .unwrap();
+    let messages = response_json(messages_response).await;
+    assert_eq!(messages.as_array().unwrap().len(), 1);
+    assert_eq!(messages[0]["role"], "user");
+}
+
+#[tokio::test]
+async fn chat_turn_cancel_prevents_late_assistant_message_and_action() {
+    let app = test_app();
+    create_test_database(&app).await;
+    let (base_url, captured_body, release_response) =
+        spawn_delayed_openai_compatible_mock_with_content(
+            r#"{
+                "message": "This late reply should not be persisted.",
+                "actions": [{
+                    "kind": "create_sql_audit",
+                    "title": "Create SQL audit",
+                    "description": "Late audit",
+                    "sql": "select 1"
+                }]
+            }"#,
+        )
+        .await;
+
+    let settings_response = app
+        .clone()
+        .oneshot(auth_json_request(
+            "PUT",
+            "/api/v1/settings/llm-provider",
+            json!({
+                "provider": "openai_compatible",
+                "base_url": base_url,
+                "model": "chat-model",
+                "api_mode": "chat_completions",
+                "api_key": "sk-user"
+            }),
+        ))
+        .await
+        .unwrap();
+    assert_eq!(settings_response.status(), StatusCode::OK);
+
+    let _conversation = app
+        .clone()
+        .oneshot(auth_json_request(
+            "POST",
+            "/api/v1/chat/conversations",
+            json!({ "title": "Cancel chat" }),
+        ))
+        .await
+        .unwrap();
+    let turn_response = app
+        .clone()
+        .oneshot(auth_json_request(
+            "POST",
+            "/api/v1/chat/conversations/conversation-1/turns",
+            json!({
+                "message": "please audit later",
+                "managed_database_id": "db-1"
+            }),
+        ))
+        .await
+        .unwrap();
+    assert_eq!(turn_response.status(), StatusCode::OK);
+
+    for _ in 0..20 {
+        if captured_body.lock().unwrap().is_some() {
+            break;
+        }
+        tokio::time::sleep(std::time::Duration::from_millis(10)).await;
+    }
+    assert!(captured_body.lock().unwrap().is_some());
+
+    let cancel_response = app
+        .clone()
+        .oneshot(auth_json_request(
+            "POST",
+            "/api/v1/chat/turns/turn-1/cancel",
+            json!({}),
+        ))
+        .await
+        .unwrap();
+    assert_eq!(cancel_response.status(), StatusCode::OK);
+    let cancelled_turn = response_json(cancel_response).await;
+    assert_eq!(cancelled_turn["status"], "cancelled");
+
+    let _ = release_response.send(());
+    tokio::time::sleep(std::time::Duration::from_millis(50)).await;
+
+    let messages_response = app
+        .clone()
+        .oneshot(auth_request(
+            "/api/v1/chat/conversations/conversation-1/messages",
+        ))
+        .await
+        .unwrap();
+    let messages = response_json(messages_response).await;
+    assert_eq!(messages.as_array().unwrap().len(), 1);
+    assert_eq!(messages[0]["role"], "user");
+
+    let actions_response = app
+        .clone()
+        .oneshot(auth_request(
+            "/api/v1/chat/conversations/conversation-1/actions",
+        ))
+        .await
+        .unwrap();
+    let actions = response_json(actions_response).await;
+    assert_eq!(actions.as_array().unwrap().len(), 0);
+
+    let stream_response = app
+        .clone()
+        .oneshot(auth_request("/api/v1/chat/turns/turn-1/stream?after_seq=0"))
+        .await
+        .unwrap();
+    assert_eq!(stream_response.status(), StatusCode::OK);
+    let stream_body = axum::body::to_bytes(stream_response.into_body(), usize::MAX)
+        .await
+        .unwrap();
+    let stream_body = String::from_utf8(stream_body.to_vec()).unwrap();
+    assert!(stream_body.contains(r#""type":"turn_failed""#));
+    assert!(stream_body.contains(r#""error_code":"turn_cancelled""#));
+    assert!(!stream_body.contains(r#""type":"assistant_done""#));
+    assert!(!stream_body.contains(r#""type":"action_proposed""#));
+}
+
+#[tokio::test]
+async fn chat_turn_uses_user_llm_provider_settings_when_configured() {
+    let app = test_app();
+    create_test_database(&app).await;
+    let (base_url, captured_body) = spawn_openai_compatible_mock_with_content(
+        r#"{
+            "message": "I prepared this audit from the configured provider.",
+            "actions": [{
+                "kind": "create_sql_audit",
+                "title": "Create SQL audit",
+                "description": "Review SQL from chat",
+                "sql": "select * from users",
+                "context": "chat requested review"
+            }]
+        }"#,
+    )
+    .await;
+
+    let settings_response = app
+        .clone()
+        .oneshot(auth_json_request(
+            "PUT",
+            "/api/v1/settings/llm-provider",
+            json!({
+                "provider": "openai_compatible",
+                "base_url": base_url,
+                "model": "chat-model",
+                "api_mode": "chat_completions",
+                "api_key": "sk-user"
+            }),
+        ))
+        .await
+        .unwrap();
+    assert_eq!(settings_response.status(), StatusCode::OK);
+
+    let conversation_response = app
+        .clone()
+        .oneshot(auth_json_request(
+            "POST",
+            "/api/v1/chat/conversations",
+            json!({ "title": "Provider chat" }),
+        ))
+        .await
+        .unwrap();
+    assert_eq!(conversation_response.status(), StatusCode::OK);
+
+    let turn_response = app
+        .clone()
+        .oneshot(auth_json_request(
+            "POST",
+            "/api/v1/chat/conversations/conversation-1/turns",
+            json!({
+                "message": "audit this query",
+                "managed_database_id": "db-1"
+            }),
+        ))
+        .await
+        .unwrap();
+    assert_eq!(turn_response.status(), StatusCode::OK);
+    tokio::time::sleep(std::time::Duration::from_millis(50)).await;
+
+    let stream_response = app
+        .clone()
+        .oneshot(auth_request("/api/v1/chat/turns/turn-1/stream?after_seq=0"))
+        .await
+        .unwrap();
+    assert_eq!(stream_response.status(), StatusCode::OK);
+    let stream_body = axum::body::to_bytes(stream_response.into_body(), usize::MAX)
+        .await
+        .unwrap();
+    let stream_body = String::from_utf8(stream_body.to_vec()).unwrap();
+    assert!(stream_body.contains("I prepared this audit from the configured provider."));
+    assert!(stream_body.contains(r#""type":"action_proposed""#));
+    assert!(stream_body.contains(r#""type":"turn_completed""#));
+
+    let actions_response = app
+        .clone()
+        .oneshot(auth_request(
+            "/api/v1/chat/conversations/conversation-1/actions?status=proposed",
+        ))
+        .await
+        .unwrap();
+    assert_eq!(actions_response.status(), StatusCode::OK);
+    let actions = response_json(actions_response).await;
+    assert_eq!(actions.as_array().unwrap().len(), 1);
+    assert_eq!(actions[0]["kind"], "create_sql_audit");
+    assert_eq!(actions[0]["preview"]["kind"], "sql_audit");
+    assert_eq!(actions[0]["preview"]["sql"], "select * from users");
+
+    let captured = captured_body.lock().unwrap().clone().unwrap();
+    assert_eq!(captured["model"], "chat-model");
+    assert_eq!(captured["messages"][0]["role"], "system");
+}
+
+#[tokio::test]
+async fn chat_turn_blocks_without_llm_provider_key() {
+    let app = test_app();
+    create_test_database(&app).await;
+
+    let settings_response = app
+        .clone()
+        .oneshot(auth_json_request(
+            "PUT",
+            "/api/v1/settings/llm-provider",
+            json!({
+                "provider": "openai_compatible",
+                "base_url": "http://127.0.0.1:9/v1/chat/completions",
+                "model": "chat-model",
+                "api_mode": "chat_completions"
+            }),
+        ))
+        .await
+        .unwrap();
+    assert_eq!(settings_response.status(), StatusCode::OK);
+
+    let _conversation = app
+        .clone()
+        .oneshot(auth_json_request(
+            "POST",
+            "/api/v1/chat/conversations",
+            json!({ "title": "Provider required chat" }),
+        ))
+        .await
+        .unwrap();
+    let turn_response = app
+        .clone()
+        .oneshot(auth_json_request(
+            "POST",
+            "/api/v1/chat/conversations/conversation-1/turns",
+            json!({
+                "message": "select * from users",
+                "managed_database_id": "db-1"
+            }),
+        ))
+        .await
+        .unwrap();
+    assert_eq!(turn_response.status(), StatusCode::OK);
+    tokio::time::sleep(std::time::Duration::from_millis(50)).await;
+
+    let stream_response = app
+        .clone()
+        .oneshot(auth_request("/api/v1/chat/turns/turn-1/stream?after_seq=0"))
+        .await
+        .unwrap();
+    assert_eq!(stream_response.status(), StatusCode::OK);
+    let stream_body = axum::body::to_bytes(stream_response.into_body(), usize::MAX)
+        .await
+        .unwrap();
+    let stream_body = String::from_utf8(stream_body.to_vec()).unwrap();
+    assert!(stream_body.contains(r#""type":"turn_failed""#));
+    assert!(stream_body.contains(r#""error_code":"provider_not_configured""#));
+    assert!(stream_body.contains("workspace.providerNotConfigured"));
+
+    let actions_response = app
+        .clone()
+        .oneshot(auth_request(
+            "/api/v1/chat/conversations/conversation-1/actions?status=proposed",
+        ))
+        .await
+        .unwrap();
+    assert_eq!(actions_response.status(), StatusCode::OK);
+    let actions = response_json(actions_response).await;
+    assert_eq!(actions.as_array().unwrap().len(), 0);
+
+    let messages_response = app
+        .clone()
+        .oneshot(auth_request(
+            "/api/v1/chat/conversations/conversation-1/messages",
+        ))
+        .await
+        .unwrap();
+    assert_eq!(messages_response.status(), StatusCode::OK);
+    let messages = response_json(messages_response).await;
+    assert_eq!(messages.as_array().unwrap().len(), 1);
+    assert_eq!(messages[0]["role"], "user");
+}
+
+#[tokio::test]
+async fn chat_turn_fails_when_llm_returns_invalid_json() {
+    let app = test_app();
+    create_test_database(&app).await;
+    let (base_url, _captured_body) = spawn_openai_compatible_mock_with_content("not-json").await;
+
+    let settings_response = app
+        .clone()
+        .oneshot(auth_json_request(
+            "PUT",
+            "/api/v1/settings/llm-provider",
+            json!({
+                "provider": "openai_compatible",
+                "base_url": base_url,
+                "model": "chat-model",
+                "api_mode": "chat_completions",
+                "api_key": "sk-user"
+            }),
+        ))
+        .await
+        .unwrap();
+    assert_eq!(settings_response.status(), StatusCode::OK);
+
+    let _conversation = app
+        .clone()
+        .oneshot(auth_json_request(
+            "POST",
+            "/api/v1/chat/conversations",
+            json!({ "title": "Invalid provider chat" }),
+        ))
+        .await
+        .unwrap();
+    let turn_response = app
+        .clone()
+        .oneshot(auth_json_request(
+            "POST",
+            "/api/v1/chat/conversations/conversation-1/turns",
+            json!({
+                "message": "hello",
+                "managed_database_id": "db-1"
+            }),
+        ))
+        .await
+        .unwrap();
+    assert_eq!(turn_response.status(), StatusCode::OK);
+    tokio::time::sleep(std::time::Duration::from_millis(50)).await;
+
+    let stream_response = app
+        .clone()
+        .oneshot(auth_request("/api/v1/chat/turns/turn-1/stream?after_seq=0"))
+        .await
+        .unwrap();
+    assert_eq!(stream_response.status(), StatusCode::OK);
+    let stream_body = axum::body::to_bytes(stream_response.into_body(), usize::MAX)
+        .await
+        .unwrap();
+    let stream_body = String::from_utf8(stream_body.to_vec()).unwrap();
+    assert!(stream_body.contains(r#""type":"turn_failed""#));
+    assert!(stream_body.contains(r#""error_code":"invalid_model_response""#));
+    assert!(stream_body.contains("workspace.invalidModelResponse"));
+
+    let turn_response = app
+        .clone()
+        .oneshot(auth_request(
+            "/api/v1/chat/turns/turn-1/stream?after_seq=999",
+        ))
+        .await
+        .unwrap();
+    assert_eq!(turn_response.status(), StatusCode::OK);
+
+    let actions_response = app
+        .clone()
+        .oneshot(auth_request(
+            "/api/v1/chat/conversations/conversation-1/actions?status=proposed",
+        ))
+        .await
+        .unwrap();
+    let actions = response_json(actions_response).await;
+    assert_eq!(actions.as_array().unwrap().len(), 0);
+}
+
+#[tokio::test]
+async fn chat_turn_fails_when_llm_proposes_unknown_sql_audit_id() {
+    let app = test_app();
+    create_test_database(&app).await;
+    let (base_url, _captured_body) = spawn_openai_compatible_mock_with_content(
+        r#"{
+            "message": "I will execute it.",
+            "actions": [{
+                "kind": "execute_sql_audit",
+                "title": "Execute SQL audit",
+                "description": "Execute missing audit",
+                "sql_audit_id": "audit-missing"
+            }]
+        }"#,
+    )
+    .await;
+
+    let settings_response = app
+        .clone()
+        .oneshot(auth_json_request(
+            "PUT",
+            "/api/v1/settings/llm-provider",
+            json!({
+                "provider": "openai_compatible",
+                "base_url": base_url,
+                "model": "chat-model",
+                "api_mode": "chat_completions",
+                "api_key": "sk-user"
+            }),
+        ))
+        .await
+        .unwrap();
+    assert_eq!(settings_response.status(), StatusCode::OK);
+
+    let _conversation = app
+        .clone()
+        .oneshot(auth_json_request(
+            "POST",
+            "/api/v1/chat/conversations",
+            json!({ "title": "Unknown audit chat" }),
+        ))
+        .await
+        .unwrap();
+    let turn_response = app
+        .clone()
+        .oneshot(auth_json_request(
+            "POST",
+            "/api/v1/chat/conversations/conversation-1/turns",
+            json!({
+                "message": "execute it",
+                "managed_database_id": "db-1"
+            }),
+        ))
+        .await
+        .unwrap();
+    assert_eq!(turn_response.status(), StatusCode::OK);
+    tokio::time::sleep(std::time::Duration::from_millis(50)).await;
+
+    let stream_response = app
+        .clone()
+        .oneshot(auth_request("/api/v1/chat/turns/turn-1/stream?after_seq=0"))
+        .await
+        .unwrap();
+    assert_eq!(stream_response.status(), StatusCode::OK);
+    let stream_body = axum::body::to_bytes(stream_response.into_body(), usize::MAX)
+        .await
+        .unwrap();
+    let stream_body = String::from_utf8(stream_body.to_vec()).unwrap();
+    assert!(stream_body.contains(r#""type":"turn_failed""#));
+    assert!(stream_body.contains(r#""error_code":"invalid_action_intent""#));
+    assert!(stream_body.contains("workspace.invalidActionIntent"));
+
+    let actions_response = app
+        .clone()
+        .oneshot(auth_request(
+            "/api/v1/chat/conversations/conversation-1/actions?status=proposed",
+        ))
+        .await
+        .unwrap();
+    let actions = response_json(actions_response).await;
+    assert_eq!(actions.as_array().unwrap().len(), 0);
+}
+
+#[tokio::test]
+async fn applying_chat_sql_audit_action_uses_existing_audit_flow() {
+    let app = test_app();
+    create_test_database(&app).await;
+    configure_workbench_llm_provider_with_contents(
+        &app,
+        [
+            r#"{
+                "message": "I prepared this audit from the configured provider.",
+                "actions": [{
+                    "kind": "create_sql_audit",
+                    "title": "Create SQL audit",
+                    "description": "Review SQL from chat",
+                    "sql": "select * from users",
+                    "context": "chat requested review"
+                }]
+            }"#,
+            r#"{
+                "summary": "Provider SQL audit completed.",
+                "risk_score": 7,
+                "findings": []
+            }"#,
+        ],
+    )
+    .await;
+
+    let _conversation = app
+        .clone()
+        .oneshot(auth_json_request(
+            "POST",
+            "/api/v1/chat/conversations",
             json!({ "title": "SQL review" }),
         ))
         .await
@@ -1659,7 +2394,7 @@ async fn applying_agent_sql_audit_action_uses_existing_audit_flow() {
         .clone()
         .oneshot(auth_json_request(
             "POST",
-            "/api/v1/agent/conversations/conversation-1/turns",
+            "/api/v1/chat/conversations/conversation-1/turns",
             json!({
                 "message": "select * from users",
                 "managed_database_id": "db-1"
@@ -1674,7 +2409,7 @@ async fn applying_agent_sql_audit_action_uses_existing_audit_flow() {
         .clone()
         .oneshot(auth_json_request(
             "POST",
-            "/api/v1/agent/actions/action-1/apply",
+            "/api/v1/chat/actions/action-1/apply",
             json!({}),
         ))
         .await

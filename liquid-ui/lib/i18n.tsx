@@ -182,11 +182,11 @@ const zhCN = {
     },
     model: {
       title: "模型",
-      description: "配置 OpenAI-compatible provider，用于 SQL 审计。",
+      description: "配置 OpenAI-compatible provider，用于 SQL 审计和 AI 工作台聊天。",
       configuredBadge: "API Key 已配置",
       pendingBadge: "待配置",
       loading: "正在加载模型配置",
-      providerDescription: "SQL 审计会优先使用当前账户的模型配置。",
+      providerDescription: "SQL 审计和 AI 工作台聊天会优先使用当前账户的模型配置。",
       apiKeyConfigured: "API Key 已配置",
       apiKeyMissing: "API Key 未配置",
       endpointTitle: "接口",
@@ -212,7 +212,24 @@ const zhCN = {
     agentLoadFailed: "加载 agent 工作台失败",
     renameFailed: "工作区重命名失败",
     sendFailed: "发送失败",
+    providerNotConfigured:
+      "请先在设置中配置 LLM Provider 和 API Key，再使用 AI 工作台聊天。",
+    providerReady: "模型已连接",
+    providerMissing: "模型未配置",
+    providerSetupHint:
+      "当前账户还没有可用 API Key。配置 LLM Provider 后即可开始真实聊天。",
+    errorMessages: {
+      provider_not_configured:
+        "请先在设置中配置 LLM Provider 和 API Key，再使用 AI 工作台聊天。",
+      provider_request_failed: "模型请求失败，请检查 provider 地址、密钥和模型名称。",
+      invalid_model_response: "模型返回内容格式无效，请重试或调整模型配置。",
+      invalid_action_intent: "模型提出的动作不符合当前会话约束，已阻止执行。",
+      storage_error: "会话数据读写失败，请稍后重试。",
+      turn_cancelled: "本次回复已停止。",
+    },
     actionFailed: "动作处理失败",
+    actionApplied: "动作已确认",
+    actionRejected: "动作已拒绝",
     introMessage: (databaseName: string) =>
       `当前绑定 ${databaseName}，可以直接发送 SQL 或治理问题。敏感操作会先变成待确认动作。`,
     workspaceName: "工作区名称",
@@ -225,13 +242,35 @@ const zhCN = {
       "找出异常数据集",
       "给出治理建议",
     ],
+    emptyTitle: "开始一次数据库对话",
+    emptyDescription: (databaseName: string) =>
+      `当前绑定 ${databaseName}。发送 SQL、审计问题或治理请求，Liquid 会把需要确认的操作变成动作卡。`,
     inputLabel: "输入问题",
     inputPlaceholder: "输入问题，例如：列出本周风险最高的数据集",
+    composerHint: "Enter 发送，Shift+Enter 换行",
     sendQuestion: "发送问题",
     send: "发送",
+    stop: "停止",
+    retry: "重试",
+    copy: "复制",
+    copied: "已复制",
+    copyFailed: "复制失败",
+    copyCode: "复制代码",
+    codeBlock: "代码",
     deleteConfirm: (title: string) =>
       `确认删除「${title}」？该工作区的会话内容会一并移除。`,
     pending: "发送中",
+    localPending: "本地",
+    messageFailed: "回复失败",
+    userLabel: "你",
+    assistantLabel: "Liquid",
+    sqlPreview: "SQL 审计预览",
+    actionStatusUpdated: "动作状态已更新",
+    stages: {
+      thinking: "正在思考",
+      loading_context: "正在加载上下文",
+      proposing_action: "正在准备动作",
+    },
     confirm: "确认",
     reject: "拒绝",
     actionLabels: {
@@ -498,12 +537,13 @@ const enUS: Messages = {
     },
     model: {
       title: "Model",
-      description: "Configure an OpenAI-compatible provider for SQL audits.",
+      description:
+        "Configure an OpenAI-compatible provider for SQL audits and AI workbench chat.",
       configuredBadge: "API key configured",
       pendingBadge: "Needs setup",
       loading: "Loading model settings",
       providerDescription:
-        "SQL audits prefer the current account's model settings.",
+        "SQL audits and AI workbench chat prefer the current account's model settings.",
       apiKeyConfigured: "API key configured",
       apiKeyMissing: "API key missing",
       endpointTitle: "Endpoint",
@@ -532,7 +572,27 @@ const enUS: Messages = {
     agentLoadFailed: "Failed to load agent workbench",
     renameFailed: "Failed to rename workspace",
     sendFailed: "Failed to send",
+    providerNotConfigured:
+      "Configure an LLM provider and API key in Settings before using AI workbench chat.",
+    providerReady: "Model connected",
+    providerMissing: "Model missing",
+    providerSetupHint:
+      "This account does not have a usable API key yet. Configure an LLM provider to start real chat.",
+    errorMessages: {
+      provider_not_configured:
+        "Configure an LLM provider and API key in Settings before using AI workbench chat.",
+      provider_request_failed:
+        "The model request failed. Check the provider URL, API key, and model name.",
+      invalid_model_response:
+        "The model returned an invalid response. Retry or adjust the model settings.",
+      invalid_action_intent:
+        "The model proposed an action outside this conversation's constraints, so it was blocked.",
+      storage_error: "Failed to read or write conversation data. Try again later.",
+      turn_cancelled: "This response was stopped.",
+    },
     actionFailed: "Failed to process action",
+    actionApplied: "Action confirmed",
+    actionRejected: "Action rejected",
     introMessage: (databaseName: string) =>
       `Currently connected to ${databaseName}. Send SQL or governance questions directly. Sensitive operations become confirmation actions first.`,
     workspaceName: "Workspace name",
@@ -545,14 +605,36 @@ const enUS: Messages = {
       "Find anomalous datasets",
       "Suggest governance actions",
     ],
+    emptyTitle: "Start a database chat",
+    emptyDescription: (databaseName: string) =>
+      `Currently bound to ${databaseName}. Send SQL, audit questions, or governance requests; Liquid will turn sensitive operations into confirmation cards.`,
     inputLabel: "Question",
     inputPlaceholder:
       "Ask a question, for example: list the highest-risk datasets this week",
+    composerHint: "Enter to send, Shift+Enter for a new line",
     sendQuestion: "Send question",
     send: "Send",
+    stop: "Stop",
+    retry: "Retry",
+    copy: "Copy",
+    copied: "Copied",
+    copyFailed: "Copy failed",
+    copyCode: "Copy code",
+    codeBlock: "Code",
     deleteConfirm: (title: string) =>
       `Delete "${title}"? Its conversation history will be removed as well.`,
     pending: "Sending",
+    localPending: "Local",
+    messageFailed: "Response failed",
+    userLabel: "You",
+    assistantLabel: "Liquid",
+    sqlPreview: "SQL audit preview",
+    actionStatusUpdated: "Action status updated",
+    stages: {
+      thinking: "Thinking",
+      loading_context: "Loading context",
+      proposing_action: "Preparing action",
+    },
     confirm: "Confirm",
     reject: "Reject",
     actionLabels: {

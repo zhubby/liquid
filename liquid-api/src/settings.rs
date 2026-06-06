@@ -1,9 +1,4 @@
-use axum::{
-    Json, Router,
-    extract::State,
-    http::HeaderMap,
-    routing::{get, put},
-};
+use axum::{Json, Router, extract::State, http::HeaderMap, routing::get};
 use liquid_core::{LlmProviderSettingsResponse, UpdateLlmProviderSettingsRequest};
 
 use crate::{auth::authenticated_user, error::ApiError, state::ApiState};
