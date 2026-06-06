@@ -31,7 +31,7 @@ async fn llm_provider_settings_upsert_redacts_and_preserves_api_key() {
             &owner.user.id,
             UpdateLlmProviderSettingsRequest {
                 provider: LlmProviderKind::OpenaiCompatible,
-                base_url: "https://api.openai.com".to_owned(),
+                base_url: "https://api.openai.com/v1/chat/completions".to_owned(),
                 model: "gpt-4.1".to_owned(),
                 api_mode: LlmProviderApiMode::ChatCompletions,
                 api_key: Some("sk-test".to_owned()),
@@ -62,7 +62,7 @@ async fn llm_provider_settings_upsert_redacts_and_preserves_api_key() {
             &owner.user.id,
             UpdateLlmProviderSettingsRequest {
                 provider: LlmProviderKind::OpenaiCompatible,
-                base_url: "https://llm.example.test/v1".to_owned(),
+                base_url: "https://llm.example.test/v1/responses".to_owned(),
                 model: "gpt-4.1-mini".to_owned(),
                 api_mode: LlmProviderApiMode::Responses,
                 api_key: Some("   ".to_owned()),
@@ -78,7 +78,7 @@ async fn llm_provider_settings_upsert_redacts_and_preserves_api_key() {
         .await
         .unwrap()
         .unwrap();
-    assert_eq!(resolved.base_url, "https://llm.example.test/v1");
+    assert_eq!(resolved.base_url, "https://llm.example.test/v1/responses");
     assert_eq!(resolved.api_key.as_deref(), Some("sk-test"));
 }
 

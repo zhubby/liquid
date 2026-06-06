@@ -1101,7 +1101,7 @@ async fn spawn_openai_compatible_mock() -> (String, Arc<Mutex<Option<Value>>>) {
         let _ = socket.write_all(response.as_bytes()).await;
     });
 
-    (format!("http://{addr}"), captured_body)
+    (format!("http://{addr}/v1/chat/completions"), captured_body)
 }
 
 fn test_app() -> Router {
@@ -1446,7 +1446,7 @@ async fn llm_provider_settings_round_trip_without_api_key_echo() {
             "/api/v1/settings/llm-provider",
             json!({
                 "provider": "openai_compatible",
-                "base_url": "https://api.openai.com",
+                "base_url": "https://api.openai.com/v1/chat/completions",
                 "model": "gpt-4.1",
                 "api_mode": "chat_completions",
                 "api_key": "sk-test"

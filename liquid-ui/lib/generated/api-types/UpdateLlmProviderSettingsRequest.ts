@@ -7,5 +7,5 @@ export type UpdateLlmProviderSettingsRequest = {
   base_url: string;
   model: string;
   api_mode: LlmProviderApiMode;
-  api_key?: string | null;
+  api_key?: string;
 };

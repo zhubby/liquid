@@ -261,7 +261,9 @@ impl OpenAiCompatibleClient {
     }
 
     fn endpoint(&self, path: &str) -> String {
-        if self.base_url.ends_with("/v1") && path.starts_with("/v1/") {
+        if is_complete_endpoint_url(&self.base_url) {
+            self.base_url.clone()
+        } else if self.base_url.ends_with("/v1") && path.starts_with("/v1/") {
             format!("{}{}", self.base_url, &path[3..])
         } else {
             format!("{}/{}", self.base_url, path.trim_start_matches('/'))
@@ -320,6 +322,15 @@ fn protocol_path(protocol: LlmProtocol) -> &'static str {
         LlmProtocol::ChatCompletions => "/v1/chat/completions",
         LlmProtocol::Responses => "/v1/responses",
     }
+}
+
+fn is_complete_endpoint_url(value: &str) -> bool {
+    [
+        protocol_path(LlmProtocol::ChatCompletions),
+        protocol_path(LlmProtocol::Responses),
+    ]
+    .iter()
+    .any(|path| value.ends_with(path))
 }
 
 fn request_body(request: &LlmRequest, stream: bool) -> Value {
@@ -806,6 +817,48 @@ fn responses_event_from_value(raw: Value) -> LlmEvent {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn endpoint_accepts_complete_api_urls() {
+        let client = OpenAiCompatibleClient::new(OpenAiCompatibleConfig::new(
+            None,
+            "https://api.openai.com/v1/chat/completions",
+        ));
+        assert_eq!(
+            client.endpoint(protocol_path(LlmProtocol::ChatCompletions)),
+            "https://api.openai.com/v1/chat/completions"
+        );
+
+        let client = OpenAiCompatibleClient::new(OpenAiCompatibleConfig::new(
+            None,
+            "https://api.openai.com/v1/responses",
+        ));
+        assert_eq!(
+            client.endpoint(protocol_path(LlmProtocol::Responses)),
+            "https://api.openai.com/v1/responses"
+        );
+    }
+
+    #[test]
+    fn endpoint_preserves_legacy_base_url_inputs() {
+        let client = OpenAiCompatibleClient::new(OpenAiCompatibleConfig::new(
+            None,
+            "https://api.openai.com/v1",
+        ));
+        assert_eq!(
+            client.endpoint(protocol_path(LlmProtocol::ChatCompletions)),
+            "https://api.openai.com/v1/chat/completions"
+        );
+
+        let client = OpenAiCompatibleClient::new(OpenAiCompatibleConfig::new(
+            None,
+            "https://api.openai.com",
+        ));
+        assert_eq!(
+            client.endpoint(protocol_path(LlmProtocol::Responses)),
+            "https://api.openai.com/v1/responses"
+        );
+    }
 
     #[test]
     fn chat_completions_body_maps_tools_and_tool_results() {

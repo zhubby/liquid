@@ -11,6 +11,7 @@ import { useTheme } from "next-themes";
 import {
   CheckCircle2,
   KeyRound,
+  type LucideIcon,
   Loader2,
   Monitor,
   Moon,
@@ -55,10 +56,15 @@ type AccountSettingsDialogProps = {
 
 const LANGUAGE_STORAGE_KEY = "liquid.preferences.language";
 
-const tabs: Array<{ value: SettingsTab; label: string }> = [
-  { value: "account", label: "账户" },
-  { value: "preferences", label: "偏好" },
-  { value: "model", label: "模型" },
+const tabs: Array<{
+  value: SettingsTab;
+  label: string;
+  description: string;
+  icon: LucideIcon;
+}> = [
+  { value: "account", label: "账户", description: "资料与密码", icon: User },
+  { value: "preferences", label: "偏好", description: "语言与主题", icon: Monitor },
+  { value: "model", label: "模型", description: "LLM Provider", icon: KeyRound },
 ];
 
 export function AccountSettingsDialog({
@@ -73,7 +79,9 @@ export function AccountSettingsDialog({
   const [newPassword, setNewPassword] = useState("");
   const [confirmPassword, setConfirmPassword] = useState("");
   const [language, setLanguage] = useState<LanguagePreference>("zh-CN");
-  const [baseUrl, setBaseUrl] = useState("https://api.openai.com");
+  const [baseUrl, setBaseUrl] = useState(
+    "https://api.openai.com/v1/chat/completions",
+  );
   const [model, setModel] = useState("");
   const [apiMode, setApiMode] =
     useState<LlmProviderApiMode>("chat_completions");
@@ -226,8 +234,17 @@ export function AccountSettingsDialog({
     }
   };
 
+  const userInitials =
+    user.display_name
+      .split(/\s+/)
+      .filter(Boolean)
+      .slice(0, 2)
+      .map((part) => part[0])
+      .join("")
+      .toUpperCase() || user.email.slice(0, 1).toUpperCase();
+
   return (
-    <div className="fixed inset-0 z-50 flex items-start justify-center overflow-y-auto bg-background/80 p-3 sm:items-center">
+    <div className="fixed inset-0 z-50 flex items-start justify-center overflow-y-auto bg-background/70 p-3 backdrop-blur-sm sm:items-center">
       <button
         type="button"
         className="absolute inset-0 cursor-default"
@@ -235,23 +252,34 @@ export function AccountSettingsDialog({
         onClick={onClose}
       />
       <Card
-        className="relative w-full max-w-3xl overflow-hidden rounded-xl py-0 shadow-xl"
+        className="relative w-full max-w-[860px] animate-in fade-in-0 zoom-in-95 overflow-hidden rounded-xl border-border/80 bg-card/95 py-0 shadow-2xl shadow-foreground/10 duration-150"
         role="dialog"
         aria-modal="true"
         aria-labelledby="account-settings-title"
       >
-        <CardHeader className="flex flex-row items-center justify-between gap-3 border-b px-4 py-4 sm:px-5">
-          <div className="min-w-0">
-            <CardTitle
-              id="account-settings-title"
-              className="flex items-center gap-2 text-base"
-            >
+        <CardHeader className="flex flex-row items-center justify-between gap-4 border-b bg-muted/20 px-4 py-4 sm:px-5">
+          <div className="flex min-w-0 items-center gap-3">
+            <div className="flex size-10 shrink-0 items-center justify-center rounded-lg border bg-background shadow-xs">
               <Settings className="size-4 text-muted-foreground" aria-hidden />
-              设置
-            </CardTitle>
-            <p className="mt-1 truncate text-xs text-muted-foreground">
-              {user.email}
-            </p>
+            </div>
+            <div className="min-w-0">
+              <CardTitle
+                id="account-settings-title"
+                className="text-base font-semibold"
+              >
+                设置
+              </CardTitle>
+              <div className="mt-1 flex min-w-0 items-center gap-2 text-xs text-muted-foreground">
+                <span className="flex size-5 shrink-0 items-center justify-center rounded-full bg-primary text-[10px] font-semibold text-primary-foreground">
+                  {userInitials}
+                </span>
+                <span className="truncate">{user.display_name}</span>
+                <span className="text-border" aria-hidden>
+                  /
+                </span>
+                <span className="truncate">{user.email}</span>
+              </div>
+            </div>
           </div>
           <Button
             type="button"
@@ -264,35 +292,59 @@ export function AccountSettingsDialog({
             <X className="size-4" aria-hidden />
           </Button>
         </CardHeader>
-        <CardContent className="grid gap-0 p-0 sm:grid-cols-[180px_1fr]">
+        <CardContent className="grid max-h-[calc(100vh-1.5rem-73px)] gap-0 overflow-hidden p-0 sm:grid-cols-[210px_1fr]">
           <div
-            className="flex gap-2 overflow-x-auto border-b bg-muted/30 p-3 sm:flex-col sm:border-b-0 sm:border-r"
+            className="flex gap-2 overflow-x-auto border-b bg-muted/30 p-3 sm:flex-col sm:border-b-0 sm:border-r sm:bg-muted/20 sm:p-4"
             role="tablist"
             aria-label="设置分类"
           >
-            {tabs.map((tab) => (
-              <button
-                key={tab.value}
-                type="button"
-                id={`${tab.value}-settings-tab`}
-                role="tab"
-                aria-selected={activeTab === tab.value}
-                aria-controls={`${tab.value}-settings-panel`}
-                className={cn(
-                  "h-9 shrink-0 rounded-md px-3 text-left text-sm font-medium outline-none transition-colors focus-visible:ring-[3px] focus-visible:ring-ring/50",
-                  activeTab === tab.value
-                    ? "bg-background text-foreground shadow-xs"
-                    : "text-muted-foreground hover:bg-background/70 hover:text-foreground",
-                )}
-                onClick={() => setActiveTab(tab.value)}
-              >
-                {tab.label}
-              </button>
-            ))}
+            {tabs.map((tab) => {
+              const Icon = tab.icon;
+
+              return (
+                <button
+                  key={tab.value}
+                  type="button"
+                  id={`${tab.value}-settings-tab`}
+                  role="tab"
+                  aria-selected={activeTab === tab.value}
+                  aria-controls={`${tab.value}-settings-panel`}
+                  className={cn(
+                    "group flex h-11 shrink-0 items-center gap-2.5 rounded-lg border border-transparent px-3 text-left outline-none transition-all focus-visible:ring-[3px] focus-visible:ring-ring/50 sm:h-auto sm:py-2.5",
+                    activeTab === tab.value
+                      ? "border-border bg-background text-foreground shadow-sm"
+                      : "text-muted-foreground hover:border-border/70 hover:bg-background/60 hover:text-foreground",
+                  )}
+                  onClick={() => setActiveTab(tab.value)}
+                >
+                  <span
+                    className={cn(
+                      "flex size-7 shrink-0 items-center justify-center rounded-md border transition-colors",
+                      activeTab === tab.value
+                        ? "bg-primary text-primary-foreground"
+                        : "bg-background text-muted-foreground group-hover:text-foreground",
+                    )}
+                  >
+                    <Icon className="size-3.5" aria-hidden />
+                  </span>
+                  <span className="min-w-0">
+                    <span className="block text-sm font-medium leading-none">
+                      {tab.label}
+                    </span>
+                    <span className="mt-1 hidden truncate text-xs text-muted-foreground sm:block">
+                      {tab.description}
+                    </span>
+                  </span>
+                </button>
+              );
+            })}
           </div>
-          <div className="min-h-[420px] p-4 sm:p-5">
+          <div className="min-h-[440px] overflow-y-auto p-4 sm:p-5">
             {activeTab === "account" ? (
-              <SettingsPanel id="account-settings-panel" labelledBy="account-settings-tab">
+              <SettingsPanel
+                id="account-settings-panel"
+                labelledBy="account-settings-tab"
+              >
                 <AccountTab
                   displayName={displayName}
                   setDisplayName={setDisplayName}
@@ -323,7 +375,10 @@ export function AccountSettingsDialog({
               </SettingsPanel>
             ) : null}
             {activeTab === "model" ? (
-              <SettingsPanel id="model-settings-panel" labelledBy="model-settings-tab">
+              <SettingsPanel
+                id="model-settings-panel"
+                labelledBy="model-settings-tab"
+              >
                 <ModelTab
                   baseUrl={baseUrl}
                   setBaseUrl={setBaseUrl}
@@ -391,74 +446,80 @@ function AccountTab({
   onPasswordSubmit: (event: FormEvent<HTMLFormElement>) => void;
 }) {
   return (
-    <div className="space-y-5">
+    <div className="space-y-4">
       <SectionHeader
         icon={<User className="size-4" aria-hidden />}
         title="账户"
         description="更新个人资料和登录凭据。"
+        badge="本地账户"
       />
-      <form className="space-y-3" onSubmit={onDisplayNameSubmit}>
-        <SettingsField
-          id="settings-display-name"
-          label="显示名称"
-          value={displayName}
-          onChange={setDisplayName}
-          autoComplete="name"
-          required
-        />
-        <div className="flex justify-end">
-          <Button type="submit" disabled={savingDisplayName}>
-            {savingDisplayName ? (
-              <Loader2 className="size-4 animate-spin" aria-hidden />
-            ) : (
-              <Save className="size-4" aria-hidden />
-            )}
-            保存名称
-          </Button>
-        </div>
-      </form>
-      <div className="h-px bg-border" />
-      <form className="space-y-3" onSubmit={onPasswordSubmit}>
-        <SettingsField
-          id="settings-current-password"
-          label="当前密码"
-          type="password"
-          value={currentPassword}
-          onChange={setCurrentPassword}
-          autoComplete="current-password"
-          required
-        />
-        <div className="grid gap-3 sm:grid-cols-2">
+
+      <SettingsBlock title="个人资料" description="显示名称会同步到账户区。">
+        <form className="space-y-3" onSubmit={onDisplayNameSubmit}>
           <SettingsField
-            id="settings-new-password"
-            label="新密码"
-            type="password"
-            value={newPassword}
-            onChange={setNewPassword}
-            autoComplete="new-password"
+            id="settings-display-name"
+            label="显示名称"
+            value={displayName}
+            onChange={setDisplayName}
+            autoComplete="name"
             required
           />
+          <div className="flex justify-end">
+            <Button type="submit" disabled={savingDisplayName}>
+              {savingDisplayName ? (
+                <Loader2 className="size-4 animate-spin" aria-hidden />
+              ) : (
+                <Save className="size-4" aria-hidden />
+              )}
+              保存名称
+            </Button>
+          </div>
+        </form>
+      </SettingsBlock>
+
+      <SettingsBlock title="登录密码" description="修改后下次登录使用新密码。">
+        <form className="space-y-3" onSubmit={onPasswordSubmit}>
           <SettingsField
-            id="settings-confirm-password"
-            label="确认新密码"
+            id="settings-current-password"
+            label="当前密码"
             type="password"
-            value={confirmPassword}
-            onChange={setConfirmPassword}
-            autoComplete="new-password"
+            value={currentPassword}
+            onChange={setCurrentPassword}
+            autoComplete="current-password"
             required
           />
-        </div>
-        <div className="flex justify-end">
-          <Button type="submit" disabled={savingPassword}>
-            {savingPassword ? (
-              <Loader2 className="size-4 animate-spin" aria-hidden />
-            ) : (
-              <KeyRound className="size-4" aria-hidden />
-            )}
-            更新密码
-          </Button>
-        </div>
-      </form>
+          <div className="grid gap-3 sm:grid-cols-2">
+            <SettingsField
+              id="settings-new-password"
+              label="新密码"
+              type="password"
+              value={newPassword}
+              onChange={setNewPassword}
+              autoComplete="new-password"
+              required
+            />
+            <SettingsField
+              id="settings-confirm-password"
+              label="确认新密码"
+              type="password"
+              value={confirmPassword}
+              onChange={setConfirmPassword}
+              autoComplete="new-password"
+              required
+            />
+          </div>
+          <div className="flex justify-end">
+            <Button type="submit" disabled={savingPassword}>
+              {savingPassword ? (
+                <Loader2 className="size-4 animate-spin" aria-hidden />
+              ) : (
+                <KeyRound className="size-4" aria-hidden />
+              )}
+              更新密码
+            </Button>
+          </div>
+        </form>
+      </SettingsBlock>
     </div>
   );
 }
@@ -475,44 +536,56 @@ function PreferencesTab({
   onThemeChange: (theme: ThemePreference) => void;
 }) {
   return (
-    <div className="space-y-5">
+    <div className="space-y-4">
       <SectionHeader
         icon={<Monitor className="size-4" aria-hidden />}
         title="偏好"
         description="语言先保存偏好，主题会立即切换界面。"
+        badge={theme === "system" ? "跟随系统" : theme === "dark" ? "深色" : "浅色"}
       />
-      <PreferenceGroup label="语言">
-        <SegmentedOption
-          active={language === "zh-CN"}
-          label="中文"
-          onClick={() => onLanguageChange("zh-CN")}
-        />
-        <SegmentedOption
-          active={language === "en-US"}
-          label="English"
-          onClick={() => onLanguageChange("en-US")}
-        />
-      </PreferenceGroup>
-      <PreferenceGroup label="主题">
-        <IconOption
-          active={theme === "system"}
-          icon={<Monitor className="size-4" aria-hidden />}
-          label="跟随系统"
-          onClick={() => onThemeChange("system")}
-        />
-        <IconOption
-          active={theme === "light"}
-          icon={<Sun className="size-4" aria-hidden />}
-          label="浅色"
-          onClick={() => onThemeChange("light")}
-        />
-        <IconOption
-          active={theme === "dark"}
-          icon={<Moon className="size-4" aria-hidden />}
-          label="深色"
-          onClick={() => onThemeChange("dark")}
-        />
-      </PreferenceGroup>
+
+      <SettingsBlock title="语言" description="当前仅保存偏好，不改变全站文案。">
+        <PreferenceGroup>
+          <SegmentedOption
+            active={language === "zh-CN"}
+            label="中文"
+            description="zh-CN"
+            onClick={() => onLanguageChange("zh-CN")}
+          />
+          <SegmentedOption
+            active={language === "en-US"}
+            label="English"
+            description="en-US"
+            onClick={() => onLanguageChange("en-US")}
+          />
+        </PreferenceGroup>
+      </SettingsBlock>
+
+      <SettingsBlock title="主题" description="立即切换当前浏览器中的界面主题。">
+        <PreferenceGroup>
+          <IconOption
+            active={theme === "system"}
+            icon={<Monitor className="size-4" aria-hidden />}
+            label="跟随系统"
+            description="使用系统外观"
+            onClick={() => onThemeChange("system")}
+          />
+          <IconOption
+            active={theme === "light"}
+            icon={<Sun className="size-4" aria-hidden />}
+            label="浅色"
+            description="明亮工作区"
+            onClick={() => onThemeChange("light")}
+          />
+          <IconOption
+            active={theme === "dark"}
+            icon={<Moon className="size-4" aria-hidden />}
+            label="深色"
+            description="低亮界面"
+            onClick={() => onThemeChange("dark")}
+          />
+        </PreferenceGroup>
+      </SettingsBlock>
     </div>
   );
 }
@@ -545,76 +618,103 @@ function ModelTab({
   onSubmit: (event: FormEvent<HTMLFormElement>) => void;
 }) {
   return (
-    <div className="space-y-5">
+    <div className="space-y-4">
       <SectionHeader
         icon={<KeyRound className="size-4" aria-hidden />}
         title="模型"
         description="配置 OpenAI-compatible provider，用于 SQL 审计。"
+        badge={hasApiKey ? "API Key 已配置" : "待配置"}
       />
       {isLoading ? (
-        <div className="flex items-center gap-2 rounded-lg border bg-muted/30 p-3 text-sm text-muted-foreground">
+        <div className="flex items-center gap-2 rounded-lg border bg-muted/30 p-4 text-sm text-muted-foreground shadow-xs">
           <Loader2 className="size-4 animate-spin" aria-hidden />
           正在加载模型配置
         </div>
       ) : (
-        <form className="space-y-3" onSubmit={onSubmit}>
-          <div className="flex flex-wrap items-center gap-2">
-            <Badge variant="secondary" className="rounded-md">
-              OpenAI-compatible
-            </Badge>
-            {hasApiKey ? (
-              <Badge variant="outline" className="rounded-md">
-                <CheckCircle2 className="size-3" aria-hidden />
-                API Key 已配置
+        <form className="space-y-4" onSubmit={onSubmit}>
+          <div className="rounded-lg border bg-muted/25 p-3 shadow-xs">
+            <div className="flex flex-wrap items-center justify-between gap-3">
+              <div className="flex items-center gap-3">
+                <div className="flex size-9 items-center justify-center rounded-lg border bg-background">
+                  <KeyRound className="size-4 text-muted-foreground" aria-hidden />
+                </div>
+                <div>
+                  <div className="text-sm font-medium">OpenAI-compatible</div>
+                  <div className="mt-0.5 text-xs text-muted-foreground">
+                    SQL 审计会优先使用当前账户的模型配置。
+                  </div>
+                </div>
+              </div>
+              <Badge
+                variant={hasApiKey ? "secondary" : "outline"}
+                className="rounded-md"
+              >
+                {hasApiKey ? (
+                  <CheckCircle2 className="size-3" aria-hidden />
+                ) : null}
+                {hasApiKey ? "API Key 已配置" : "API Key 未配置"}
               </Badge>
-            ) : null}
-          </div>
-          <SettingsField
-            id="settings-model-base-url"
-            label="Base URL"
-            value={baseUrl}
-            onChange={setBaseUrl}
-            placeholder="https://api.openai.com"
-            required
-          />
-          <div className="grid gap-3 sm:grid-cols-[1fr_180px]">
-            <SettingsField
-              id="settings-model-name"
-              label="模型"
-              value={model}
-              onChange={setModel}
-              placeholder="gpt-4.1"
-              required
-            />
-            <div className="space-y-1.5">
-              <label
-                className="text-xs font-medium text-muted-foreground"
-                htmlFor="settings-api-mode"
-              >
-                API Mode
-              </label>
-              <select
-                id="settings-api-mode"
-                value={apiMode}
-                onChange={(event) =>
-                  setApiMode(event.target.value as LlmProviderApiMode)
-                }
-                className="h-9 w-full rounded-md border bg-background px-3 text-sm outline-none transition-shadow focus-visible:ring-[3px] focus-visible:ring-ring/50"
-              >
-                <option value="chat_completions">chat_completions</option>
-                <option value="responses">responses</option>
-              </select>
             </div>
           </div>
-          <SettingsField
-            id="settings-api-key"
-            label="API Key"
-            type="password"
-            value={apiKey}
-            onChange={setApiKey}
-            placeholder={hasApiKey ? "留空则保持当前密钥" : ""}
-            autoComplete="off"
-          />
+
+          <SettingsBlock title="接口" description="填写完整 endpoint URL，并选择匹配的 API Mode。">
+            <SettingsField
+              id="settings-model-base-url"
+              label="完整 URL"
+              value={baseUrl}
+              onChange={setBaseUrl}
+              placeholder="https://api.openai.com/v1/chat/completions"
+              helpText="例如 /v1/chat/completions 或 /v1/responses。"
+              required
+            />
+            <div className="grid gap-3 sm:grid-cols-[1fr_180px]">
+              <SettingsField
+                id="settings-model-name"
+                label="模型"
+                value={model}
+                onChange={setModel}
+                placeholder="gpt-4.1"
+                required
+              />
+              <div className="space-y-1.5">
+                <label
+                  className="text-xs font-medium text-muted-foreground"
+                  htmlFor="settings-api-mode"
+                >
+                  API Mode
+                </label>
+                <select
+                  id="settings-api-mode"
+                  value={apiMode}
+                  onChange={(event) =>
+                    setApiMode(event.target.value as LlmProviderApiMode)
+                  }
+                  className="h-9 w-full rounded-md border bg-background px-3 text-sm shadow-xs outline-none transition-shadow focus-visible:ring-[3px] focus-visible:ring-ring/50"
+                >
+                  <option value="chat_completions">chat_completions</option>
+                  <option value="responses">responses</option>
+                </select>
+              </div>
+            </div>
+          </SettingsBlock>
+
+          <SettingsBlock
+            title="密钥"
+            description={
+              hasApiKey ? "留空保存时会继续使用已保存密钥。" : "API Key 只会加密保存，不会回显。"
+            }
+          >
+            <SettingsField
+              id="settings-api-key"
+              label="API Key"
+              type="password"
+              value={apiKey}
+              onChange={setApiKey}
+              placeholder={hasApiKey ? "留空则保持当前密钥" : ""}
+              autoComplete="off"
+            />
+          </SettingsBlock>
+
           <div className="flex justify-end">
             <Button type="submit" disabled={isSaving}>
               {isSaving ? (
@@ -635,21 +735,54 @@ function SectionHeader({
   icon,
   title,
   description,
+  badge,
 }: {
   icon: ReactNode;
   title: string;
   description: string;
+  badge?: string;
 }) {
   return (
-    <div>
-      <div className="flex items-center gap-2 text-sm font-semibold">
-        <span className="text-muted-foreground">{icon}</span>
-        {title}
+    <div className="flex flex-wrap items-start justify-between gap-3">
+      <div className="min-w-0">
+        <div className="flex items-center gap-2 text-sm font-semibold">
+          <span className="flex size-8 items-center justify-center rounded-lg border bg-muted/40 text-muted-foreground">
+            {icon}
+          </span>
+          <span>{title}</span>
+        </div>
+        <p className="mt-2 text-xs leading-5 text-muted-foreground">
+          {description}
+        </p>
       </div>
-      <p className="mt-1 text-xs leading-5 text-muted-foreground">
-        {description}
-      </p>
+      {badge ? (
+        <Badge variant="outline" className="rounded-md bg-background">
+          {badge}
+        </Badge>
+      ) : null}
     </div>
+  );
+}
+
+function SettingsBlock({
+  title,
+  description,
+  children,
+}: {
+  title: string;
+  description: string;
+  children: ReactNode;
+}) {
+  return (
+    <section className="rounded-lg border bg-background p-3 shadow-xs sm:p-4">
+      <div className="mb-3">
+        <h3 className="text-sm font-medium">{title}</h3>
+        <p className="mt-1 text-xs leading-5 text-muted-foreground">
+          {description}
+        </p>
+      </div>
+      <div className="space-y-3">{children}</div>
+    </section>
   );
 }
 
@@ -662,6 +795,7 @@ function SettingsField({
   placeholder,
   autoComplete,
   required = false,
+  helpText,
 }: {
   id: string;
   label: string;
@@ -671,6 +805,7 @@ function SettingsField({
   placeholder?: string;
   autoComplete?: string;
   required?: boolean;
+  helpText?: string;
 }) {
   return (
     <div className="space-y-1.5">
@@ -685,48 +820,55 @@ function SettingsField({
         placeholder={placeholder}
         autoComplete={autoComplete}
         required={required}
-        className="h-9 w-full rounded-md border bg-background px-3 text-sm outline-none transition-shadow placeholder:text-muted-foreground focus-visible:ring-[3px] focus-visible:ring-ring/50"
+        className="h-9 w-full rounded-md border bg-background px-3 text-sm shadow-xs outline-none transition-shadow placeholder:text-muted-foreground focus-visible:ring-[3px] focus-visible:ring-ring/50"
       />
+      {helpText ? (
+        <p className="text-xs leading-5 text-muted-foreground">{helpText}</p>
+      ) : null}
     </div>
   );
 }
 
 function PreferenceGroup({
-  label,
   children,
 }: {
-  label: string;
   children: ReactNode;
 }) {
   return (
-    <div className="space-y-2">
-      <div className="text-xs font-medium text-muted-foreground">{label}</div>
-      <div className="flex flex-wrap gap-2">{children}</div>
-    </div>
+    <div className="grid gap-2 sm:grid-cols-2">{children}</div>
   );
 }
 
 function SegmentedOption({
   active,
   label,
+  description,
   onClick,
 }: {
   active: boolean;
   label: string;
+  description: string;
   onClick: () => void;
 }) {
   return (
     <button
       type="button"
       className={cn(
-        "h-9 rounded-md border px-3 text-sm font-medium outline-none transition-colors focus-visible:ring-[3px] focus-visible:ring-ring/50",
+        "relative flex min-h-16 flex-col items-start justify-center rounded-lg border px-3 py-2 pr-9 text-left outline-none transition-all focus-visible:ring-[3px] focus-visible:ring-ring/50",
         active
-          ? "border-foreground/20 bg-foreground text-background"
-          : "bg-background text-muted-foreground hover:bg-accent hover:text-foreground",
+          ? "border-primary/40 bg-primary/5 text-foreground shadow-sm ring-1 ring-primary/10"
+          : "bg-muted/20 text-muted-foreground hover:border-foreground/20 hover:bg-muted/40 hover:text-foreground",
       )}
       onClick={onClick}
     >
-      {label}
+      {active ? (
+        <CheckCircle2
+          className="absolute right-3 top-3 size-3.5 text-primary"
+          aria-hidden
+        />
+      ) : null}
+      <span className="text-sm font-medium">{label}</span>
+      <span className="mt-1 text-xs text-muted-foreground">{description}</span>
     </button>
   );
 }
@@ -735,26 +877,48 @@ function IconOption({
   active,
   icon,
   label,
+  description,
   onClick,
 }: {
   active: boolean;
   icon: ReactNode;
   label: string;
+  description: string;
   onClick: () => void;
 }) {
   return (
     <button
       type="button"
       className={cn(
-        "flex h-10 items-center gap-2 rounded-md border px-3 text-sm font-medium outline-none transition-colors focus-visible:ring-[3px] focus-visible:ring-ring/50",
+        "relative flex min-h-16 items-center gap-3 rounded-lg border px-3 py-2 pr-9 text-left outline-none transition-all focus-visible:ring-[3px] focus-visible:ring-ring/50",
         active
-          ? "border-foreground/20 bg-foreground text-background"
-          : "bg-background text-muted-foreground hover:bg-accent hover:text-foreground",
+          ? "border-primary/40 bg-primary/5 text-foreground shadow-sm ring-1 ring-primary/10"
+          : "bg-muted/20 text-muted-foreground hover:border-foreground/20 hover:bg-muted/40 hover:text-foreground",
       )}
       onClick={onClick}
     >
-      {icon}
-      {label}
+      {active ? (
+        <CheckCircle2
+          className="absolute right-3 top-3 size-3.5 text-primary"
+          aria-hidden
+        />
+      ) : null}
+      <span
+        className={cn(
+          "flex size-8 shrink-0 items-center justify-center rounded-md border",
+          active
+            ? "border-primary/30 bg-primary text-primary-foreground"
+            : "bg-background",
+        )}
+      >
+        {icon}
+      </span>
+      <span className="min-w-0">
+        <span className="block text-sm font-medium">{label}</span>
+        <span className="mt-0.5 block text-xs text-muted-foreground">
+          {description}
+        </span>
+      </span>
     </button>
   );
 }

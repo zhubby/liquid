@@ -56,6 +56,7 @@ pub struct UpdateLlmProviderSettingsRequest {
     pub base_url: String,
     pub model: String,
     pub api_mode: LlmProviderApiMode,
+    #[ts(optional)]
     pub api_key: Option<String>,
 }
 
