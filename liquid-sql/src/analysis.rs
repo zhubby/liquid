@@ -100,6 +100,7 @@ fn statement_kind(node: &NodeEnum) -> PgSqlStatementKind {
         NodeEnum::DeleteStmt(_) => PgSqlStatementKind::Delete,
         NodeEnum::MergeStmt(_) => PgSqlStatementKind::Merge,
         NodeEnum::CreateStmt(_)
+        | NodeEnum::CreatedbStmt(_)
         | NodeEnum::CreateSchemaStmt(_)
         | NodeEnum::CreateTableAsStmt(_)
         | NodeEnum::IndexStmt(_)

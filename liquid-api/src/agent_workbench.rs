@@ -13,7 +13,7 @@ use crate::{
     bi_panels::materialize_bi_query,
     error::ApiError,
     llm_provider::user_llm_provider_for_user,
-    sql_audits::{create_sql_audit_for_user, execute_sql_audit_for_user},
+    sql_audits::{SqlAuditExecutionOutcome, create_sql_audit_for_user, execute_sql_audit_for_user},
     state::ApiState,
 };
 
@@ -394,10 +394,13 @@ pub(crate) async fn apply_agent_action(
         }
         AgentActionKind::ExecuteSqlAudit => {
             let payload = sql_audit_payload(action)?;
-            let record =
+            let outcome =
                 execute_sql_audit_for_user(state, owner_user_id, &payload.sql_audit_id).await?;
 
-            Ok(sql_audit_result(record, AgentEventType::ResourceUpdated))
+            Ok(sql_audit_execution_result(
+                outcome,
+                AgentEventType::ResourceUpdated,
+            ))
         }
         AgentActionKind::CreateManagedDatabase
         | AgentActionKind::UpdateManagedDatabase
@@ -475,6 +478,27 @@ fn sql_audit_result(
             "resource_kind": "sql_audit",
             "resource_id": record.id,
             "record": record,
+        }),
+    )
+}
+
+fn sql_audit_execution_result(
+    outcome: SqlAuditExecutionOutcome,
+    event_type: AgentEventType,
+) -> (AgentResourceKind, String, AgentEventType, Value) {
+    let SqlAuditExecutionOutcome {
+        record,
+        query_result,
+    } = outcome;
+    (
+        AgentResourceKind::SqlAudit,
+        record.id.clone(),
+        event_type,
+        json!({
+            "resource_kind": "sql_audit",
+            "resource_id": record.id,
+            "record": record,
+            "query_result": query_result,
         }),
     )
 }

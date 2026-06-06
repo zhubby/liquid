@@ -5,6 +5,7 @@ use async_stream::try_stream;
 use async_trait::async_trait;
 use liquid_core::{AuditSummary, SqlAuditReport, SqlAuditRequest};
 use liquid_llm::{LlmClient, LlmMessage, LlmProtocol, LlmRequest};
+use serde_json::json;
 
 use crate::{
     prompt::{audit_messages, parse_audit_report},
@@ -83,7 +84,7 @@ impl ToolCallingSqlAuditAgent {
             ));
 
             for call in &response.tool_calls {
-                let output = tools.execute(call).await?;
+                let output = execute_tool_for_model(&tools, call).await;
                 messages.push(LlmMessage::tool_result(call.id.clone(), output.content));
             }
         }
@@ -151,7 +152,7 @@ impl SqlAuditAgent for ToolCallingSqlAuditAgent {
                         id: call.id.clone(),
                         name: call.name.clone(),
                     };
-                    let output = agent.tools.execute(call).await?;
+                    let output = execute_tool_for_model(&agent.tools, call).await;
                     yield AgentEvent::ToolCallFinished {
                         id: call.id.clone(),
                         name: call.name.clone(),
@@ -166,6 +167,29 @@ impl SqlAuditAgent for ToolCallingSqlAuditAgent {
                 agent.max_tool_rounds
             ))?;
         }))
+    }
+}
+
+async fn execute_tool_for_model(
+    tools: &ToolRegistry,
+    call: &liquid_llm::ToolCall,
+) -> crate::types::ToolOutput {
+    match tools.execute(call).await {
+        Ok(output) => output,
+        Err(error) => {
+            let message = error.to_string();
+            tracing::warn!(
+                tool_name = %call.name,
+                tool_call_id = %call.id,
+                error = %message,
+                "SQL audit agent tool call failed; returning error to model"
+            );
+            crate::types::ToolOutput::json(json!({
+                "ok": false,
+                "tool": call.name,
+                "error": message,
+            }))
+        }
     }
 }
 
@@ -206,6 +230,28 @@ mod tests {
             Ok(ToolOutput::json(json!({
                 "value": arguments.get("value").and_then(Value::as_str).unwrap_or_default()
             })))
+        }
+    }
+
+    #[derive(Default)]
+    struct FailingTool;
+
+    #[async_trait]
+    impl AgentTool for FailingTool {
+        fn definition(&self) -> ToolDefinition {
+            ToolDefinition::new(
+                "failing_tool",
+                "Always fail.",
+                json!({
+                    "type": "object",
+                    "properties": {},
+                    "additionalProperties": false
+                }),
+            )
+        }
+
+        async fn execute(&self, _arguments: Value) -> Result<ToolOutput> {
+            Err(anyhow!("tool is unavailable"))
         }
     }
 
@@ -302,6 +348,45 @@ mod tests {
 
         assert_eq!(report.risk_score, 25);
         assert_eq!(report.findings[0].severity, RiskSeverity::Low);
+    }
+
+    #[tokio::test]
+    async fn audit_agent_returns_tool_errors_to_model() {
+        let llm = Arc::new(ScriptedLlm::new(vec![
+            LlmResponse::text("").with_tool_calls(vec![ToolCall::new(
+                "call_1",
+                "failing_tool",
+                r#"{}"#,
+            )]),
+            LlmResponse::text(
+                r#"{
+                    "summary": "The query can still be reviewed from deterministic analysis.",
+                    "risk_score": 50,
+                    "findings": []
+                }"#,
+            ),
+        ]));
+        let mut tools = ToolRegistry::new();
+        tools.register(FailingTool);
+        let agent =
+            ToolCallingSqlAuditAgent::new(llm.clone(), "gpt-test", LlmProtocol::ChatCompletions)
+                .with_tools(tools);
+
+        let report = agent
+            .audit_sql(SqlAuditRequest::new("create database liquid_sandbox"))
+            .await
+            .unwrap();
+
+        let requests = llm.requests();
+        let tool_message = requests[1]
+            .messages
+            .iter()
+            .find(|message| message.role == MessageRole::Tool)
+            .unwrap();
+        assert_eq!(report.risk_score, 50);
+        assert!(tool_message.content.contains(r#""ok":false"#));
+        assert!(tool_message.content.contains(r#""tool":"failing_tool""#));
+        assert!(tool_message.content.contains(r#""error":"#));
     }
 
     #[tokio::test]

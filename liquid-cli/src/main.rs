@@ -1,3 +1,4 @@
+use std::fmt;
 use std::sync::Arc;
 use std::{env, fs, path::PathBuf};
 
@@ -7,7 +8,12 @@ use liquid_agent::{MockSqlAuditAgent, SqlAuditAgent, ToolCallingSqlAuditAgent};
 use liquid_config::{LiquidConfig, LlmApiMode, default_config_toml};
 use liquid_llm::{LlmProtocol, OpenAiCompatibleClient, OpenAiCompatibleConfig};
 use liquid_storage::{Storage, StorageOptions};
-use tracing_subscriber::EnvFilter;
+use time::{OffsetDateTime, format_description::well_known::Rfc3339};
+use tracing::{
+    Event, Level, Subscriber,
+    field::{Field, Visit},
+};
+use tracing_subscriber::{EnvFilter, Layer, layer::Context as LayerContext, prelude::*};
 
 const DEFAULT_CONFIG_DIR: &str = ".liquid";
 const DEFAULT_CONFIG_FILE: &str = "config.toml";
@@ -177,10 +183,181 @@ async fn build_agent(config: &LiquidConfig) -> anyhow::Result<Arc<dyn SqlAuditAg
     )))
 }
 fn init_tracing() {
-    let env_filter =
-        EnvFilter::try_from_default_env().unwrap_or_else(|_| EnvFilter::new("liquid=info"));
+    let regular_filter = env_filter_from_env().add_directive(
+        "sqlx::query=off"
+            .parse()
+            .expect("valid sqlx query filter directive"),
+    );
+    let sqlx_filter = env_filter_from_env();
 
-    tracing_subscriber::fmt().with_env_filter(env_filter).init();
+    let regular_layer = tracing_subscriber::fmt::layer().with_filter(regular_filter);
+    let sqlx_layer = PrettySqlxQueryLayer.with_filter(sqlx_filter);
+
+    tracing_subscriber::registry()
+        .with(regular_layer)
+        .with(sqlx_layer)
+        .init();
+}
+
+fn env_filter_from_env() -> EnvFilter {
+    EnvFilter::try_from_default_env().unwrap_or_else(|_| EnvFilter::new("liquid=info"))
+}
+
+struct PrettySqlxQueryLayer;
+
+impl<S> Layer<S> for PrettySqlxQueryLayer
+where
+    S: Subscriber,
+{
+    fn on_event(&self, event: &Event<'_>, _context: LayerContext<'_, S>) {
+        if event.metadata().target() != "sqlx::query" {
+            return;
+        }
+
+        let mut fields = SqlxQueryFields::default();
+        event.record(&mut fields);
+
+        eprintln!("{}", fields.render(*event.metadata().level()));
+    }
+}
+
+#[derive(Debug, Default)]
+struct SqlxQueryFields {
+    summary: Option<String>,
+    statement: Option<String>,
+    rows_affected: Option<String>,
+    rows_returned: Option<String>,
+    elapsed: Option<String>,
+}
+
+impl SqlxQueryFields {
+    fn render(&self, level: Level) -> String {
+        let summary = self.summary.as_deref().unwrap_or("query");
+        let mut line = format!(
+            "{} {:>5} sqlx::query: {}",
+            timestamp_rfc3339(),
+            level,
+            summary
+        );
+
+        if let Some(rows_returned) = self.rows_returned.as_deref() {
+            line.push_str(&format!(" rows_returned={rows_returned}"));
+        }
+
+        if let Some(rows_affected) = self.rows_affected.as_deref() {
+            line.push_str(&format!(" rows_affected={rows_affected}"));
+        }
+
+        if let Some(elapsed) = self.elapsed.as_deref() {
+            line.push_str(&format!(" elapsed={elapsed}"));
+        }
+
+        let Some(statement) = self.statement.as_deref() else {
+            return line;
+        };
+
+        let statement = normalize_sql_statement(statement);
+
+        if statement.is_empty() {
+            return line;
+        }
+
+        line.push_str("\n    sql:\n");
+        for sql_line in statement.lines() {
+            line.push_str("      ");
+            line.push_str(sql_line);
+            line.push('\n');
+        }
+        line.pop();
+
+        line
+    }
+
+    fn record_value(&mut self, name: &str, value: String) {
+        let value = decode_debug_string(value.trim()).unwrap_or(value);
+
+        match name {
+            "summary" => self.summary = Some(value),
+            "db.statement" => self.statement = Some(value),
+            "rows_affected" => self.rows_affected = Some(value),
+            "rows_returned" => self.rows_returned = Some(value),
+            "elapsed" => self.elapsed = Some(value),
+            _ => {}
+        }
+    }
+}
+
+impl Visit for SqlxQueryFields {
+    fn record_debug(&mut self, field: &Field, value: &dyn fmt::Debug) {
+        self.record_value(field.name(), format!("{value:?}"));
+    }
+
+    fn record_str(&mut self, field: &Field, value: &str) {
+        self.record_value(field.name(), value.to_owned());
+    }
+
+    fn record_i64(&mut self, field: &Field, value: i64) {
+        self.record_value(field.name(), value.to_string());
+    }
+
+    fn record_u64(&mut self, field: &Field, value: u64) {
+        self.record_value(field.name(), value.to_string());
+    }
+
+    fn record_f64(&mut self, field: &Field, value: f64) {
+        self.record_value(field.name(), value.to_string());
+    }
+}
+
+fn timestamp_rfc3339() -> String {
+    OffsetDateTime::now_utc()
+        .format(&Rfc3339)
+        .unwrap_or_else(|_| "unknown-time".to_owned())
+}
+
+fn decode_debug_string(value: &str) -> Option<String> {
+    if !value.starts_with('"') || !value.ends_with('"') {
+        return None;
+    }
+
+    serde_json::from_str::<String>(value).ok()
+}
+
+fn normalize_sql_statement(statement: &str) -> String {
+    let mut lines = statement.lines().collect::<Vec<_>>();
+
+    while lines
+        .first()
+        .map(|line| line.trim().is_empty())
+        .unwrap_or(false)
+    {
+        lines.remove(0);
+    }
+
+    while lines
+        .last()
+        .map(|line| line.trim().is_empty())
+        .unwrap_or(false)
+    {
+        lines.pop();
+    }
+
+    let indent = lines
+        .iter()
+        .filter(|line| !line.trim().is_empty())
+        .map(|line| {
+            line.chars()
+                .take_while(|character| character.is_whitespace())
+                .count()
+        })
+        .min()
+        .unwrap_or(0);
+
+    lines
+        .into_iter()
+        .map(|line| line.chars().skip(indent).collect::<String>())
+        .collect::<Vec<_>>()
+        .join("\n")
 }
 
 #[cfg(test)]
@@ -221,6 +398,47 @@ mod tests {
         let cli = Cli::parse_from(["liquid", "version"]);
 
         assert!(matches!(cli.command, Command::Version));
+    }
+
+    #[test]
+    fn decodes_debug_string_values() {
+        assert_eq!(
+            decode_debug_string(r#""select \n  1""#).as_deref(),
+            Some("select \n  1")
+        );
+        assert_eq!(decode_debug_string("select 1"), None);
+    }
+
+    #[test]
+    fn normalizes_sql_statement_indentation() {
+        let sql =
+            "\n\n        select\n            id,\n            email\n        from users\n    \n";
+
+        assert_eq!(
+            normalize_sql_statement(sql),
+            "select\n    id,\n    email\nfrom users"
+        );
+    }
+
+    #[test]
+    fn renders_sqlx_query_as_multiline_sql() {
+        let fields = SqlxQueryFields {
+            summary: Some("select id, email, ...".to_owned()),
+            statement: Some(
+                "\n\n    select\n        id,\n        email\n    from users\n".to_owned(),
+            ),
+            rows_affected: Some("0".to_owned()),
+            rows_returned: Some("2".to_owned()),
+            elapsed: Some("3.4ms".to_owned()),
+        };
+
+        let rendered = fields.render(Level::DEBUG);
+
+        assert!(rendered.contains("sqlx::query: select id, email, ..."));
+        assert!(rendered.contains("rows_returned=2"));
+        assert!(rendered.contains("elapsed=3.4ms"));
+        assert!(rendered.contains("\n    sql:\n      select\n          id,"));
+        assert!(!rendered.contains(r"\n"));
     }
 
     #[test]

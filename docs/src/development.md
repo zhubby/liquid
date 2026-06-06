@@ -84,9 +84,9 @@ Managed database SQL audit tools use the saved managed database records, not the
 process-level `DATABASE_URL`. SQL metadata collection is controlled by
 `LIQUID_SQL_METADATA=auto|off|required`, defaulting to `auto`.
 `LIQUID_SQL_EXECUTION=off` disables managed audit execution tools, `readonly`
-enables read-only execution, and `write_gated` is downgraded to read-only for
-the managed database audit endpoint in v1. Each managed database instance gets
-a lazy SQLx pool that is closed after
+enables read-only execution, and `write_gated` exposes gated write execution for
+audited, user-approved statements. Each managed database instance gets a lazy
+SQLx pool that is closed after
 `LIQUID_SQL_MANAGED_POOL_IDLE_TTL_SECONDS` seconds without use.
 
 ## Frontend

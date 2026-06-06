@@ -6,9 +6,9 @@ use axum::{
 };
 use liquid_agent::{PostgresToolConfig, SqlAuditAgent, ToolCallingSqlAuditAgent};
 use liquid_core::{
-    ApproveSqlAuditRequest, CreateSqlAuditRequest, ManagedDatabase, ManagedDatabasePoolKey,
-    RejectSqlAuditRequest, SqlAuditExecutionResult, SqlAuditRecord, SqlAuditStatus,
-    SqlStatementKind,
+    ApproveSqlAuditRequest, BiQueryResult, CreateSqlAuditRequest, ManagedDatabase,
+    ManagedDatabasePoolKey, RejectSqlAuditRequest, SqlAuditExecutionResult, SqlAuditRecord,
+    SqlAuditStatus, SqlStatementKind,
 };
 use liquid_sql::{
     PgSqlAnalysis, PgSqlAnalysisRequest, PgSqlRiskSeverity, PgSqlStatementKind,
@@ -18,8 +18,15 @@ use liquid_storage::CreateSqlAuditRecord;
 use serde::Deserialize;
 use std::sync::Arc;
 
-use crate::llm_provider::user_llm_provider_for_user;
 use crate::{auth::authenticated_user, error::ApiError, state::ApiState};
+use crate::{bi_panels::materialize_bi_query, llm_provider::user_llm_provider_for_user};
+
+const SQL_AUDIT_READONLY_RESULT_LIMIT: usize = 100;
+
+pub(crate) struct SqlAuditExecutionOutcome {
+    pub(crate) record: SqlAuditRecord,
+    pub(crate) query_result: Option<BiQueryResult>,
+}
 
 pub(crate) fn routes() -> Router<ApiState> {
     Router::new()
@@ -178,24 +185,29 @@ async fn execute_sql_audit(
     Path(id): Path<String>,
 ) -> Result<Json<SqlAuditRecord>, ApiError> {
     let user = authenticated_user(&state, &headers).await?;
-    let record = execute_sql_audit_for_user(&state, &user.id, &id).await?;
+    let outcome = execute_sql_audit_for_user(&state, &user.id, &id).await?;
 
-    Ok(Json(record))
+    Ok(Json(outcome.record))
 }
 
 pub(crate) async fn execute_sql_audit_for_user(
     state: &ApiState,
     owner_user_id: &str,
     id: &str,
-) -> Result<SqlAuditRecord, ApiError> {
+) -> Result<SqlAuditExecutionOutcome, ApiError> {
+    let record = state.store.get_sql_audit(owner_user_id, id).await?;
+    ensure_database_snapshot_matches(state, owner_user_id, &record).await?;
+
+    if record.statement_kind == Some(SqlStatementKind::Select) {
+        return execute_readonly_sql_audit(state, owner_user_id, record).await;
+    }
+
     if !state.approved_write_execution_enabled {
         return Err(ApiError::forbidden(
             "approved SQL audit execution requires LIQUID_SQL_EXECUTION=write_gated",
         ));
     }
 
-    let record = state.store.get_sql_audit(owner_user_id, id).await?;
-    ensure_database_snapshot_matches(state, owner_user_id, &record).await?;
     let pool = state
         .managed_database_pools
         .get_pool(ManagedDatabasePoolKey::new(
@@ -240,7 +252,10 @@ pub(crate) async fn execute_sql_audit_for_user(
                 )
                 .await?;
 
-            Ok(record)
+            Ok(SqlAuditExecutionOutcome {
+                record,
+                query_result: None,
+            })
         }
         Err(error) => {
             let message = error.to_string();
@@ -252,10 +267,46 @@ pub(crate) async fn execute_sql_audit_for_user(
             if deterministic_execution_rejection(&message) {
                 Err(ApiError::conflict(message))
             } else {
-                Ok(record)
+                Ok(SqlAuditExecutionOutcome {
+                    record,
+                    query_result: None,
+                })
             }
         }
     }
+}
+
+async fn execute_readonly_sql_audit(
+    state: &ApiState,
+    owner_user_id: &str,
+    record: SqlAuditRecord,
+) -> Result<SqlAuditExecutionOutcome, ApiError> {
+    match record.status {
+        SqlAuditStatus::Audited | SqlAuditStatus::Approved | SqlAuditStatus::Executed => {}
+        SqlAuditStatus::PendingApproval
+        | SqlAuditStatus::Rejected
+        | SqlAuditStatus::Blocked
+        | SqlAuditStatus::Executing
+        | SqlAuditStatus::ExecutionFailed => {
+            return Err(ApiError::conflict(
+                "only audited SELECT SQL audits can be executed as read-only queries",
+            ));
+        }
+    }
+
+    let query_result = materialize_bi_query(
+        state,
+        owner_user_id,
+        &record.managed_database_id,
+        &record.sql,
+        SQL_AUDIT_READONLY_RESULT_LIMIT,
+    )
+    .await?;
+
+    Ok(SqlAuditExecutionOutcome {
+        record,
+        query_result: Some(query_result),
+    })
 }
 
 async fn ensure_database_snapshot_matches(

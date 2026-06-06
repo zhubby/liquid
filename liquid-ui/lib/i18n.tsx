@@ -266,6 +266,7 @@ const zhCN = {
     assistantLabel: "Liquid",
     toolLabel: "操作结果",
     sqlPreview: "SQL 审计预览",
+    actionProcessing: "处理中",
     actionStatusUpdated: "动作状态已更新",
     stages: {
       thinking: "正在思考",
@@ -273,8 +274,11 @@ const zhCN = {
       proposing_action: "正在准备动作",
     },
     confirm: "确认",
+    confirming: "确认中",
     importToBiPanel: "导入 BI 面板",
+    importingToBiPanel: "导入中",
     reject: "拒绝",
+    rejecting: "拒绝中",
     biPreview: "BI 卡片预览",
     biRows: (count: number) => `${count} 行`,
     actionLabels: {
@@ -661,6 +665,7 @@ const enUS: Messages = {
     assistantLabel: "Liquid",
     toolLabel: "Action result",
     sqlPreview: "SQL audit preview",
+    actionProcessing: "Processing",
     actionStatusUpdated: "Action status updated",
     stages: {
       thinking: "Thinking",
@@ -668,8 +673,11 @@ const enUS: Messages = {
       proposing_action: "Preparing action",
     },
     confirm: "Confirm",
+    confirming: "Confirming",
     importToBiPanel: "Import to BI panel",
+    importingToBiPanel: "Importing",
     reject: "Reject",
+    rejecting: "Rejecting",
     biPreview: "BI card preview",
     biRows: (count: number) => `${count} ${count === 1 ? "row" : "rows"}`,
     actionLabels: {

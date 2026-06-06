@@ -120,6 +120,15 @@ mod tests {
         assert!(error.to_string().contains("critical deterministic risk"));
     }
 
+    #[test]
+    fn approved_write_executor_detects_create_database_as_autocommit_statement() {
+        assert!(execute::statement_requires_autocommit("create database liquid_sandbox").unwrap());
+        assert!(
+            !execute::statement_requires_autocommit("create table liquid_sandbox (id integer)")
+                .unwrap()
+        );
+    }
+
     #[tokio::test]
     async fn limit_argument_clamps_to_context_max() {
         let context = test_context();

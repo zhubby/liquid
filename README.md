@@ -108,9 +108,9 @@ Environment variables override config file values.
 | `LIQUID_BACKUP_WORK_DIR` | `/tmp/liquid-backups` | Local temporary directory for `pg_dump` and `pg_restore` files. |
 | `LIQUID_BACKUP_WORKER_CONCURRENCY` | `1` | Number of database backup/restore worker tasks. |
 
-The managed database SQL audit endpoint is capped at read-only execution in v1:
-`LIQUID_SQL_EXECUTION=off` disables execution tools, and `write_gated` is
-downgraded to read-only.
+Managed database SQL audit tools honor `LIQUID_SQL_EXECUTION`: `off` disables
+execution tools, `readonly` exposes read-only execution, and `write_gated`
+exposes gated write execution for audited, user-approved statements.
 
 Set a real `LIQUID_ENCRYPTION_KEY` before storing managed database passwords
 outside local development.

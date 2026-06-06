@@ -2,7 +2,8 @@ use pg_query::{
     NodeEnum,
     protobuf::{
         AlterTableCmd, AlterTableStmt, AlterTableType, CreateExtensionStmt, CreateFunctionStmt,
-        CreateTableAsStmt, DropBehavior, DropStmt, IndexStmt, RefreshMatViewStmt, TruncateStmt,
+        CreateTableAsStmt, CreatedbStmt, DropBehavior, DropStmt, IndexStmt, RefreshMatViewStmt,
+        TruncateStmt,
     },
 };
 
@@ -192,6 +193,21 @@ pub(crate) fn inspect_create_function(
             stmt.replace,
             stmt.options.len()
         )),
+    ));
+}
+
+pub(crate) fn inspect_create_database(
+    index: usize,
+    stmt: &CreatedbStmt,
+    analysis: &mut PgSqlAnalysis,
+) {
+    analysis.findings.push(PgSqlFinding::new(
+        "create_database",
+        PgSqlRiskSeverity::Medium,
+        "CREATE DATABASE",
+        "CREATE DATABASE creates a new database outside the current database and should be reviewed for ownership, privileges, and resource impact.",
+        Some(index),
+        Some(format!("database={}, options={}", stmt.dbname, stmt.options.len())),
     ));
 }
 

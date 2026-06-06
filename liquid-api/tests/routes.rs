@@ -2711,6 +2711,19 @@ async fn applying_chat_sql_audit_action_uses_existing_audit_flow() {
     assert_eq!(messages.as_array().unwrap().len(), 3);
     assert_eq!(messages[2]["role"], "tool");
     assert!(messages[2]["content"].as_str().unwrap().contains("audit-1"));
+    assert!(
+        messages[2]["content"]
+            .as_str()
+            .unwrap()
+            .contains("Provider SQL audit completed.")
+    );
+    assert!(
+        messages[2]["content"]
+            .as_str()
+            .unwrap()
+            .contains("No findings.")
+    );
+    assert_eq!(messages[2]["parts"][0]["kind"], "markdown");
 
     let stream_response = app
         .clone()
@@ -2724,6 +2737,7 @@ async fn applying_chat_sql_audit_action_uses_existing_audit_flow() {
     let stream_body = String::from_utf8(stream_body.to_vec()).unwrap();
     assert!(stream_body.contains(r#""type":"message_created""#));
     assert!(stream_body.contains(r#""role":"tool""#));
+    assert!(stream_body.contains("Provider SQL audit completed."));
     assert!(stream_body.contains(r#""type":"action_updated""#));
 
     let audit_response = app
@@ -3238,7 +3252,7 @@ async fn managed_database_audit_sql_uses_managed_database_pool() {
 }
 
 #[tokio::test]
-async fn managed_database_audit_sql_uses_readonly_tool_registry() {
+async fn managed_database_audit_sql_exposes_write_tool_when_write_gated() {
     let agent = Arc::new(CapturingSqlAuditAgent::default());
     let app =
         test_app_with_agent_and_execution(agent.clone(), PostgresToolExecutionMode::WriteGated);
@@ -3277,6 +3291,33 @@ async fn managed_database_audit_sql_uses_readonly_tool_registry() {
     assert_eq!(audit_response.status(), StatusCode::OK);
     let tool_names = agent.tool_names.lock().unwrap().clone();
     assert!(tool_names.iter().any(|name| name == "inspect_sql_risk"));
+    assert!(
+        tool_names
+            .iter()
+            .any(|name| name == "pg_execute_readonly_sql")
+    );
+    assert!(tool_names.iter().any(|name| name == "pg_execute_write_sql"));
+}
+
+#[tokio::test]
+async fn managed_database_audit_sql_keeps_write_tool_hidden_when_readonly() {
+    let agent = Arc::new(CapturingSqlAuditAgent::default());
+    let app = test_app_with_agent_and_execution(agent.clone(), PostgresToolExecutionMode::Readonly);
+    create_test_database(&app).await;
+
+    let audit_response = app
+        .oneshot(auth_json_request(
+            "POST",
+            "/api/v1/managed-databases/db-1/audit-sql",
+            json!({
+                "sql": "select * from users"
+            }),
+        ))
+        .await
+        .unwrap();
+
+    assert_eq!(audit_response.status(), StatusCode::OK);
+    let tool_names = agent.tool_names.lock().unwrap().clone();
     assert!(
         tool_names
             .iter()

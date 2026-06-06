@@ -13,6 +13,7 @@ hex.workspace = true
 liquid-core.workspace = true
 liquid-llm.workspace = true
 liquid-sql.workspace = true
+pg_query.workspace = true
 reqwest.workspace = true
 ring.workspace = true
 serde.workspace = true

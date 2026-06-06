@@ -111,6 +111,15 @@ fn create_table_as_select_is_flagged() {
 }
 
 #[test]
+fn create_database_is_classified_and_flagged() {
+    let analysis = analyze("create database liquid_sandbox");
+
+    assert!(analysis.parse_ok());
+    assert_eq!(analysis.statements[0].kind, PgSqlStatementKind::Create);
+    assert!(has_rule(&analysis, "create_database"));
+}
+
+#[test]
 fn select_star_is_flagged() {
     let analysis = analyze("select * from users");
 

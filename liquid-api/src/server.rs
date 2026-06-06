@@ -90,8 +90,7 @@ fn managed_database_pool_policy(config: &LiquidConfig) -> ManagedDatabasePoolPol
 fn managed_database_audit_execution(mode: SqlExecutionMode) -> PostgresToolExecutionMode {
     match mode {
         SqlExecutionMode::Off => PostgresToolExecutionMode::Off,
-        SqlExecutionMode::Readonly | SqlExecutionMode::WriteGated => {
-            PostgresToolExecutionMode::Readonly
-        }
+        SqlExecutionMode::Readonly => PostgresToolExecutionMode::Readonly,
+        SqlExecutionMode::WriteGated => PostgresToolExecutionMode::WriteGated,
     }
 }

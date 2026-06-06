@@ -11,12 +11,12 @@ use axum::{
 use futures_util::Stream;
 use liquid_core::{
     AgentAction, AgentActionStatus, AgentConversation, AgentEventRecord, AgentEventType,
-    AgentMessage, AgentMessageRole, AgentTurn, AgentTurnStatus, ChatAction,
+    AgentMessage, AgentMessageRole, AgentTurn, AgentTurnStatus, BiQueryResult, ChatAction,
     ChatActionDecisionRequest, ChatActionPreview, ChatConversation, ChatErrorCode,
     ChatManagedDatabaseSummary, ChatMessage, ChatMessagePart, ChatMessageStatus, ChatStreamEvent,
     ChatStreamStage, ChatTurn, ChatTurnDashboardContext, CreateAgentConversationRequest,
     CreateAgentTurnRequest, CreateChatConversationRequest, CreateChatTurnRequest, ManagedDatabase,
-    UpdateAgentConversationRequest, UpdateChatConversationRequest,
+    SqlAuditRecord, UpdateAgentConversationRequest, UpdateChatConversationRequest,
 };
 use serde::Deserialize;
 use serde_json::Value;
@@ -346,6 +346,7 @@ async fn apply_action(
     let action = state.store.get_agent_action(&user.id, &action_id).await?;
     let updated = match apply_agent_action(&state, &user.id, &action).await {
         Ok((resource_kind, resource_id, event_type, payload)) => {
+            let result_payload = payload.clone();
             let updated = state
                 .store
                 .update_agent_action_status(
@@ -371,6 +372,7 @@ async fn apply_action(
                 &updated,
                 Some(resource_kind),
                 Some(resource_id),
+                Some(&result_payload),
             )
             .await;
             updated
@@ -418,7 +420,7 @@ async fn reject_action(
         serde_json::json!({ "action": action }),
     )
     .await?;
-    append_action_result_message(&state, &user.id, &action, None, None).await;
+    append_action_result_message(&state, &user.id, &action, None, None, None).await;
 
     Ok(Json(chat_action(action)))
 }
@@ -429,8 +431,14 @@ async fn append_action_result_message(
     action: &AgentAction,
     resource_kind: Option<liquid_core::AgentResourceKind>,
     resource_id: Option<String>,
+    result_payload: Option<&Value>,
 ) {
-    let content = action_result_message(action, resource_kind, resource_id.as_deref());
+    let content = action_result_message(
+        action,
+        resource_kind,
+        resource_id.as_deref(),
+        result_payload,
+    );
     let metadata = serde_json::json!({
         "kind": "action_result",
         "action_id": action.id,
@@ -438,6 +446,7 @@ async fn append_action_result_message(
         "action_status": action.status,
         "resource_kind": resource_kind,
         "resource_id": resource_id,
+        "result": result_payload,
     });
 
     let message = state
@@ -487,13 +496,22 @@ fn action_result_message(
     action: &AgentAction,
     resource_kind: Option<liquid_core::AgentResourceKind>,
     resource_id: Option<&str>,
+    result_payload: Option<&Value>,
 ) -> String {
     match action.status {
         AgentActionStatus::Applied => match resource_kind {
-            Some(liquid_core::AgentResourceKind::SqlAudit) => format!(
-                "SQL audit created and reviewed. Audit ID: {}.",
-                resource_id.unwrap_or("unknown")
-            ),
+            Some(liquid_core::AgentResourceKind::SqlAudit) => result_payload
+                .and_then(sql_audit_record_from_result_payload)
+                .map(|record| {
+                    let query_result = result_payload.and_then(sql_audit_query_result_from_payload);
+                    sql_audit_action_result_message(&record, query_result.as_ref())
+                })
+                .unwrap_or_else(|| {
+                    format!(
+                        "SQL audit created and reviewed. Audit ID: {}.",
+                        resource_id.unwrap_or("unknown")
+                    )
+                }),
             Some(liquid_core::AgentResourceKind::BiPanelCard) => format!(
                 "BI panel card created. Card ID: {}.",
                 resource_id.unwrap_or("unknown")
@@ -509,6 +527,191 @@ fn action_result_message(
         AgentActionStatus::Proposed | AgentActionStatus::Superseded => {
             "Action status updated.".to_owned()
         }
+    }
+}
+
+fn sql_audit_record_from_result_payload(payload: &Value) -> Option<SqlAuditRecord> {
+    payload
+        .get("record")
+        .cloned()
+        .and_then(|record| serde_json::from_value::<SqlAuditRecord>(record).ok())
+}
+
+fn sql_audit_query_result_from_payload(payload: &Value) -> Option<BiQueryResult> {
+    payload
+        .get("query_result")
+        .cloned()
+        .and_then(|query_result| serde_json::from_value::<Option<BiQueryResult>>(query_result).ok())
+        .flatten()
+}
+
+fn sql_audit_action_result_message(
+    record: &SqlAuditRecord,
+    query_result: Option<&BiQueryResult>,
+) -> String {
+    let title = if query_result.is_some() {
+        "SQL query result"
+    } else {
+        "SQL audit completed"
+    };
+    let mut message = format!(
+        "### {title}\n\n- Audit ID: `{}`\n- Database: `{}`\n- Audit status: `{}`\n- Risk score: `{}/100`",
+        record.id,
+        record.managed_database_name,
+        record.status.as_str(),
+        record.risk_score,
+    );
+
+    if let Some(statement_kind) = record.statement_kind {
+        message.push_str(&format!("\n- Statement: `{}`", statement_kind.as_str()));
+    }
+
+    if let Some(report) = &record.report {
+        message.push_str("\n\n**Audit summary**\n\n");
+        message.push_str(report.summary.trim());
+
+        message.push_str("\n\n**Findings**\n\n");
+        if report.findings.is_empty() {
+            message.push_str("No findings.");
+        } else {
+            for finding in &report.findings {
+                message.push_str(&format!(
+                    "- **{}** (`{}`): {} Recommendation: {}",
+                    finding.title,
+                    risk_severity_label(&finding.severity),
+                    finding.explanation,
+                    finding.recommendation,
+                ));
+                message.push('\n');
+            }
+            message = message.trim_end().to_owned();
+        }
+    }
+
+    if let Some(query_result) = query_result {
+        message.push_str("\n\n**Query result**\n\n");
+        message.push_str(&query_result_markdown(query_result));
+    } else if let Some(execution_result) = &record.execution_result {
+        message.push_str(&format!(
+            "\n\n**Execution result**\n\n- Statement: `{}`\n- Affected rows: `{}`\n- Elapsed: `{}ms`\n- Risk floor: `{}/100`",
+            execution_result.statement_kind.as_str(),
+            execution_result.affected_rows,
+            execution_result.elapsed_ms,
+            execution_result.risk_floor,
+        ));
+    } else if let Some(execution_error) = record.execution_error.as_deref() {
+        message.push_str("\n\n**Execution error**\n\n");
+        message.push_str(execution_error.trim());
+    } else if record
+        .statement_kind
+        .is_some_and(|kind| kind == liquid_core::SqlStatementKind::Select)
+    {
+        message.push_str(
+            "\n\n_This action created an audit report; it does not return SELECT rows. Use a BI card action when you want query result rows in the workspace._",
+        );
+    }
+
+    message
+}
+
+fn query_result_markdown(result: &BiQueryResult) -> String {
+    let mut message = format!(
+        "{} row{} returned in {}ms{}.",
+        result.row_count,
+        if result.row_count == 1 { "" } else { "s" },
+        result.elapsed_ms,
+        if result.truncated { " (truncated)" } else { "" },
+    );
+
+    if result.columns.is_empty() {
+        return message;
+    }
+
+    message.push_str("\n\n");
+    message.push('|');
+    for column in &result.columns {
+        message.push(' ');
+        message.push_str(&escape_markdown_table_cell(column));
+        message.push_str(" |");
+    }
+    message.push('\n');
+    message.push('|');
+    for _ in &result.columns {
+        message.push_str(" --- |");
+    }
+
+    for row in result.rows.iter().take(20) {
+        message.push('\n');
+        message.push('|');
+        for column in &result.columns {
+            let value = row
+                .get(column)
+                .map(format_query_result_value)
+                .unwrap_or_default();
+            message.push(' ');
+            message.push_str(&escape_markdown_table_cell(&value));
+            message.push_str(" |");
+        }
+    }
+
+    if result.rows.len() > 20 {
+        message.push_str("\n\n_Showing first 20 rows._");
+    }
+
+    message
+}
+
+fn format_query_result_value(value: &Value) -> String {
+    match value {
+        Value::Null => String::new(),
+        Value::Bool(value) => value.to_string(),
+        Value::Number(value) => value.to_string(),
+        Value::String(value) => value.clone(),
+        Value::Array(_) | Value::Object(_) => value.to_string(),
+    }
+}
+
+fn escape_markdown_table_cell(value: &str) -> String {
+    value.replace('|', "\\|").replace('\n', " ")
+}
+
+fn risk_severity_label(severity: &liquid_core::RiskSeverity) -> &'static str {
+    match severity {
+        liquid_core::RiskSeverity::Low => "low",
+        liquid_core::RiskSeverity::Medium => "medium",
+        liquid_core::RiskSeverity::High => "high",
+        liquid_core::RiskSeverity::Critical => "critical",
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use liquid_core::BiQueryResult;
+    use serde_json::json;
+    use time::OffsetDateTime;
+
+    use super::query_result_markdown;
+
+    #[test]
+    fn query_result_markdown_renders_result_table() {
+        let result = BiQueryResult {
+            columns: vec!["datname".to_owned(), "size".to_owned()],
+            rows: vec![
+                json!({ "datname": "postgres", "size": "7 MB" }),
+                json!({ "datname": "liquid", "size": "12 MB" }),
+            ],
+            row_count: 2,
+            truncated: false,
+            elapsed_ms: 5,
+            refreshed_at: OffsetDateTime::UNIX_EPOCH,
+        };
+
+        let markdown = query_result_markdown(&result);
+
+        assert!(markdown.contains("2 rows returned in 5ms."));
+        assert!(markdown.contains("| datname | size |"));
+        assert!(markdown.contains("| postgres | 7 MB |"));
+        assert!(markdown.contains("| liquid | 12 MB |"));
     }
 }
 
@@ -668,7 +871,8 @@ fn chat_database_summary(database: &ManagedDatabase) -> ChatManagedDatabaseSumma
 
 fn chat_message(message: AgentMessage) -> ChatMessage {
     let status = ChatMessageStatus::Complete;
-    let parts = if message.role == AgentMessageRole::Assistant {
+    let parts = if message.role == AgentMessageRole::Assistant || is_action_result_message(&message)
+    {
         vec![ChatMessagePart::Markdown {
             markdown: message.content.clone(),
         }]
@@ -687,6 +891,15 @@ fn chat_message(message: AgentMessage) -> ChatMessage {
         turn_id: message.turn_id,
         created_at: message.created_at,
     }
+}
+
+fn is_action_result_message(message: &AgentMessage) -> bool {
+    message
+        .metadata
+        .as_ref()
+        .and_then(|metadata| metadata.get("kind"))
+        .and_then(Value::as_str)
+        == Some("action_result")
 }
 
 fn chat_turn(turn: AgentTurn) -> ChatTurn {

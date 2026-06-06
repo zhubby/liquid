@@ -35,6 +35,7 @@ pub(crate) fn inspect_statement(
         }
         NodeEnum::CreateExtensionStmt(stmt) => ddl::inspect_create_extension(index, stmt, analysis),
         NodeEnum::CreateFunctionStmt(stmt) => ddl::inspect_create_function(index, stmt, analysis),
+        NodeEnum::CreatedbStmt(stmt) => ddl::inspect_create_database(index, stmt, analysis),
         NodeEnum::GrantStmt(stmt) => security::inspect_grant(index, stmt, analysis),
         NodeEnum::GrantRoleStmt(stmt) => security::inspect_grant_role(index, stmt, analysis),
         NodeEnum::AlterRoleStmt(stmt) => security::inspect_alter_role(index, stmt, analysis),

@@ -84,6 +84,8 @@ type FailedTurn = {
   message: string;
 };
 
+type PendingActionDecision = "apply" | "reject";
+
 type ChatPanelProps = {
   token: string;
   selectedDatabase: ManagedDatabase;
@@ -119,12 +121,16 @@ export function ChatPanel({
   const [streamStage, setStreamStage] = useState<ChatStreamStage | null>(null);
   const [activeTurn, setActiveTurn] = useState<ChatTurn | null>(null);
   const [failedTurn, setFailedTurn] = useState<FailedTurn | null>(null);
+  const [pendingActionDecisions, setPendingActionDecisions] = useState<
+    Record<string, PendingActionDecision>
+  >({});
   const listRef = useRef<HTMLDivElement>(null);
   const composerRef = useRef<HTMLTextAreaElement>(null);
   const activeStreamRef = useRef<AbortController | null>(null);
   const activeTurnRef = useRef<ChatTurn | null>(null);
   const activeConversationIdRef = useRef(conversation.id);
   const activeSendRef = useRef<string | null>(null);
+  const pendingActionIdsRef = useRef(new Set<string>());
   const loadVersionRef = useRef(0);
   const nearBottomRef = useRef(true);
 
@@ -178,6 +184,7 @@ export function ChatPanel({
     activeStreamRef.current = null;
     activeTurnRef.current = null;
     activeSendRef.current = null;
+    pendingActionIdsRef.current.clear();
     nearBottomRef.current = true;
     setInput("");
     setMessages([]);
@@ -186,6 +193,7 @@ export function ChatPanel({
     setStreamStage(null);
     setActiveTurn(null);
     setFailedTurn(null);
+    setPendingActionDecisions({});
     setIsLoading(true);
 
     const load = async () => {
@@ -579,6 +587,16 @@ export function ChatPanel({
     action: ChatAction,
     decision: "apply" | "reject",
   ) => {
+    if (pendingActionIdsRef.current.has(action.id)) {
+      return;
+    }
+
+    pendingActionIdsRef.current.add(action.id);
+    setPendingActionDecisions((current) => ({
+      ...current,
+      [action.id]: decision,
+    }));
+
     try {
       const updated = await apiRequest<ChatAction>(
         `/api/v1/chat/actions/${action.id}/${decision}`,
@@ -605,6 +623,14 @@ export function ChatPanel({
       );
     } catch (error) {
       toast.error(error instanceof Error ? error.message : t.workspace.actionFailed);
+    } finally {
+      pendingActionIdsRef.current.delete(action.id);
+      setPendingActionDecisions((current) => {
+        const remaining = { ...current };
+
+        delete remaining[action.id];
+        return remaining;
+      });
     }
   };
 
@@ -656,6 +682,7 @@ export function ChatPanel({
           streamStage={streamStage}
           selectedDatabase={selectedDatabase}
           providerReady={providerReady}
+          pendingActionDecisions={pendingActionDecisions}
           onScroll={handleScroll}
           onPrompt={(prompt) => void submitPrompt(prompt)}
           onActionApply={(action) => void handleActionDecision(action, "apply")}
@@ -796,6 +823,7 @@ const MessageList = ({
   streamStage,
   selectedDatabase,
   providerReady,
+  pendingActionDecisions,
   onScroll,
   onPrompt,
   onActionApply,
@@ -810,6 +838,7 @@ const MessageList = ({
   streamStage: ChatStreamStage | null;
   selectedDatabase: ManagedDatabase;
   providerReady: boolean | null;
+  pendingActionDecisions: Record<string, PendingActionDecision>;
   onScroll: () => void;
   onPrompt: (prompt: string) => void;
   onActionApply: (action: ChatAction) => void;
@@ -850,6 +879,7 @@ const MessageList = ({
               message={message}
               actions={message.role === "assistant" ? messageActions : []}
               selectedDatabase={selectedDatabase}
+              pendingActionDecisions={pendingActionDecisions}
               onActionApply={onActionApply}
               onActionReject={onActionReject}
             />
@@ -868,6 +898,7 @@ const MessageList = ({
               key={action.id}
               action={action}
               selectedDatabase={selectedDatabase}
+              pendingDecision={pendingActionDecisions[action.id]}
               onApply={() => onActionApply(action)}
               onReject={() => onActionReject(action)}
             />
@@ -930,12 +961,14 @@ function MessageStack({
   message,
   actions,
   selectedDatabase,
+  pendingActionDecisions,
   onActionApply,
   onActionReject,
 }: {
   message: DisplayMessage;
   actions: ChatAction[];
   selectedDatabase: ManagedDatabase;
+  pendingActionDecisions: Record<string, PendingActionDecision>;
   onActionApply: (action: ChatAction) => void;
   onActionReject: (action: ChatAction) => void;
 }) {
@@ -949,6 +982,7 @@ function MessageStack({
               key={action.id}
               action={action}
               selectedDatabase={selectedDatabase}
+              pendingDecision={pendingActionDecisions[action.id]}
               onApply={() => onActionApply(action)}
               onReject={() => onActionReject(action)}
             />
@@ -1173,23 +1207,43 @@ function CodeBlock({
 function ActionCard({
   action,
   selectedDatabase,
+  pendingDecision,
   onApply,
   onReject,
 }: {
   action: ChatAction;
   selectedDatabase: ManagedDatabase;
+  pendingDecision?: PendingActionDecision;
   onApply: () => void;
   onReject: () => void;
 }) {
   const { t } = useI18n();
   const isProposed = action.status === "proposed";
+  const isActionable = isProposed || action.status === "failed";
+  const isBusy = Boolean(pendingDecision);
   const databaseName =
     action.preview?.kind === "sql_audit"
       ? action.preview.database_name ?? selectedDatabase.name
       : selectedDatabase.name;
+  const applyLabel =
+    action.status === "failed"
+      ? t.workspace.retry
+      : action.preview?.kind === "bi_card"
+        ? t.workspace.importToBiPanel
+        : t.workspace.confirm;
+  const applyingLabel =
+    action.preview?.kind === "bi_card"
+      ? t.workspace.importingToBiPanel
+      : t.workspace.confirming;
 
   return (
-    <article className="rounded-lg border bg-background p-3 shadow-xs">
+    <article
+      className={cn(
+        "rounded-lg border bg-background p-3 shadow-xs transition-colors",
+        isBusy && "border-primary/25 bg-primary/5",
+      )}
+      aria-busy={isBusy}
+    >
       <div className="flex items-start justify-between gap-3">
         <div className="min-w-0">
           <div className="flex flex-wrap items-center gap-2">
@@ -1204,9 +1258,14 @@ function ActionCard({
         </div>
         <Badge
           variant={isProposed ? "secondary" : "outline"}
-          className="rounded-md"
+          className={cn("rounded-md", isBusy && "gap-1.5")}
         >
-          {t.workspace.actionStatuses[action.status]}
+          {isBusy ? (
+            <Loader2 className="size-3 animate-spin" aria-hidden />
+          ) : null}
+          {isBusy
+            ? t.workspace.actionProcessing
+            : t.workspace.actionStatuses[action.status]}
         </Badge>
       </div>
 
@@ -1231,21 +1290,38 @@ function ActionCard({
       ) : null}
 
       <div className="mt-3 flex flex-wrap gap-2">
-        {isProposed ? (
+        {isActionable ? (
           <>
-            <Button type="button" size="sm" onClick={onApply}>
-              {action.preview?.kind === "bi_card" ? (
+            <Button
+              type="button"
+              size="sm"
+              disabled={isBusy}
+              onClick={onApply}
+            >
+              {pendingDecision === "apply" ? (
+                <Loader2 className="size-4 animate-spin" aria-hidden />
+              ) : action.preview?.kind === "bi_card" ? (
                 <PanelRightOpen className="size-4" aria-hidden />
               ) : (
                 <CheckCircle2 className="size-4" aria-hidden />
               )}
-              {action.preview?.kind === "bi_card"
-                ? t.workspace.importToBiPanel
-                : t.workspace.confirm}
+              {pendingDecision === "apply" ? applyingLabel : applyLabel}
             </Button>
-            <Button type="button" variant="outline" size="sm" onClick={onReject}>
-              <X className="size-4" aria-hidden />
-              {t.workspace.reject}
+            <Button
+              type="button"
+              variant="outline"
+              size="sm"
+              disabled={isBusy}
+              onClick={onReject}
+            >
+              {pendingDecision === "reject" ? (
+                <Loader2 className="size-4 animate-spin" aria-hidden />
+              ) : (
+                <X className="size-4" aria-hidden />
+              )}
+              {pendingDecision === "reject"
+                ? t.workspace.rejecting
+                : t.workspace.reject}
             </Button>
           </>
         ) : (

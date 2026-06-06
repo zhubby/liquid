@@ -1,9 +1,10 @@
 use std::time::Instant;
 
-use anyhow::{Result, bail};
+use anyhow::{Result, anyhow, bail};
 use async_trait::async_trait;
 use liquid_llm::ToolDefinition;
 use liquid_sql::{PgSqlAnalysis, PgSqlRiskSeverity, PgSqlStatementKind};
+use pg_query::NodeEnum;
 use serde_json::{Value, json};
 use sqlx::Row;
 
@@ -215,12 +216,17 @@ pub(super) async fn execute_approved_write_sql(
 
     let risk_floor = analysis.risk_floor();
     let started_at = Instant::now();
-    let mut transaction = context.pool.begin().await?;
-    set_tool_timeouts(&mut transaction, context).await?;
-    let result = sqlx::query(&executable_sql)
-        .execute(&mut *transaction)
-        .await?;
-    transaction.commit().await?;
+    let result = if statement_requires_autocommit(&executable_sql)? {
+        execute_autocommit_write_sql(context, &executable_sql).await?
+    } else {
+        let mut transaction = context.pool.begin().await?;
+        set_tool_timeouts(&mut transaction, context).await?;
+        let result = sqlx::query(&executable_sql)
+            .execute(&mut *transaction)
+            .await?;
+        transaction.commit().await?;
+        result
+    };
     let elapsed_ms = elapsed_ms(started_at);
 
     Ok(ApprovedWriteExecutionResult {
@@ -230,6 +236,44 @@ pub(super) async fn execute_approved_write_sql(
         risk_floor,
         analysis,
     })
+}
+
+pub(super) fn statement_requires_autocommit(sql: &str) -> Result<bool> {
+    let parsed = pg_query::parse(sql)?;
+    let [raw_stmt] = parsed.protobuf.stmts.as_slice() else {
+        return Ok(false);
+    };
+
+    Ok(matches!(
+        raw_stmt.stmt.as_deref().and_then(|stmt| stmt.node.as_ref()),
+        Some(NodeEnum::CreatedbStmt(_))
+    ))
+}
+
+async fn execute_autocommit_write_sql(
+    context: &PostgresToolContext,
+    executable_sql: &str,
+) -> Result<sqlx::postgres::PgQueryResult> {
+    let mut connection = context.pool.acquire().await?;
+    set_session_tool_timeouts(&mut connection, context).await?;
+
+    let execution_result = sqlx::query(executable_sql).execute(&mut *connection).await;
+    let reset_result = reset_session_tool_timeouts(&mut connection).await;
+
+    match (execution_result, reset_result) {
+        (Ok(result), Ok(())) => Ok(result),
+        (Err(error), Ok(())) => Err(error.into()),
+        (Ok(_), Err(reset_error)) => {
+            connection.close_on_drop();
+            Err(reset_error)
+        }
+        (Err(error), Err(reset_error)) => {
+            connection.close_on_drop();
+            Err(anyhow!(
+                "{error}; additionally failed to reset session SQL timeouts: {reset_error}"
+            ))
+        }
+    }
 }
 
 pub(super) async fn readonly_transaction(
@@ -258,6 +302,38 @@ async fn set_tool_timeouts(
     sqlx::query("set local lock_timeout = $1")
         .bind(format!("{}ms", context.metadata_options.lock_timeout_ms))
         .execute(&mut **transaction)
+        .await?;
+
+    Ok(())
+}
+
+async fn set_session_tool_timeouts(
+    connection: &mut sqlx::pool::PoolConnection<sqlx::Postgres>,
+    context: &PostgresToolContext,
+) -> Result<()> {
+    sqlx::query("set statement_timeout = $1")
+        .bind(format!(
+            "{}ms",
+            context.metadata_options.statement_timeout_ms
+        ))
+        .execute(&mut **connection)
+        .await?;
+    sqlx::query("set lock_timeout = $1")
+        .bind(format!("{}ms", context.metadata_options.lock_timeout_ms))
+        .execute(&mut **connection)
+        .await?;
+
+    Ok(())
+}
+
+async fn reset_session_tool_timeouts(
+    connection: &mut sqlx::pool::PoolConnection<sqlx::Postgres>,
+) -> Result<()> {
+    sqlx::query("reset statement_timeout")
+        .execute(&mut **connection)
+        .await?;
+    sqlx::query("reset lock_timeout")
+        .execute(&mut **connection)
         .await?;
 
     Ok(())
