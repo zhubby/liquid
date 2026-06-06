@@ -1,4 +1,7 @@
-use std::{convert::Infallible, time::Duration};
+use std::{
+    convert::Infallible,
+    time::{Duration, Instant},
+};
 
 use async_stream::stream;
 use axum::{
@@ -14,17 +17,20 @@ use liquid_core::{
     AgentMessage, AgentMessageRole, AgentTurn, AgentTurnStatus, BiQueryResult, ChatAction,
     ChatActionDecisionRequest, ChatActionPreview, ChatConversation, ChatErrorCode,
     ChatManagedDatabaseSummary, ChatMessage, ChatMessagePart, ChatMessageStatus, ChatStreamEvent,
-    ChatStreamStage, ChatTurn, ChatTurnDashboardContext, CreateAgentConversationRequest,
-    CreateAgentTurnRequest, CreateChatConversationRequest, CreateChatTurnRequest, ManagedDatabase,
-    SqlAuditRecord, UpdateAgentConversationRequest, UpdateChatConversationRequest,
+    ChatStreamStage, ChatToolStatus, ChatTurn, ChatTurnDashboardContext,
+    CreateAgentConversationRequest, CreateAgentTurnRequest, CreateChatConversationRequest,
+    CreateChatTurnRequest, ManagedDatabase, SqlAuditRecord, UpdateAgentConversationRequest,
+    UpdateChatConversationRequest,
 };
 use serde::Deserialize;
 use serde_json::Value;
-use tokio::time::sleep;
+use tokio::{spawn, time::sleep};
 
 use crate::{
     agent_workbench::CreateBiCardActionPayload,
-    agent_workbench::{append_event, apply_agent_action, run_agent_turn},
+    agent_workbench::{
+        append_event, apply_agent_action, run_agent_turn, synthesize_action_observation,
+    },
     auth::authenticated_user,
     error::ApiError,
     state::ApiState,
@@ -194,6 +200,7 @@ async fn list_messages(
         )
         .await?
         .into_iter()
+        .filter(|message| !is_timeline_only_message(message))
         .map(chat_message)
         .collect();
 
@@ -274,7 +281,7 @@ async fn stream_turn(
                 Ok(next_events) => {
                     for event_record in next_events {
                         after_seq = event_record.seq;
-                        if let Some(event) = chat_stream_event(
+                        let events = chat_stream_events(
                             &store,
                             &owner_user_id,
                             &turn_id,
@@ -282,7 +289,8 @@ async fn stream_turn(
                             &mut assistant_content,
                             &mut assistant_message_id,
                         )
-                        .await {
+                        .await;
+                        for event in events {
                             yield Ok(sse_chat_event(event));
                         }
                     }
@@ -299,10 +307,16 @@ async fn stream_turn(
             }
 
             let turn = store.get_agent_turn(&owner_user_id, &turn_id).await;
-            if turn
-                .map(|turn| turn.status.is_terminal())
-                .unwrap_or(true)
-            {
+            let should_stop = match turn {
+                Ok(turn) if turn.status == AgentTurnStatus::WaitingForUser => true,
+                Ok(turn) if turn.status.is_terminal() => {
+                    !turn_has_applying_actions(&store, &owner_user_id, &turn).await
+                }
+                Ok(_) => false,
+                Err(_) => true,
+            };
+
+            if should_stop {
                 break;
             }
 
@@ -312,6 +326,32 @@ async fn stream_turn(
     };
 
     Ok(Sse::new(events).keep_alive(KeepAlive::default()))
+}
+
+async fn turn_has_applying_actions(
+    store: &std::sync::Arc<dyn liquid_storage::LiquidStore>,
+    owner_user_id: &str,
+    turn: &AgentTurn,
+) -> bool {
+    match store
+        .list_agent_actions(
+            owner_user_id,
+            Some(&turn.conversation_id),
+            Some(AgentActionStatus::Applying),
+        )
+        .await
+    {
+        Ok(actions) => actions.iter().any(|action| action.turn_id == turn.id),
+        Err(error) => {
+            tracing::warn!(
+                turn_id = %turn.id,
+                conversation_id = %turn.conversation_id,
+                error = %error,
+                "failed to check applying chat actions while streaming turn"
+            );
+            false
+        }
+    }
 }
 
 async fn cancel_turn(
@@ -344,55 +384,397 @@ async fn apply_action(
 ) -> Result<Json<ChatAction>, ApiError> {
     let user = authenticated_user(&state, &headers).await?;
     let action = state.store.get_agent_action(&user.id, &action_id).await?;
-    let updated = match apply_agent_action(&state, &user.id, &action).await {
+    if !matches!(
+        action.status,
+        AgentActionStatus::Proposed | AgentActionStatus::Failed
+    ) {
+        let details = action_error_details(&action);
+        tracing::warn!(
+            action_id = %action.id,
+            action_kind = %action.kind.as_str(),
+            action_status = %action.status.as_str(),
+            turn_id = %action.turn_id,
+            conversation_id = %action.conversation_id,
+            "chat action apply rejected because the action is no longer actionable"
+        );
+        return Err(ApiError::conflict_with_details(
+            format!(
+                "agent action cannot be applied from {} status",
+                action.status.as_str()
+            ),
+            details,
+        ));
+    }
+
+    let apply_started_at = Instant::now();
+    tracing::info!(
+        action_id = %action.id,
+        action_kind = %action.kind.as_str(),
+        action_status = %action.status.as_str(),
+        turn_id = %action.turn_id,
+        conversation_id = %action.conversation_id,
+        "chat action apply started"
+    );
+
+    let applying = state
+        .store
+        .update_agent_action_status(
+            &user.id,
+            &action.id,
+            AgentActionStatus::Applying,
+            None,
+            None,
+        )
+        .await?;
+    state
+        .store
+        .update_agent_turn_status(&user.id, &action.turn_id, AgentTurnStatus::Running, None)
+        .await?;
+    append_action_update_event(&state, &user.id, &applying).await;
+    append_action_apply_status_event(&state, &user.id, &applying).await;
+
+    let background_state = state.clone();
+    let background_user_id = user.id.clone();
+    let background_action = applying.clone();
+    spawn(async move {
+        finish_action_apply(background_state, background_user_id, background_action).await;
+    });
+
+    tracing::info!(
+        action_id = %action.id,
+        action_kind = %action.kind.as_str(),
+        turn_id = %action.turn_id,
+        conversation_id = %action.conversation_id,
+        elapsed_ms = apply_started_at.elapsed().as_millis(),
+        "chat action apply accepted for background execution"
+    );
+
+    Ok(Json(chat_action(applying)))
+}
+
+fn action_error_details(action: &AgentAction) -> Value {
+    serde_json::json!({
+        "action_id": action.id,
+        "action_kind": action.kind.as_str(),
+        "action_status": action.status.as_str(),
+        "turn_id": action.turn_id,
+        "conversation_id": action.conversation_id,
+    })
+}
+
+async fn finish_action_apply(state: ApiState, owner_user_id: String, action: AgentAction) {
+    let apply_started_at = Instant::now();
+
+    match apply_agent_action(&state, &owner_user_id, &action).await {
         Ok((resource_kind, resource_id, event_type, payload)) => {
+            let core_elapsed_ms = apply_started_at.elapsed().as_millis();
             let result_payload = payload.clone();
-            let updated = state
+            let resource_id_for_log = resource_id.clone();
+            let updated = match state
                 .store
                 .update_agent_action_status(
-                    &user.id,
+                    &owner_user_id,
                     &action.id,
                     AgentActionStatus::Applied,
                     Some(resource_kind),
                     Some(resource_id.clone()),
                 )
-                .await?;
-            append_event(&state, &user.id, &action.turn_id, event_type, payload).await?;
-            append_event(
-                &state,
-                &user.id,
-                &action.turn_id,
-                AgentEventType::ResourceUpdated,
-                serde_json::json!({ "action": updated }),
-            )
-            .await?;
-            append_action_result_message(
-                &state,
-                &user.id,
+                .await
+            {
+                Ok(updated) => updated,
+                Err(error) => {
+                    tracing::error!(
+                        action_id = %action.id,
+                        action_kind = %action.kind.as_str(),
+                        turn_id = %action.turn_id,
+                        conversation_id = %action.conversation_id,
+                        error = %error,
+                        "failed to mark background chat action as applied"
+                    );
+                    return;
+                }
+            };
+
+            append_action_resource_event(&state, &owner_user_id, &action, event_type, payload)
+                .await;
+            append_action_update_event(&state, &owner_user_id, &updated).await;
+            let observation = action_observation_payload(
                 &updated,
+                true,
                 Some(resource_kind),
-                Some(resource_id),
+                Some(resource_id.clone()),
                 Some(&result_payload),
-            )
-            .await;
-            updated
+                None,
+            );
+            append_tool_observation_message(&state, &owner_user_id, &updated, &observation).await;
+            if let Err(error) =
+                synthesize_action_observation(&state, &owner_user_id, &updated, observation).await
+            {
+                fail_action_turn(&state, &owner_user_id, &updated.turn_id, error.to_string()).await;
+            }
+            tracing::info!(
+                action_id = %action.id,
+                action_kind = %action.kind.as_str(),
+                turn_id = %action.turn_id,
+                conversation_id = %action.conversation_id,
+                resource_kind = %resource_kind.as_str(),
+                resource_id = %resource_id_for_log,
+                core_elapsed_ms,
+                total_elapsed_ms = apply_started_at.elapsed().as_millis(),
+                "background chat action apply completed"
+            );
         }
         Err(error) => {
-            let _ = state
+            let error_message = error.to_string();
+            tracing::error!(
+                action_id = %action.id,
+                action_kind = %action.kind.as_str(),
+                action_status = %action.status.as_str(),
+                turn_id = %action.turn_id,
+                conversation_id = %action.conversation_id,
+                error = %error_message,
+                elapsed_ms = apply_started_at.elapsed().as_millis(),
+                "background chat action apply failed"
+            );
+            match state
                 .store
                 .update_agent_action_status(
-                    &user.id,
+                    &owner_user_id,
                     &action.id,
                     AgentActionStatus::Failed,
                     None,
                     None,
                 )
-                .await;
-            return Err(error);
+                .await
+            {
+                Ok(updated) => {
+                    append_action_update_event(&state, &owner_user_id, &updated).await;
+                    let observation = action_observation_payload(
+                        &updated,
+                        false,
+                        None,
+                        None,
+                        None,
+                        Some(error_message),
+                    );
+                    append_tool_observation_message(&state, &owner_user_id, &updated, &observation)
+                        .await;
+                    if let Err(error) =
+                        synthesize_action_observation(&state, &owner_user_id, &updated, observation)
+                            .await
+                    {
+                        fail_action_turn(
+                            &state,
+                            &owner_user_id,
+                            &updated.turn_id,
+                            error.to_string(),
+                        )
+                        .await;
+                    }
+                }
+                Err(status_error) => {
+                    tracing::error!(
+                        action_id = %action.id,
+                        action_kind = %action.kind.as_str(),
+                        action_status = %action.status.as_str(),
+                        turn_id = %action.turn_id,
+                        conversation_id = %action.conversation_id,
+                        error = %status_error,
+                        "failed to mark background chat action as failed"
+                    );
+                }
+            }
         }
-    };
+    }
+}
 
-    Ok(Json(chat_action(updated)))
+async fn append_action_update_event(state: &ApiState, owner_user_id: &str, action: &AgentAction) {
+    if let Err(error) = append_event(
+        state,
+        owner_user_id,
+        &action.turn_id,
+        AgentEventType::ResourceUpdated,
+        serde_json::json!({ "action": action }),
+    )
+    .await
+    {
+        tracing::warn!(
+            action_id = %action.id,
+            action_kind = %action.kind.as_str(),
+            action_status = %action.status.as_str(),
+            error = %error,
+            "failed to append chat action update event"
+        );
+    }
+}
+
+async fn append_action_apply_status_event(
+    state: &ApiState,
+    owner_user_id: &str,
+    action: &AgentAction,
+) {
+    if let Err(error) = append_event(
+        state,
+        owner_user_id,
+        &action.turn_id,
+        AgentEventType::ToolCallStarted,
+        serde_json::json!({
+            "name": "apply_agent_action",
+            "stage": "planning",
+            "summary": "Applying the confirmed action",
+        }),
+    )
+    .await
+    {
+        tracing::warn!(
+            action_id = %action.id,
+            action_kind = %action.kind.as_str(),
+            error = %error,
+            "failed to append chat action apply status event"
+        );
+    }
+}
+
+fn action_observation_payload(
+    action: &AgentAction,
+    success: bool,
+    resource_kind: Option<liquid_core::AgentResourceKind>,
+    resource_id: Option<String>,
+    result_payload: Option<&Value>,
+    error: Option<String>,
+) -> Value {
+    serde_json::json!({
+        "type": "tool_observation",
+        "success": success,
+        "action": {
+            "id": action.id,
+            "kind": action.kind,
+            "status": action.status,
+            "title": action.title,
+            "description": action.description,
+        },
+        "resource": {
+            "kind": resource_kind,
+            "id": resource_id,
+        },
+        "result": result_payload,
+        "error": error,
+    })
+}
+
+async fn append_tool_observation_message(
+    state: &ApiState,
+    owner_user_id: &str,
+    action: &AgentAction,
+    observation: &Value,
+) {
+    let content = serde_json::to_string_pretty(observation)
+        .unwrap_or_else(|_| "{\"type\":\"tool_observation\"}".to_owned());
+    let metadata = serde_json::json!({
+        "kind": "tool_observation",
+        "visibility": "timeline",
+        "action_id": action.id,
+        "action_kind": action.kind,
+        "action_status": action.status,
+        "observation": observation,
+    });
+
+    match state
+        .store
+        .append_agent_message(
+            owner_user_id,
+            &action.conversation_id,
+            Some(&action.turn_id),
+            AgentMessageRole::Tool,
+            &content,
+            Some(metadata),
+        )
+        .await
+    {
+        Ok(message) => {
+            if let Err(error) = append_event(
+                state,
+                owner_user_id,
+                &action.turn_id,
+                AgentEventType::MessageCreated,
+                serde_json::json!({
+                    "message_id": message.id,
+                    "role": "tool",
+                }),
+            )
+            .await
+            {
+                tracing::warn!(
+                    action_id = %action.id,
+                    action_kind = %action.kind.as_str(),
+                    error = %error,
+                    "failed to append tool observation message event"
+                );
+            }
+        }
+        Err(error) => {
+            tracing::warn!(
+                action_id = %action.id,
+                action_kind = %action.kind.as_str(),
+                error = %error,
+                "failed to append tool observation message"
+            );
+        }
+    }
+}
+
+async fn fail_action_turn(state: &ApiState, owner_user_id: &str, turn_id: &str, message: String) {
+    if let Err(error) = state
+        .store
+        .update_agent_turn_status(
+            owner_user_id,
+            turn_id,
+            AgentTurnStatus::Failed,
+            Some(message.clone()),
+        )
+        .await
+    {
+        tracing::error!(
+            turn_id,
+            error = %error,
+            "failed to mark chat action turn as failed"
+        );
+    }
+
+    if let Err(error) = append_event(
+        state,
+        owner_user_id,
+        turn_id,
+        AgentEventType::TurnFailed,
+        serde_json::json!({ "error": message }),
+    )
+    .await
+    {
+        tracing::warn!(
+            turn_id,
+            error = %error,
+            "failed to append chat action turn failure event"
+        );
+    }
+}
+
+async fn append_action_resource_event(
+    state: &ApiState,
+    owner_user_id: &str,
+    action: &AgentAction,
+    event_type: AgentEventType,
+    payload: Value,
+) {
+    if let Err(error) =
+        append_event(state, owner_user_id, &action.turn_id, event_type, payload).await
+    {
+        tracing::warn!(
+            action_id = %action.id,
+            action_kind = %action.kind.as_str(),
+            error = %error,
+            "failed to append chat action resource event"
+        );
+    }
 }
 
 async fn reject_action(
@@ -523,10 +905,14 @@ fn action_result_message(
             None => "Action applied.".to_owned(),
         },
         AgentActionStatus::Rejected => "Action rejected.".to_owned(),
-        AgentActionStatus::Failed => "Action failed.".to_owned(),
-        AgentActionStatus::Proposed | AgentActionStatus::Superseded => {
-            "Action status updated.".to_owned()
-        }
+        AgentActionStatus::Failed => result_payload
+            .and_then(|payload| payload.get("error"))
+            .and_then(Value::as_str)
+            .map(|error| format!("Action failed.\n\n{error}"))
+            .unwrap_or_else(|| "Action failed.".to_owned()),
+        AgentActionStatus::Proposed
+        | AgentActionStatus::Applying
+        | AgentActionStatus::Superseded => "Action status updated.".to_owned(),
     }
 }
 
@@ -549,21 +935,41 @@ fn sql_audit_action_result_message(
     record: &SqlAuditRecord,
     query_result: Option<&BiQueryResult>,
 ) -> String {
-    let title = if query_result.is_some() {
-        "SQL query result"
-    } else {
-        "SQL audit completed"
-    };
-    let mut message = format!(
-        "### {title}\n\n- Audit ID: `{}`\n- Database: `{}`\n- Audit status: `{}`\n- Risk score: `{}/100`",
-        record.id,
-        record.managed_database_name,
-        record.status.as_str(),
-        record.risk_score,
-    );
+    if let Some(query_result) = query_result {
+        let mut message = sql_action_reference_message("SQL query result", record);
+        message.push_str("\n\n**Query result**\n\n");
+        message.push_str(&query_result_markdown(query_result));
+        return message;
+    }
 
-    if let Some(statement_kind) = record.statement_kind {
-        message.push_str(&format!("\n- Statement: `{}`", statement_kind.as_str()));
+    if let Some(execution_result) = &record.execution_result {
+        let mut message = sql_action_reference_message("SQL execution completed", record);
+        message.push_str(&format!(
+            "\n\n**Execution result**\n\n- Statement: `{}`\n- Affected rows: `{}`\n- Elapsed: `{}ms`\n- Risk floor: `{}/100`",
+            execution_result.statement_kind.as_str(),
+            execution_result.affected_rows,
+            execution_result.elapsed_ms,
+            execution_result.risk_floor,
+        ));
+        return message;
+    }
+
+    if let Some(execution_error) = record.execution_error.as_deref() {
+        let mut message = sql_action_reference_message("SQL execution failed", record);
+        message.push_str("\n\n**Execution error**\n\n");
+        message.push_str(execution_error.trim());
+        return message;
+    }
+
+    let mut message = sql_action_reference_message("SQL audit completed", record);
+
+    if record
+        .statement_kind
+        .is_some_and(|kind| kind == liquid_core::SqlStatementKind::Select)
+    {
+        message.push_str(
+            "\n\n_This action created an audit report; it does not return SELECT rows. Use a BI card action when you want query result rows in the workspace._",
+        );
     }
 
     if let Some(report) = &record.report {
@@ -588,27 +994,20 @@ fn sql_audit_action_result_message(
         }
     }
 
-    if let Some(query_result) = query_result {
-        message.push_str("\n\n**Query result**\n\n");
-        message.push_str(&query_result_markdown(query_result));
-    } else if let Some(execution_result) = &record.execution_result {
-        message.push_str(&format!(
-            "\n\n**Execution result**\n\n- Statement: `{}`\n- Affected rows: `{}`\n- Elapsed: `{}ms`\n- Risk floor: `{}/100`",
-            execution_result.statement_kind.as_str(),
-            execution_result.affected_rows,
-            execution_result.elapsed_ms,
-            execution_result.risk_floor,
-        ));
-    } else if let Some(execution_error) = record.execution_error.as_deref() {
-        message.push_str("\n\n**Execution error**\n\n");
-        message.push_str(execution_error.trim());
-    } else if record
-        .statement_kind
-        .is_some_and(|kind| kind == liquid_core::SqlStatementKind::Select)
-    {
-        message.push_str(
-            "\n\n_This action created an audit report; it does not return SELECT rows. Use a BI card action when you want query result rows in the workspace._",
-        );
+    message
+}
+
+fn sql_action_reference_message(title: &str, record: &SqlAuditRecord) -> String {
+    let mut message = format!(
+        "### {title}\n\n- Audit reference: `{}`\n- Database: `{}`\n- Status: `{}`\n- Risk score: `{}/100`",
+        record.id,
+        record.managed_database_name,
+        record.status.as_str(),
+        record.risk_score,
+    );
+
+    if let Some(statement_kind) = record.statement_kind {
+        message.push_str(&format!("\n- Statement: `{}`", statement_kind.as_str()));
     }
 
     message
@@ -715,96 +1114,130 @@ mod tests {
     }
 }
 
-async fn chat_stream_event(
+async fn chat_stream_events(
     store: &std::sync::Arc<dyn liquid_storage::LiquidStore>,
     owner_user_id: &str,
     turn_id: &str,
     event: AgentEventRecord,
     assistant_content: &mut String,
     assistant_message_id: &mut Option<String>,
-) -> Option<ChatStreamEvent> {
+) -> Vec<ChatStreamEvent> {
     match event.event_type {
-        AgentEventType::TurnStarted => Some(ChatStreamEvent::TurnStarted {
+        AgentEventType::TurnStarted => vec![ChatStreamEvent::TurnStarted {
             turn_id: event.turn_id,
-        }),
+        }],
         AgentEventType::MessageCreated => {
-            let message_id = event.payload.get("message_id")?.as_str()?;
-            let turn = store.get_agent_turn(owner_user_id, turn_id).await.ok()?;
-            let message = store
+            let Some(message_id) = event.payload.get("message_id").and_then(Value::as_str) else {
+                return Vec::new();
+            };
+            let Ok(turn) = store.get_agent_turn(owner_user_id, turn_id).await else {
+                return Vec::new();
+            };
+            let Ok(messages) = store
                 .list_agent_messages(owner_user_id, &turn.conversation_id, 200, None)
                 .await
-                .ok()?
+            else {
+                return Vec::new();
+            };
+            let Some(message) = messages
                 .into_iter()
-                .find(|message| message.id == message_id)?;
+                .find(|message| message.id == message_id)
+            else {
+                return Vec::new();
+            };
+
+            if is_timeline_only_message(&message) {
+                return Vec::new();
+            }
+
             let is_assistant = message.role == AgentMessageRole::Assistant;
 
             if is_assistant {
                 *assistant_message_id = Some(message.id.clone());
-                Some(ChatStreamEvent::AssistantDone {
+                vec![ChatStreamEvent::AssistantDone {
                     message: chat_message(message),
-                })
+                }]
             } else {
-                Some(ChatStreamEvent::MessageCreated {
+                vec![ChatStreamEvent::MessageCreated {
                     message: chat_message(message),
-                })
+                }]
             }
         }
         AgentEventType::AssistantDelta => {
-            let delta = payload_string(&event.payload, "content")?;
+            let Some(delta) = payload_string(&event.payload, "content") else {
+                return Vec::new();
+            };
             assistant_content.clear();
             assistant_content.push_str(&delta);
-            let message_id = assistant_message_id
-                .clone()
+            let message_id = payload_string(&event.payload, "message_id")
+                .or_else(|| assistant_message_id.clone())
                 .unwrap_or_else(|| format!("stream-{turn_id}"));
 
-            Some(ChatStreamEvent::AssistantDelta {
+            vec![ChatStreamEvent::AssistantDelta {
                 message_id,
                 delta,
                 accumulated: Some(assistant_content.clone()),
-            })
+            }]
         }
-        AgentEventType::ToolCallStarted => {
-            let stage = match payload_string(&event.payload, "name").as_deref() {
-                Some("load_workbench_context") => ChatStreamStage::LoadingContext,
-                _ => ChatStreamStage::Thinking,
+        AgentEventType::ToolCallStarted => tool_started_events(&event.payload),
+        AgentEventType::ToolCallFinished => tool_finished_events(&event.payload),
+        AgentEventType::ActionProposed => {
+            let Some(action) = event
+                .payload
+                .get("action")
+                .cloned()
+                .and_then(|value| serde_json::from_value::<AgentAction>(value).ok())
+            else {
+                return Vec::new();
             };
 
-            Some(ChatStreamEvent::StatusChanged { stage })
-        }
-        AgentEventType::ToolCallFinished => Some(ChatStreamEvent::StatusChanged {
-            stage: ChatStreamStage::Thinking,
-        }),
-        AgentEventType::ActionProposed => {
-            let action = event
-                .payload
-                .get("action")
-                .cloned()
-                .and_then(|value| serde_json::from_value::<AgentAction>(value).ok())?;
-
-            Some(ChatStreamEvent::ActionProposed {
+            vec![ChatStreamEvent::ActionProposed {
                 action: chat_action(action),
-            })
+            }]
+        }
+        AgentEventType::TurnWaitingForUser => {
+            let turn = event
+                .payload
+                .get("turn")
+                .cloned()
+                .and_then(|value| serde_json::from_value::<AgentTurn>(value).ok());
+            let turn = match turn {
+                Some(turn) => turn,
+                None => match store.get_agent_turn(owner_user_id, turn_id).await {
+                    Ok(turn) => turn,
+                    Err(_) => return Vec::new(),
+                },
+            };
+
+            vec![ChatStreamEvent::TurnWaitingForUser {
+                turn: chat_turn(turn),
+            }]
         }
         AgentEventType::ResourceUpdated | AgentEventType::ResourceCreated => {
-            let action = event
+            let Some(action) = event
                 .payload
                 .get("action")
                 .cloned()
-                .and_then(|value| serde_json::from_value::<AgentAction>(value).ok())?;
+                .and_then(|value| serde_json::from_value::<AgentAction>(value).ok())
+            else {
+                return Vec::new();
+            };
 
-            Some(ChatStreamEvent::ActionUpdated {
+            vec![ChatStreamEvent::ActionUpdated {
                 action: chat_action(action),
-            })
+            }]
         }
         AgentEventType::TurnCompleted => {
-            let turn = store.get_agent_turn(owner_user_id, turn_id).await.ok()?;
+            let Ok(turn) = store.get_agent_turn(owner_user_id, turn_id).await else {
+                return Vec::new();
+            };
             if let Some(message_id) = turn.assistant_message_id.clone() {
                 *assistant_message_id = Some(message_id);
             }
 
-            Some(ChatStreamEvent::TurnCompleted {
+            vec![ChatStreamEvent::TurnCompleted {
                 turn: chat_turn(turn),
-            })
+            }]
         }
         AgentEventType::TurnFailed => {
             let message = payload_string(&event.payload, "error")
@@ -812,13 +1245,116 @@ async fn chat_stream_event(
                 .unwrap_or_else(|| "turn failed".to_owned());
             let error_code = chat_error_code(&message);
 
-            Some(ChatStreamEvent::TurnFailed {
+            vec![ChatStreamEvent::TurnFailed {
                 turn_id: event.turn_id,
                 error_code,
                 message_key: error_code.message_key().to_owned(),
                 message,
-            })
+            }]
         }
+    }
+}
+
+fn tool_started_events(payload: &Value) -> Vec<ChatStreamEvent> {
+    let stage = chat_stream_stage_from_payload(payload);
+    let summary = payload_string(payload, "summary").or_else(|| default_stage_summary(stage));
+    let mut events = vec![ChatStreamEvent::StatusChanged {
+        stage,
+        summary: summary.clone(),
+    }];
+
+    if let Some(id) = payload_string(payload, "id") {
+        let name = payload_string(payload, "name").unwrap_or_else(|| "tool".to_owned());
+        let title = payload_string(payload, "title").unwrap_or_else(|| default_tool_title(&name));
+
+        events.push(ChatStreamEvent::ToolStarted {
+            id,
+            name,
+            title,
+            summary: summary.unwrap_or_else(|| "Running tool".to_owned()),
+        });
+    }
+
+    events
+}
+
+fn tool_finished_events(payload: &Value) -> Vec<ChatStreamEvent> {
+    let mut events = Vec::new();
+
+    if let Some(id) = payload_string(payload, "id") {
+        let name = payload_string(payload, "name").unwrap_or_else(|| "tool".to_owned());
+        let status = match payload_string(payload, "status").as_deref() {
+            Some("failed") | Some("error") => ChatToolStatus::Failed,
+            _ => ChatToolStatus::Succeeded,
+        };
+        let summary = payload_string(payload, "summary").unwrap_or_else(|| match status {
+            ChatToolStatus::Succeeded => "Tool completed".to_owned(),
+            ChatToolStatus::Failed => "Tool failed".to_owned(),
+        });
+        let elapsed_ms = payload
+            .get("elapsed_ms")
+            .and_then(Value::as_u64)
+            .unwrap_or_default();
+        let output_preview = payload_string(payload, "output_preview");
+
+        events.push(ChatStreamEvent::ToolFinished {
+            id,
+            name,
+            status,
+            summary,
+            elapsed_ms,
+            output_preview,
+        });
+    }
+
+    events.push(ChatStreamEvent::StatusChanged {
+        stage: ChatStreamStage::Thinking,
+        summary: payload_string(payload, "next_summary"),
+    });
+
+    events
+}
+
+fn chat_stream_stage_from_payload(payload: &Value) -> ChatStreamStage {
+    match payload_string(payload, "stage").as_deref() {
+        Some("planning") => ChatStreamStage::Planning,
+        Some("loading_context") => ChatStreamStage::LoadingContext,
+        Some("proposing_action") => ChatStreamStage::ProposingAction,
+        Some("auditing_sql") => ChatStreamStage::AuditingSql,
+        Some("executing_sql") => ChatStreamStage::ExecutingSql,
+        Some("synthesizing") => ChatStreamStage::Synthesizing,
+        Some("thinking") => ChatStreamStage::Thinking,
+        _ => match payload_string(payload, "name").as_deref() {
+            Some("load_workbench_context") => ChatStreamStage::LoadingContext,
+            Some("sql_audit") => ChatStreamStage::AuditingSql,
+            Some("sql_execute") => ChatStreamStage::ExecutingSql,
+            Some("synthesize_observation") => ChatStreamStage::Synthesizing,
+            _ => ChatStreamStage::Thinking,
+        },
+    }
+}
+
+fn default_stage_summary(stage: ChatStreamStage) -> Option<String> {
+    let summary = match stage {
+        ChatStreamStage::Planning => "Preparing the confirmed action",
+        ChatStreamStage::Thinking => "Thinking",
+        ChatStreamStage::LoadingContext => "Loading workspace context",
+        ChatStreamStage::ProposingAction => "Preparing an action",
+        ChatStreamStage::AuditingSql => "Checking SQL safety and policy",
+        ChatStreamStage::ExecutingSql => "Executing the approved SQL",
+        ChatStreamStage::Synthesizing => "Preparing the final response",
+    };
+
+    Some(summary.to_owned())
+}
+
+fn default_tool_title(name: &str) -> String {
+    match name {
+        "sql_audit" => "Audit SQL".to_owned(),
+        "sql_execute" => "Execute SQL".to_owned(),
+        "apply_agent_action" => "Apply action".to_owned(),
+        "create_bi_card" => "Create BI card".to_owned(),
+        _ => name.replace('_', " "),
     }
 }
 
@@ -902,6 +1438,15 @@ fn is_action_result_message(message: &AgentMessage) -> bool {
         == Some("action_result")
 }
 
+fn is_timeline_only_message(message: &AgentMessage) -> bool {
+    message
+        .metadata
+        .as_ref()
+        .and_then(|metadata| metadata.get("visibility"))
+        .and_then(Value::as_str)
+        == Some("timeline")
+}
+
 fn chat_turn(turn: AgentTurn) -> ChatTurn {
     let error_code = turn.error.as_deref().map(chat_error_code);
 
@@ -979,7 +1524,11 @@ fn chat_bi_card_preview(action: &AgentAction) -> Option<ChatActionPreview> {
 fn chat_error_code(message: &str) -> ChatErrorCode {
     if message.contains(MISSING_LLM_PROVIDER_ERROR) {
         ChatErrorCode::ProviderNotConfigured
-    } else if message.contains("not valid JSON") || message.contains("response was empty") {
+    } else if message.contains("not valid JSON")
+        || message.contains("response was empty")
+        || message.contains("maximum tool rounds")
+        || message.contains("requested tools after creating a confirmation proposal")
+    {
         ChatErrorCode::InvalidModelResponse
     } else if message.contains("sql_audit_id is not available")
         || message.contains("unsupported")

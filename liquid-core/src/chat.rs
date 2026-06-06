@@ -161,9 +161,21 @@ pub struct ChatTurn {
 #[serde(rename_all = "snake_case")]
 #[ts(export)]
 pub enum ChatStreamStage {
+    Planning,
     Thinking,
     LoadingContext,
     ProposingAction,
+    AuditingSql,
+    ExecutingSql,
+    Synthesizing,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, TS)]
+#[serde(rename_all = "snake_case")]
+#[ts(export)]
+pub enum ChatToolStatus {
+    Succeeded,
+    Failed,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, TS)]
@@ -211,12 +223,34 @@ pub enum ChatStreamEvent {
     },
     StatusChanged {
         stage: ChatStreamStage,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        #[ts(optional)]
+        summary: Option<String>,
+    },
+    ToolStarted {
+        id: String,
+        name: String,
+        title: String,
+        summary: String,
+    },
+    ToolFinished {
+        id: String,
+        name: String,
+        status: ChatToolStatus,
+        summary: String,
+        elapsed_ms: u64,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        #[ts(optional)]
+        output_preview: Option<String>,
     },
     ActionProposed {
         action: ChatAction,
     },
     ActionUpdated {
         action: ChatAction,
+    },
+    TurnWaitingForUser {
+        turn: ChatTurn,
     },
     TurnCompleted {
         turn: ChatTurn,

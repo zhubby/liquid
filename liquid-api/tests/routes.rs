@@ -934,7 +934,28 @@ impl LiquidStore for TestStore {
         let Some(action) = actions.iter_mut().find(|action| action.id == id) else {
             return Err(StorageError::NotFound);
         };
-        if action.status != AgentActionStatus::Proposed {
+        let transition_allowed = match status {
+            AgentActionStatus::Applying => {
+                matches!(
+                    action.status,
+                    AgentActionStatus::Proposed | AgentActionStatus::Failed
+                )
+            }
+            AgentActionStatus::Applied | AgentActionStatus::Failed => matches!(
+                action.status,
+                AgentActionStatus::Proposed
+                    | AgentActionStatus::Failed
+                    | AgentActionStatus::Applying
+            ),
+            AgentActionStatus::Rejected | AgentActionStatus::Superseded => {
+                matches!(
+                    action.status,
+                    AgentActionStatus::Proposed | AgentActionStatus::Failed
+                )
+            }
+            AgentActionStatus::Proposed => false,
+        };
+        if !transition_allowed {
             return Err(StorageError::Conflict(format!(
                 "agent action is already {}",
                 action.status.as_str()
@@ -1460,6 +1481,56 @@ where
     (format!("http://{addr}/v1/chat/completions"), captured_body)
 }
 
+async fn spawn_openai_compatible_mock_with_raw_responses<I>(
+    responses: I,
+) -> (String, Arc<Mutex<Vec<Value>>>)
+where
+    I: IntoIterator<Item = Value>,
+{
+    let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let addr = listener.local_addr().unwrap();
+    let captured_bodies = Arc::new(Mutex::new(Vec::new()));
+    let captured_for_task = captured_bodies.clone();
+    let mut responses = responses.into_iter().collect::<VecDeque<_>>();
+    let fallback_response = responses
+        .back()
+        .cloned()
+        .unwrap_or_else(|| json!({ "choices": [{ "message": { "content": "{}" } }] }));
+
+    tokio::spawn(async move {
+        loop {
+            let Ok((mut socket, _addr)) = listener.accept().await else {
+                return;
+            };
+            let mut buffer = vec![0; 128 * 1024];
+            let Ok(read) = socket.read(&mut buffer).await else {
+                return;
+            };
+            let request = String::from_utf8_lossy(&buffer[..read]);
+            if let Some((_, body)) = request.split_once("\r\n\r\n")
+                && let Ok(json) = serde_json::from_str::<Value>(body)
+            {
+                captured_for_task.lock().unwrap().push(json);
+            }
+            let body = responses
+                .pop_front()
+                .unwrap_or_else(|| fallback_response.clone())
+                .to_string();
+            let response = format!(
+                "HTTP/1.1 200 OK\r\ncontent-type: application/json\r\ncontent-length: {}\r\n\r\n{}",
+                body.len(),
+                body
+            );
+            let _ = socket.write_all(response.as_bytes()).await;
+        }
+    });
+
+    (
+        format!("http://{addr}/v1/chat/completions"),
+        captured_bodies,
+    )
+}
+
 async fn configure_workbench_llm_provider(
     app: &Router,
     content: impl Into<String>,
@@ -1494,6 +1565,35 @@ where
     assert_eq!(settings_response.status(), StatusCode::OK);
 
     captured_body
+}
+
+async fn configure_workbench_llm_provider_with_raw_responses<I>(
+    app: &Router,
+    responses: I,
+) -> Arc<Mutex<Vec<Value>>>
+where
+    I: IntoIterator<Item = Value>,
+{
+    let (base_url, captured_bodies) =
+        spawn_openai_compatible_mock_with_raw_responses(responses).await;
+    let settings_response = app
+        .clone()
+        .oneshot(auth_json_request(
+            "PUT",
+            "/api/v1/settings/llm-provider",
+            json!({
+                "provider": "openai_compatible",
+                "base_url": base_url,
+                "model": "chat-model",
+                "api_mode": "chat_completions",
+                "api_key": "sk-user"
+            }),
+        ))
+        .await
+        .unwrap();
+    assert_eq!(settings_response.status(), StatusCode::OK);
+
+    captured_bodies
 }
 
 fn test_app() -> Router {
@@ -2074,7 +2174,8 @@ async fn chat_turn_streams_typed_events_and_action() {
     assert!(stream_body.contains(r#""type":"assistant_delta""#));
     assert!(stream_body.contains(r#""type":"assistant_done""#));
     assert!(stream_body.contains(r#""type":"action_proposed""#));
-    assert!(stream_body.contains(r#""type":"turn_completed""#));
+    assert!(stream_body.contains(r#""type":"turn_waiting_for_user""#));
+    assert!(stream_body.contains(r#""status":"waiting_for_user""#));
     assert!(stream_body.contains(r#""preview":{"kind":"sql_audit""#));
 
     let actions_response = app
@@ -2101,6 +2202,135 @@ async fn chat_turn_streams_typed_events_and_action() {
     let messages = response_json(messages_response).await;
     assert_eq!(messages.as_array().unwrap().len(), 2);
     assert_eq!(messages[1]["parts"][0]["kind"], "markdown");
+}
+
+#[tokio::test]
+async fn chat_turn_runs_readonly_tool_without_action_or_audit() {
+    let app = test_app();
+    create_test_database(&app).await;
+    let captured = configure_workbench_llm_provider_with_raw_responses(
+        &app,
+        [
+            json!({
+                "choices": [{
+                    "message": {
+                        "content": "",
+                        "tool_calls": [{
+                            "id": "call_1",
+                            "type": "function",
+                            "function": {
+                                "name": "pg_execute_readonly_sql",
+                                "arguments": "{\"sql\":\"select datname from pg_database where datistemplate = false order by datname\",\"limit\":100}"
+                            }
+                        }]
+                    }
+                }]
+            }),
+            json!({
+                "choices": [{
+                    "message": {
+                        "content": r#"{
+                            "message": "我尝试查询数据库列表，但当前测试连接不可用。请检查数据库连接后重试。",
+                            "actions": []
+                        }"#
+                    }
+                }]
+            }),
+        ],
+    )
+    .await;
+
+    let _conversation = app
+        .clone()
+        .oneshot(auth_json_request(
+            "POST",
+            "/api/v1/chat/conversations",
+            json!({ "title": "Readonly chat" }),
+        ))
+        .await
+        .unwrap();
+    let turn_response = app
+        .clone()
+        .oneshot(auth_json_request(
+            "POST",
+            "/api/v1/chat/conversations/conversation-1/turns",
+            json!({
+                "message": "现在有哪些数据库",
+                "managed_database_id": "db-1"
+            }),
+        ))
+        .await
+        .unwrap();
+    assert_eq!(turn_response.status(), StatusCode::OK);
+
+    tokio::time::sleep(std::time::Duration::from_millis(100)).await;
+
+    let stream_response = app
+        .clone()
+        .oneshot(auth_request("/api/v1/chat/turns/turn-1/stream?after_seq=0"))
+        .await
+        .unwrap();
+    assert_eq!(stream_response.status(), StatusCode::OK);
+    let stream_body = axum::body::to_bytes(stream_response.into_body(), usize::MAX)
+        .await
+        .unwrap();
+    let stream_body = String::from_utf8(stream_body.to_vec()).unwrap();
+    assert!(stream_body.contains(r#""type":"tool_started""#));
+    assert!(stream_body.contains(r#""name":"pg_execute_readonly_sql""#));
+    assert!(stream_body.contains(r#""type":"tool_finished""#));
+    assert!(stream_body.contains(r#""type":"assistant_delta""#));
+    assert!(stream_body.contains(r#""type":"turn_completed""#));
+    assert!(!stream_body.contains(r#""type":"action_proposed""#));
+    assert!(!stream_body.contains(r#""type":"turn_waiting_for_user""#));
+
+    let actions_response = app
+        .clone()
+        .oneshot(auth_request(
+            "/api/v1/chat/conversations/conversation-1/actions",
+        ))
+        .await
+        .unwrap();
+    assert_eq!(actions_response.status(), StatusCode::OK);
+    let actions = response_json(actions_response).await;
+    assert_eq!(actions.as_array().unwrap().len(), 0);
+
+    let messages_response = app
+        .clone()
+        .oneshot(auth_request(
+            "/api/v1/chat/conversations/conversation-1/messages",
+        ))
+        .await
+        .unwrap();
+    assert_eq!(messages_response.status(), StatusCode::OK);
+    let messages = response_json(messages_response).await;
+    assert_eq!(messages.as_array().unwrap().len(), 2);
+    assert_eq!(messages[0]["role"], "user");
+    assert_eq!(messages[1]["role"], "assistant");
+
+    let captured = captured.lock().unwrap().clone();
+    assert_eq!(captured.len(), 2);
+    assert_eq!(captured[0]["model"], "chat-model");
+    assert!(
+        captured[0]["tools"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .any(|tool| tool["function"]["name"] == "pg_execute_readonly_sql")
+    );
+    assert!(
+        captured[0]["tools"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .any(|tool| tool["function"]["name"] == "propose_sql_operation")
+    );
+    assert!(
+        captured[1]["messages"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .any(|message| message["role"] == "tool")
+    );
 }
 
 #[tokio::test]
@@ -2366,7 +2596,7 @@ async fn chat_turn_uses_user_llm_provider_settings_when_configured() {
     let stream_body = String::from_utf8(stream_body.to_vec()).unwrap();
     assert!(stream_body.contains("I prepared this audit from the configured provider."));
     assert!(stream_body.contains(r#""type":"action_proposed""#));
-    assert!(stream_body.contains(r#""type":"turn_completed""#));
+    assert!(stream_body.contains(r#""type":"turn_waiting_for_user""#));
 
     let actions_response = app
         .clone()
@@ -2656,6 +2886,10 @@ async fn applying_chat_sql_audit_action_uses_existing_audit_flow() {
                 "risk_score": 7,
                 "findings": []
             }"#,
+            r#"{
+                "message": "SQL 审计已完成，审计记录 audit-1 已生成。",
+                "actions": []
+            }"#,
         ],
     )
     .await;
@@ -2695,9 +2929,21 @@ async fn applying_chat_sql_audit_action_uses_existing_audit_flow() {
         .unwrap();
     assert_eq!(apply_response.status(), StatusCode::OK);
     let action = response_json(apply_response).await;
-    assert_eq!(action["status"], "applied");
+    assert_eq!(action["status"], "applying");
+
+    let action = wait_for_chat_action_status(
+        app.clone(),
+        "conversation-1",
+        "action-1",
+        AgentActionStatus::Applied,
+    )
+    .await;
     assert_eq!(action["resource_kind"], "sql_audit");
     assert_eq!(action["resource_id"], "audit-1");
+
+    let final_message =
+        wait_for_chat_message_containing(app.clone(), "conversation-1", "SQL 审计已完成").await;
+    assert_eq!(final_message["role"], "assistant");
 
     let messages_response = app
         .clone()
@@ -2709,20 +2955,8 @@ async fn applying_chat_sql_audit_action_uses_existing_audit_flow() {
     assert_eq!(messages_response.status(), StatusCode::OK);
     let messages = response_json(messages_response).await;
     assert_eq!(messages.as_array().unwrap().len(), 3);
-    assert_eq!(messages[2]["role"], "tool");
+    assert_eq!(messages[2]["role"], "assistant");
     assert!(messages[2]["content"].as_str().unwrap().contains("audit-1"));
-    assert!(
-        messages[2]["content"]
-            .as_str()
-            .unwrap()
-            .contains("Provider SQL audit completed.")
-    );
-    assert!(
-        messages[2]["content"]
-            .as_str()
-            .unwrap()
-            .contains("No findings.")
-    );
     assert_eq!(messages[2]["parts"][0]["kind"], "markdown");
 
     let stream_response = app
@@ -2735,9 +2969,13 @@ async fn applying_chat_sql_audit_action_uses_existing_audit_flow() {
         .await
         .unwrap();
     let stream_body = String::from_utf8(stream_body.to_vec()).unwrap();
-    assert!(stream_body.contains(r#""type":"message_created""#));
-    assert!(stream_body.contains(r#""role":"tool""#));
-    assert!(stream_body.contains("Provider SQL audit completed."));
+    assert!(stream_body.contains(r#""type":"tool_started""#));
+    assert!(stream_body.contains(r#""type":"tool_finished""#));
+    assert!(stream_body.contains(r#""auditing_sql""#));
+    assert!(stream_body.contains(r#""synthesizing""#));
+    assert!(stream_body.contains(r#""type":"assistant_delta""#));
+    assert!(stream_body.contains(r#""type":"assistant_done""#));
+    assert!(!stream_body.contains(r#""role":"tool""#));
     assert!(stream_body.contains(r#""type":"action_updated""#));
 
     let audit_response = app
@@ -2751,6 +2989,126 @@ async fn applying_chat_sql_audit_action_uses_existing_audit_flow() {
 }
 
 #[tokio::test]
+async fn applying_chat_sql_execution_action_executes_after_audit_approval() {
+    let app = test_app_with_agent_execution_and_executor(
+        Arc::new(MockSqlAuditAgent),
+        PostgresToolExecutionMode::WriteGated,
+        Arc::new(FakeApprovedSqlExecutor::default()),
+    );
+    create_test_database(&app).await;
+    configure_workbench_llm_provider_with_contents(
+        &app,
+        [
+            r#"{
+                "message": "我准备好执行创建 test1 数据库的操作。确认后系统会先完成安全检查再执行。",
+                "actions": [{
+                    "kind": "create_sql_audit",
+                    "title": "创建 test1 数据库",
+                    "description": "执行创建 test1 数据库的 DDL 语句",
+                    "sql": "CREATE DATABASE test1;",
+                    "context": "用户请求新建一个名为 test1 的数据库",
+                    "execution_purpose": "用户确认从聊天中创建 test1 数据库"
+                }]
+            }"#,
+            r#"{
+                "summary": "DDL statement passed the configured audit checks.",
+                "risk_score": 5,
+                "findings": []
+            }"#,
+            r#"{
+                "message": "test1 数据库已创建成功。",
+                "actions": []
+            }"#,
+        ],
+    )
+    .await;
+
+    let _conversation = app
+        .clone()
+        .oneshot(auth_json_request(
+            "POST",
+            "/api/v1/chat/conversations",
+            json!({ "title": "Create database" }),
+        ))
+        .await
+        .unwrap();
+    let turn_response = app
+        .clone()
+        .oneshot(auth_json_request(
+            "POST",
+            "/api/v1/chat/conversations/conversation-1/turns",
+            json!({
+                "message": "帮我创建一个test1 的数据库",
+                "managed_database_id": "db-1"
+            }),
+        ))
+        .await
+        .unwrap();
+    assert_eq!(turn_response.status(), StatusCode::OK);
+    tokio::time::sleep(std::time::Duration::from_millis(50)).await;
+
+    let apply_response = app
+        .clone()
+        .oneshot(auth_json_request(
+            "POST",
+            "/api/v1/chat/actions/action-1/apply",
+            json!({}),
+        ))
+        .await
+        .unwrap();
+    assert_eq!(apply_response.status(), StatusCode::OK);
+    let action = response_json(apply_response).await;
+    assert_eq!(action["status"], "applying");
+
+    let action = wait_for_chat_action_status(
+        app.clone(),
+        "conversation-1",
+        "action-1",
+        AgentActionStatus::Applied,
+    )
+    .await;
+    assert_eq!(action["resource_kind"], "sql_audit");
+    assert_eq!(action["resource_id"], "audit-1");
+
+    let message =
+        wait_for_chat_message_containing(app.clone(), "conversation-1", "test1 数据库已创建成功")
+            .await;
+    let content = message["content"].as_str().unwrap();
+    assert_eq!(message["role"], "assistant");
+    assert!(!content.contains("Audit summary"));
+    assert!(!content.contains("Findings"));
+
+    let stream_response = app
+        .clone()
+        .oneshot(auth_request("/api/v1/chat/turns/turn-1/stream?after_seq=0"))
+        .await
+        .unwrap();
+    assert_eq!(stream_response.status(), StatusCode::OK);
+    let stream_body = axum::body::to_bytes(stream_response.into_body(), usize::MAX)
+        .await
+        .unwrap();
+    let stream_body = String::from_utf8(stream_body.to_vec()).unwrap();
+    assert!(stream_body.contains(r#""type":"tool_started""#));
+    assert!(stream_body.contains(r#""type":"tool_finished""#));
+    assert!(stream_body.contains(r#""auditing_sql""#));
+    assert!(stream_body.contains(r#""executing_sql""#));
+    assert!(stream_body.contains(r#""synthesizing""#));
+    assert!(stream_body.contains(r#""type":"assistant_delta""#));
+    assert!(stream_body.contains(r#""type":"assistant_done""#));
+    assert!(!stream_body.contains(r#""role":"tool""#));
+
+    let audit_response = app
+        .oneshot(auth_request("/api/v1/sql-audits/audit-1"))
+        .await
+        .unwrap();
+    assert_eq!(audit_response.status(), StatusCode::OK);
+    let audit = response_json(audit_response).await;
+    assert_eq!(audit["sql"], "CREATE DATABASE test1;");
+    assert_eq!(audit["status"], "executed");
+    assert_eq!(audit["execution_result"]["affected_rows"], 1);
+}
+
+#[tokio::test]
 async fn applying_chat_bi_card_action_imports_card_into_workspace_panel() {
     let store = Arc::new(TestStore::default());
     let app = test_app_with_agent_store_execution_and_executor(
@@ -2759,6 +3117,204 @@ async fn applying_chat_bi_card_action_imports_card_into_workspace_panel() {
         PostgresToolExecutionMode::Readonly,
         Arc::new(FakeApprovedSqlExecutor::default()),
     );
+    let (conversation, action) = create_bi_card_action_fixture(&store).await;
+
+    let apply_response = app
+        .clone()
+        .oneshot(auth_json_request(
+            "POST",
+            &format!("/api/v1/chat/actions/{}/apply", action.id),
+            json!({}),
+        ))
+        .await
+        .unwrap();
+    assert_eq!(apply_response.status(), StatusCode::OK);
+    let apply_payload = response_json(apply_response).await;
+    assert_eq!(apply_payload["status"], "applying");
+    assert_eq!(apply_payload["preview"]["kind"], "bi_card");
+    assert_eq!(apply_payload["preview"]["title"], "Daily revenue");
+
+    let final_action =
+        wait_for_store_action_status(&store, &action.id, AgentActionStatus::Applied).await;
+    assert_eq!(
+        final_action.resource_kind,
+        Some(AgentResourceKind::BiPanelCard)
+    );
+
+    let panel_response = app
+        .oneshot(auth_request(&format!(
+            "/api/v1/chat/conversations/{}/bi-panel",
+            conversation.id
+        )))
+        .await
+        .unwrap();
+    assert_eq!(panel_response.status(), StatusCode::OK);
+    let panel = response_json(panel_response).await;
+    assert_eq!(panel["cards"].as_array().unwrap().len(), 1);
+    assert_eq!(panel["cards"][0]["title"], "Daily revenue");
+}
+
+#[tokio::test]
+async fn applying_terminal_chat_action_returns_diagnostic_details() {
+    let store = Arc::new(TestStore::default());
+    let app = test_app_with_agent_store_execution_and_executor(
+        Arc::new(MockSqlAuditAgent),
+        store.clone(),
+        PostgresToolExecutionMode::Readonly,
+        Arc::new(FakeApprovedSqlExecutor::default()),
+    );
+    let (_conversation, action) = create_bi_card_action_fixture(&store).await;
+
+    let first_apply = app
+        .clone()
+        .oneshot(auth_json_request(
+            "POST",
+            &format!("/api/v1/chat/actions/{}/apply", action.id),
+            json!({}),
+        ))
+        .await
+        .unwrap();
+    assert_eq!(first_apply.status(), StatusCode::OK);
+    let apply_payload = response_json(first_apply).await;
+    assert_eq!(apply_payload["status"], "applying");
+    wait_for_store_action_status(&store, &action.id, AgentActionStatus::Applied).await;
+
+    let repeat_apply = app
+        .oneshot(auth_json_request(
+            "POST",
+            &format!("/api/v1/chat/actions/{}/apply", action.id),
+            json!({}),
+        ))
+        .await
+        .unwrap();
+    assert_eq!(repeat_apply.status(), StatusCode::CONFLICT);
+    let payload = response_json(repeat_apply).await;
+    assert_eq!(
+        payload["error"],
+        "agent action cannot be applied from applied status"
+    );
+    assert_eq!(payload["details"]["action_id"], action.id);
+    assert_eq!(payload["details"]["action_kind"], "create_bi_card");
+    assert_eq!(payload["details"]["action_status"], "applied");
+}
+
+#[tokio::test]
+async fn applying_failed_chat_action_retries_action() {
+    let store = Arc::new(TestStore::default());
+    let app = test_app_with_agent_store_execution_and_executor(
+        Arc::new(MockSqlAuditAgent),
+        store.clone(),
+        PostgresToolExecutionMode::Readonly,
+        Arc::new(FakeApprovedSqlExecutor::default()),
+    );
+    let (_conversation, action) = create_bi_card_action_fixture(&store).await;
+    store
+        .update_agent_action_status("user-1", &action.id, AgentActionStatus::Failed, None, None)
+        .await
+        .unwrap();
+
+    let apply_response = app
+        .oneshot(auth_json_request(
+            "POST",
+            &format!("/api/v1/chat/actions/{}/apply", action.id),
+            json!({}),
+        ))
+        .await
+        .unwrap();
+    assert_eq!(apply_response.status(), StatusCode::OK);
+    let apply_payload = response_json(apply_response).await;
+    assert_eq!(apply_payload["status"], "applying");
+
+    let final_action =
+        wait_for_store_action_status(&store, &action.id, AgentActionStatus::Applied).await;
+    assert_eq!(final_action.status, AgentActionStatus::Applied);
+    assert_eq!(
+        final_action.resource_kind,
+        Some(AgentResourceKind::BiPanelCard)
+    );
+}
+
+async fn wait_for_chat_action_status(
+    app: Router,
+    conversation_id: &str,
+    action_id: &str,
+    status: AgentActionStatus,
+) -> Value {
+    for _ in 0..50 {
+        let response = app
+            .clone()
+            .oneshot(auth_request(&format!(
+                "/api/v1/chat/conversations/{conversation_id}/actions"
+            )))
+            .await
+            .unwrap();
+        assert_eq!(response.status(), StatusCode::OK);
+        let actions = response_json(response).await;
+
+        if let Some(action) = actions
+            .as_array()
+            .unwrap()
+            .iter()
+            .find(|action| action["id"] == action_id && action["status"] == status.as_str())
+        {
+            return action.clone();
+        }
+
+        tokio::time::sleep(std::time::Duration::from_millis(20)).await;
+    }
+
+    panic!("timed out waiting for chat action {action_id} to become {status:?}");
+}
+
+async fn wait_for_chat_message_containing(
+    app: Router,
+    conversation_id: &str,
+    needle: &str,
+) -> Value {
+    for _ in 0..50 {
+        let response = app
+            .clone()
+            .oneshot(auth_request(&format!(
+                "/api/v1/chat/conversations/{conversation_id}/messages"
+            )))
+            .await
+            .unwrap();
+        assert_eq!(response.status(), StatusCode::OK);
+        let messages = response_json(response).await;
+
+        if let Some(message) = messages.as_array().unwrap().iter().find(|message| {
+            message["content"]
+                .as_str()
+                .is_some_and(|content| content.contains(needle))
+        }) {
+            return message.clone();
+        }
+
+        tokio::time::sleep(std::time::Duration::from_millis(20)).await;
+    }
+
+    panic!("timed out waiting for chat message containing {needle:?}");
+}
+
+async fn wait_for_store_action_status(
+    store: &Arc<TestStore>,
+    action_id: &str,
+    status: AgentActionStatus,
+) -> AgentAction {
+    for _ in 0..50 {
+        let action = store.get_agent_action("user-1", action_id).await.unwrap();
+
+        if action.status == status {
+            return action;
+        }
+
+        tokio::time::sleep(std::time::Duration::from_millis(20)).await;
+    }
+
+    panic!("timed out waiting for store action {action_id} to become {status:?}");
+}
+
+async fn create_bi_card_action_fixture(store: &Arc<TestStore>) -> (AgentConversation, AgentAction) {
     let database = store
         .create_managed_database(
             "user-1",
@@ -2829,33 +3385,7 @@ async fn applying_chat_bi_card_action_imports_card_into_workspace_panel() {
         .await
         .unwrap();
 
-    let apply_response = app
-        .clone()
-        .oneshot(auth_json_request(
-            "POST",
-            &format!("/api/v1/chat/actions/{}/apply", action.id),
-            json!({}),
-        ))
-        .await
-        .unwrap();
-    assert_eq!(apply_response.status(), StatusCode::OK);
-    let action = response_json(apply_response).await;
-    assert_eq!(action["status"], "applied");
-    assert_eq!(action["resource_kind"], "bi_panel_card");
-    assert_eq!(action["preview"]["kind"], "bi_card");
-    assert_eq!(action["preview"]["title"], "Daily revenue");
-
-    let panel_response = app
-        .oneshot(auth_request(&format!(
-            "/api/v1/chat/conversations/{}/bi-panel",
-            conversation.id
-        )))
-        .await
-        .unwrap();
-    assert_eq!(panel_response.status(), StatusCode::OK);
-    let panel = response_json(panel_response).await;
-    assert_eq!(panel["cards"].as_array().unwrap().len(), 1);
-    assert_eq!(panel["cards"][0]["title"], "Daily revenue");
+    (conversation, action)
 }
 
 #[tokio::test]

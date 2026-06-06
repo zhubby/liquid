@@ -2,6 +2,7 @@
 
 export type AgentActionStatus =
   | "proposed"
+  | "applying"
   | "applied"
   | "rejected"
   | "failed"

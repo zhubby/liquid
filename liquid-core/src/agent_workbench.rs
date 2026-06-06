@@ -126,6 +126,7 @@ pub struct CreateAgentTurnRequest {
 pub enum AgentTurnStatus {
     Queued,
     Running,
+    WaitingForUser,
     Completed,
     Blocked,
     Failed,
@@ -137,6 +138,7 @@ impl AgentTurnStatus {
         match self {
             Self::Queued => "queued",
             Self::Running => "running",
+            Self::WaitingForUser => "waiting_for_user",
             Self::Completed => "completed",
             Self::Blocked => "blocked",
             Self::Failed => "failed",
@@ -201,6 +203,7 @@ pub enum AgentEventType {
     ResourceCreated,
     ResourceUpdated,
     ActionProposed,
+    TurnWaitingForUser,
     TurnCompleted,
     TurnFailed,
 }
@@ -216,6 +219,7 @@ impl AgentEventType {
             Self::ResourceCreated => "resource_created",
             Self::ResourceUpdated => "resource_updated",
             Self::ActionProposed => "action_proposed",
+            Self::TurnWaitingForUser => "turn_waiting_for_user",
             Self::TurnCompleted => "turn_completed",
             Self::TurnFailed => "turn_failed",
         }
@@ -274,6 +278,7 @@ impl AgentActionKind {
 #[ts(export)]
 pub enum AgentActionStatus {
     Proposed,
+    Applying,
     Applied,
     Rejected,
     Failed,
@@ -284,6 +289,7 @@ impl AgentActionStatus {
     pub fn as_str(self) -> &'static str {
         match self {
             Self::Proposed => "proposed",
+            Self::Applying => "applying",
             Self::Applied => "applied",
             Self::Rejected => "rejected",
             Self::Failed => "failed",

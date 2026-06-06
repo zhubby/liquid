@@ -9,5 +9,6 @@ export type AgentEventType =
   | "resource_created"
   | "resource_updated"
   | "action_proposed"
+  | "turn_waiting_for_user"
   | "turn_completed"
   | "turn_failed";

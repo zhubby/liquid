@@ -17,6 +17,7 @@ use tracing_subscriber::{EnvFilter, Layer, layer::Context as LayerContext, prelu
 
 const DEFAULT_CONFIG_DIR: &str = ".liquid";
 const DEFAULT_CONFIG_FILE: &str = "config.toml";
+const SQLX_LOGS_ENV: &str = "LIQUID_SQLX_LOGS";
 
 #[derive(Debug, Parser)]
 #[command(
@@ -188,19 +189,36 @@ fn init_tracing() {
             .parse()
             .expect("valid sqlx query filter directive"),
     );
-    let sqlx_filter = env_filter_from_env();
 
     let regular_layer = tracing_subscriber::fmt::layer().with_filter(regular_filter);
-    let sqlx_layer = PrettySqlxQueryLayer.with_filter(sqlx_filter);
+    let registry = tracing_subscriber::registry().with(regular_layer);
 
-    tracing_subscriber::registry()
-        .with(regular_layer)
-        .with(sqlx_layer)
-        .init();
+    if sqlx_query_logging_enabled() {
+        let sqlx_filter = EnvFilter::new("sqlx::query=debug");
+        let sqlx_layer = PrettySqlxQueryLayer.with_filter(sqlx_filter);
+        registry.with(sqlx_layer).init();
+        tracing::info!(env = SQLX_LOGS_ENV, "pretty SQLx query logging enabled");
+    } else {
+        registry.init();
+    }
 }
 
 fn env_filter_from_env() -> EnvFilter {
     EnvFilter::try_from_default_env().unwrap_or_else(|_| EnvFilter::new("liquid=info"))
+}
+
+fn sqlx_query_logging_enabled() -> bool {
+    env::var(SQLX_LOGS_ENV)
+        .ok()
+        .map(|value| truthy_env_switch(&value))
+        .unwrap_or(false)
+}
+
+fn truthy_env_switch(value: &str) -> bool {
+    matches!(
+        value.trim().to_ascii_lowercase().as_str(),
+        "1" | "true" | "yes" | "on"
+    )
 }
 
 struct PrettySqlxQueryLayer;
@@ -418,6 +436,17 @@ mod tests {
             normalize_sql_statement(sql),
             "select\n    id,\n    email\nfrom users"
         );
+    }
+
+    #[test]
+    fn parses_sqlx_log_switch_values() {
+        for value in ["1", "true", "TRUE", "yes", "on", " on "] {
+            assert!(truthy_env_switch(value));
+        }
+
+        for value in ["", "0", "false", "off", "debug"] {
+            assert!(!truthy_env_switch(value));
+        }
     }
 
     #[test]

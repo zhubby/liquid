@@ -619,7 +619,11 @@ pub(crate) async fn update_agent_action_status(
             updated_at = now()
         where id = $1::uuid
           and owner_user_id = $2::uuid
-          and status = 'proposed'
+          and (
+              ($3 = 'applying' and status in ('proposed', 'failed'))
+              or ($3 in ('applied', 'failed') and status in ('proposed', 'failed', 'applying'))
+              or ($3 in ('rejected', 'superseded') and status in ('proposed', 'failed'))
+          )
         returning {AGENT_ACTION_COLUMNS}
         "#
     ))
@@ -1003,6 +1007,7 @@ fn parse_turn_status(value: &str) -> Result<AgentTurnStatus, StorageError> {
     match value {
         "queued" => Ok(AgentTurnStatus::Queued),
         "running" => Ok(AgentTurnStatus::Running),
+        "waiting_for_user" => Ok(AgentTurnStatus::WaitingForUser),
         "completed" => Ok(AgentTurnStatus::Completed),
         "blocked" => Ok(AgentTurnStatus::Blocked),
         "failed" => Ok(AgentTurnStatus::Failed),
@@ -1023,6 +1028,7 @@ fn parse_event_type(value: &str) -> Result<AgentEventType, StorageError> {
         "resource_created" => Ok(AgentEventType::ResourceCreated),
         "resource_updated" => Ok(AgentEventType::ResourceUpdated),
         "action_proposed" => Ok(AgentEventType::ActionProposed),
+        "turn_waiting_for_user" => Ok(AgentEventType::TurnWaitingForUser),
         "turn_completed" => Ok(AgentEventType::TurnCompleted),
         "turn_failed" => Ok(AgentEventType::TurnFailed),
         other => Err(StorageError::Validation(format!(
@@ -1052,6 +1058,7 @@ fn parse_action_kind(value: &str) -> Result<AgentActionKind, StorageError> {
 fn parse_action_status(value: &str) -> Result<AgentActionStatus, StorageError> {
     match value {
         "proposed" => Ok(AgentActionStatus::Proposed),
+        "applying" => Ok(AgentActionStatus::Applying),
         "applied" => Ok(AgentActionStatus::Applied),
         "rejected" => Ok(AgentActionStatus::Rejected),
         "failed" => Ok(AgentActionStatus::Failed),

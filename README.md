@@ -100,6 +100,7 @@ Environment variables override config file values.
 | `LIQUID_SQL_MANAGED_POOL_IDLE_TTL_SECONDS` | `600` | Close an unused managed database pool after this many seconds. |
 | `LIQUID_SQL_MANAGED_POOL_REAP_INTERVAL_SECONDS` | `60` | Background interval for managed database pool cleanup. |
 | `LIQUID_SQL_MANAGED_POOL_ACQUIRE_TIMEOUT_SECONDS` | `10` | SQLx acquire timeout for managed database pools. |
+| `LIQUID_SQLX_LOGS` | `false` | Set to `true` to enable pretty SQLx query logs. |
 | `LIQUID_BACKUP_S3_BUCKET` | unset | S3 bucket for managed database backup files; backup worker is disabled when unset. |
 | `LIQUID_BACKUP_S3_PREFIX` | `liquid/database-backups` | S3 key prefix for backup objects. |
 | `LIQUID_BACKUP_S3_REGION` | `us-east-1` | S3 signing region. |
@@ -111,6 +112,8 @@ Environment variables override config file values.
 Managed database SQL audit tools honor `LIQUID_SQL_EXECUTION`: `off` disables
 execution tools, `readonly` exposes read-only execution, and `write_gated`
 exposes gated write execution for audited, user-approved statements.
+SQLx query logs are disabled by default; set `LIQUID_SQLX_LOGS=true` only while
+debugging local database execution.
 
 Set a real `LIQUID_ENCRYPTION_KEY` before storing managed database passwords
 outside local development.

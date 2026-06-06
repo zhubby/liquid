@@ -1,10 +1,16 @@
-use liquid_agent::{LlmWorkbenchAgent, LlmWorkbenchContext, WorkbenchResponse};
+use std::time::Instant;
+
+use anyhow::Context;
+use liquid_agent::{
+    LlmWorkbenchAgent, LlmWorkbenchContext, PostgresToolConfig, PostgresToolExecutionMode,
+    ToolRegistry, WorkbenchResponse, WorkbenchToolStep,
+};
 use liquid_core::{
     AgentAction, AgentActionKind, AgentEventRecord, AgentEventType, AgentMessageRole,
     AgentResourceKind, AgentTurn, AgentTurnStatus, ApproveSqlAuditRequest, BiCardKind,
     BiCardLayout, BiChartConfig, BiPanel, BiPanelCard, BiQueryResult, CreateAgentActionRequest,
-    CreateBiPanelCardRequest, CreateSqlAuditRequest, PublicUser, RejectSqlAuditRequest,
-    SqlAuditRecord,
+    CreateBiPanelCardRequest, CreateSqlAuditRequest, ManagedDatabasePoolKey, PublicUser,
+    RejectSqlAuditRequest, SqlAuditRecord, SqlAuditStatus,
 };
 use serde::{Deserialize, Serialize};
 use serde_json::{Value, json};
@@ -91,6 +97,10 @@ async fn run_agent_turn_inner(
         return Ok(());
     }
 
+    if turn.status == AgentTurnStatus::WaitingForUser {
+        return Ok(());
+    }
+
     state
         .store
         .update_agent_turn_status(&user.id, &turn_id, AgentTurnStatus::Running, None)
@@ -121,7 +131,11 @@ async fn run_agent_turn_inner(
         &user.id,
         &turn_id,
         AgentEventType::ToolCallStarted,
-        json!({ "name": "load_workbench_context" }),
+        json!({
+            "name": "load_workbench_context",
+            "stage": "loading_context",
+            "summary": "Loading database and audit context"
+        }),
     )
     .await?;
     let databases = state.store.list_managed_databases(&user.id).await?;
@@ -162,6 +176,7 @@ async fn run_agent_turn_inner(
         AgentEventType::ToolCallFinished,
         json!({
             "name": "load_workbench_context",
+            "next_summary": "Planning the next step",
             "output": {
                 "managed_database_count": databases.len(),
                 "audit_score": summary.as_ref().map(|summary| summary.audit_score),
@@ -175,16 +190,20 @@ async fn run_agent_turn_inner(
     let Some(provider) = user_llm_provider_for_user(&state, &user.id).await? else {
         anyhow::bail!(MISSING_LLM_PROVIDER_MESSAGE);
     };
+    let tools = workbench_tool_registry(&state, &user.id, &turn).await?;
     let agent = LlmWorkbenchAgent::new(provider.client, provider.model, provider.protocol);
     let response = agent
-        .respond(LlmWorkbenchContext {
-            messages,
-            managed_database,
-            selected_sql_audit_id,
-            audit_summary: summary,
-            recent_sql_audits,
-            recent_actions,
-        })
+        .respond_with_tools(
+            LlmWorkbenchContext {
+                messages,
+                managed_database,
+                selected_sql_audit_id,
+                audit_summary: summary,
+                recent_sql_audits,
+                recent_actions,
+            },
+            tools,
+        )
         .await?;
 
     let latest_turn = state.store.get_agent_turn(&user.id, &turn_id).await?;
@@ -197,14 +216,86 @@ async fn run_agent_turn_inner(
     Ok(())
 }
 
+async fn workbench_tool_registry(
+    state: &ApiState,
+    owner_user_id: &str,
+    turn: &AgentTurn,
+) -> anyhow::Result<ToolRegistry> {
+    let Some(managed_database_id) = turn.managed_database_id.as_deref() else {
+        return Ok(ToolRegistry::new());
+    };
+    let pool = state
+        .managed_database_pools
+        .get_pool(ManagedDatabasePoolKey::new(
+            owner_user_id.to_owned(),
+            managed_database_id.to_owned(),
+        ))
+        .await?;
+
+    Ok(ToolRegistry::with_workbench_readonly_postgres_tools(
+        PostgresToolConfig::new(
+            Some(pool),
+            state.sql_metadata_required,
+            PostgresToolExecutionMode::Readonly,
+        ),
+    ))
+}
+
 async fn persist_workbench_response(
     state: &ApiState,
     owner_user_id: &str,
     turn: &AgentTurn,
     response: WorkbenchResponse,
 ) -> anyhow::Result<()> {
+    for step in &response.tool_steps {
+        append_workbench_tool_step(state, owner_user_id, turn, step).await?;
+    }
+
+    let mut prepared_actions = Vec::new();
     for suggestion in response.actions {
-        let suggestion = prepare_workbench_action(state, owner_user_id, suggestion).await?;
+        prepared_actions.push(prepare_workbench_action(state, owner_user_id, suggestion).await?);
+    }
+
+    let assistant_message = state
+        .store
+        .append_agent_message(
+            owner_user_id,
+            &turn.conversation_id,
+            Some(&turn.id),
+            AgentMessageRole::Assistant,
+            &response.content,
+            None,
+        )
+        .await?;
+    state
+        .store
+        .set_agent_turn_assistant_message(owner_user_id, &turn.id, &assistant_message.id)
+        .await?;
+    append_event(
+        state,
+        owner_user_id,
+        &turn.id,
+        AgentEventType::AssistantDelta,
+        json!({
+            "message_id": assistant_message.id,
+            "content": response.content
+        }),
+    )
+    .await?;
+    append_event(
+        state,
+        owner_user_id,
+        &turn.id,
+        AgentEventType::MessageCreated,
+        json!({
+            "message_id": assistant_message.id,
+            "role": "assistant",
+        }),
+    )
+    .await?;
+
+    let waiting_for_user = !prepared_actions.is_empty();
+    for suggestion in prepared_actions {
         let action = state
             .store
             .create_agent_action(
@@ -231,52 +322,38 @@ async fn persist_workbench_response(
         .await?;
     }
 
-    let assistant_message = state
-        .store
-        .append_agent_message(
+    if waiting_for_user {
+        let waiting_turn = state
+            .store
+            .update_agent_turn_status(
+                owner_user_id,
+                &turn.id,
+                AgentTurnStatus::WaitingForUser,
+                None,
+            )
+            .await?;
+        append_event(
+            state,
             owner_user_id,
-            &turn.conversation_id,
-            Some(&turn.id),
-            AgentMessageRole::Assistant,
-            &response.content,
-            None,
+            &turn.id,
+            AgentEventType::TurnWaitingForUser,
+            json!({ "turn": waiting_turn }),
         )
         .await?;
-    state
-        .store
-        .set_agent_turn_assistant_message(owner_user_id, &turn.id, &assistant_message.id)
+    } else {
+        state
+            .store
+            .update_agent_turn_status(owner_user_id, &turn.id, AgentTurnStatus::Completed, None)
+            .await?;
+        append_event(
+            state,
+            owner_user_id,
+            &turn.id,
+            AgentEventType::TurnCompleted,
+            json!({ "status": "completed" }),
+        )
         .await?;
-    append_event(
-        state,
-        owner_user_id,
-        &turn.id,
-        AgentEventType::AssistantDelta,
-        json!({ "content": response.content }),
-    )
-    .await?;
-    append_event(
-        state,
-        owner_user_id,
-        &turn.id,
-        AgentEventType::MessageCreated,
-        json!({
-            "message_id": assistant_message.id,
-            "role": "assistant",
-        }),
-    )
-    .await?;
-    state
-        .store
-        .update_agent_turn_status(owner_user_id, &turn.id, AgentTurnStatus::Completed, None)
-        .await?;
-    append_event(
-        state,
-        owner_user_id,
-        &turn.id,
-        AgentEventType::TurnCompleted,
-        json!({ "status": "completed" }),
-    )
-    .await?;
+    }
 
     Ok(())
 }
@@ -311,25 +388,321 @@ async fn prepare_workbench_action(
     Ok(suggestion)
 }
 
+async fn append_workbench_tool_step(
+    state: &ApiState,
+    owner_user_id: &str,
+    turn: &AgentTurn,
+    step: &WorkbenchToolStep,
+) -> anyhow::Result<()> {
+    let display = workbench_tool_display(&step.name, step.succeeded);
+    let assistant_content = serde_json::to_string(&json!({
+        "type": "assistant_tool_call",
+        "tool_call": {
+            "id": step.id,
+            "name": step.name,
+            "arguments": step.arguments,
+        }
+    }))
+    .unwrap_or_else(|_| "assistant tool call".to_owned());
+    state
+        .store
+        .append_agent_message(
+            owner_user_id,
+            &turn.conversation_id,
+            Some(&turn.id),
+            AgentMessageRole::Assistant,
+            &assistant_content,
+            Some(json!({
+                "kind": "assistant_tool_call",
+                "visibility": "timeline",
+                "tool_call_id": step.id,
+                "tool_name": step.name,
+                "arguments": step.arguments,
+            })),
+        )
+        .await?;
+    append_event(
+        state,
+        owner_user_id,
+        &turn.id,
+        AgentEventType::ToolCallStarted,
+        json!({
+            "id": step.id,
+            "name": step.name,
+            "title": display.title,
+            "summary": display.started_summary,
+            "stage": display.stage,
+        }),
+    )
+    .await?;
+    append_event(
+        state,
+        owner_user_id,
+        &turn.id,
+        AgentEventType::ToolCallFinished,
+        json!({
+            "id": step.id,
+            "name": step.name,
+            "status": if step.succeeded { "succeeded" } else { "failed" },
+            "summary": display.finished_summary,
+            "elapsed_ms": step.elapsed_ms,
+            "output_preview": tool_output_preview(&step.output.content),
+            "next_summary": display.next_summary,
+        }),
+    )
+    .await?;
+
+    let tool_content = step.output.content.trim();
+    state
+        .store
+        .append_agent_message(
+            owner_user_id,
+            &turn.conversation_id,
+            Some(&turn.id),
+            AgentMessageRole::Tool,
+            if tool_content.is_empty() {
+                "{}"
+            } else {
+                tool_content
+            },
+            Some(json!({
+                "kind": "tool_result",
+                "visibility": "timeline",
+                "tool_call_id": step.id,
+                "tool_name": step.name,
+                "succeeded": step.succeeded,
+                "elapsed_ms": step.elapsed_ms,
+            })),
+        )
+        .await?;
+
+    Ok(())
+}
+
+struct WorkbenchToolDisplay {
+    stage: &'static str,
+    title: &'static str,
+    started_summary: &'static str,
+    finished_summary: &'static str,
+    next_summary: &'static str,
+}
+
+fn workbench_tool_display(name: &str, succeeded: bool) -> WorkbenchToolDisplay {
+    let finished_summary = if succeeded {
+        "Tool completed"
+    } else {
+        "Tool failed"
+    };
+
+    match name {
+        "pg_execute_readonly_sql" => WorkbenchToolDisplay {
+            stage: "executing_sql",
+            title: "Run read-only SQL",
+            started_summary: "Executing a read-only SQL query",
+            finished_summary: if succeeded {
+                "Read-only query completed"
+            } else {
+                finished_summary
+            },
+            next_summary: "Reading the query result",
+        },
+        "pg_explain_sql" => WorkbenchToolDisplay {
+            stage: "loading_context",
+            title: "Explain SQL",
+            started_summary: "Inspecting the query plan",
+            finished_summary: if succeeded {
+                "Query plan ready"
+            } else {
+                finished_summary
+            },
+            next_summary: "Using the plan result",
+        },
+        "pg_list_schemas" => WorkbenchToolDisplay {
+            stage: "loading_context",
+            title: "List schemas",
+            started_summary: "Loading database schemas",
+            finished_summary: if succeeded {
+                "Schemas loaded"
+            } else {
+                finished_summary
+            },
+            next_summary: "Checking what to inspect next",
+        },
+        "pg_list_relations" => WorkbenchToolDisplay {
+            stage: "loading_context",
+            title: "List relations",
+            started_summary: "Loading tables and views",
+            finished_summary: if succeeded {
+                "Relations loaded"
+            } else {
+                finished_summary
+            },
+            next_summary: "Checking the returned relations",
+        },
+        "pg_describe_relation" => WorkbenchToolDisplay {
+            stage: "loading_context",
+            title: "Describe relation",
+            started_summary: "Reading table structure",
+            finished_summary: if succeeded {
+                "Table structure loaded"
+            } else {
+                finished_summary
+            },
+            next_summary: "Using the schema details",
+        },
+        "propose_sql_operation" => WorkbenchToolDisplay {
+            stage: "proposing_action",
+            title: "Prepare SQL operation",
+            started_summary: "Preparing a confirmed SQL operation",
+            finished_summary: if succeeded {
+                "SQL operation is ready for confirmation"
+            } else {
+                finished_summary
+            },
+            next_summary: "Waiting for confirmation",
+        },
+        "propose_bi_card_action" => WorkbenchToolDisplay {
+            stage: "proposing_action",
+            title: "Prepare BI card",
+            started_summary: "Preparing a BI card confirmation",
+            finished_summary: if succeeded {
+                "BI card is ready for confirmation"
+            } else {
+                finished_summary
+            },
+            next_summary: "Waiting for confirmation",
+        },
+        "propose_sql_audit_decision" => WorkbenchToolDisplay {
+            stage: "proposing_action",
+            title: "Prepare audit decision",
+            started_summary: "Preparing a confirmed audit decision",
+            finished_summary: if succeeded {
+                "Audit decision is ready for confirmation"
+            } else {
+                finished_summary
+            },
+            next_summary: "Waiting for confirmation",
+        },
+        _ => WorkbenchToolDisplay {
+            stage: "thinking",
+            title: "Run tool",
+            started_summary: "Running a tool",
+            finished_summary,
+            next_summary: "Thinking through the result",
+        },
+    }
+}
+
+fn tool_output_preview(content: &str) -> Option<String> {
+    let trimmed = content.trim();
+    if trimmed.is_empty() {
+        return None;
+    }
+
+    let preview = if let Ok(value) = serde_json::from_str::<Value>(trimmed) {
+        summarize_tool_output_value(&value).unwrap_or_else(|| trimmed.to_owned())
+    } else {
+        trimmed.to_owned()
+    };
+
+    Some(truncate_preview(&preview, 220))
+}
+
+fn summarize_tool_output_value(value: &Value) -> Option<String> {
+    if let Some(error) = value.get("error").and_then(Value::as_str) {
+        return Some(error.to_owned());
+    }
+
+    if let Some(row_count) = value.get("row_count").and_then(Value::as_u64) {
+        let truncated = value
+            .get("truncated")
+            .and_then(Value::as_bool)
+            .unwrap_or(false);
+        return Some(format!(
+            "{row_count} row{} returned{}",
+            if row_count == 1 { "" } else { "s" },
+            if truncated { " (truncated)" } else { "" }
+        ));
+    }
+
+    if let Some(relations) = value.get("relations").and_then(Value::as_array) {
+        return Some(format!(
+            "{} relation{} found",
+            relations.len(),
+            if relations.len() == 1 { "" } else { "s" }
+        ));
+    }
+
+    if let Some(schemas) = value.get("schemas").and_then(Value::as_array) {
+        return Some(format!(
+            "{} schema{} found",
+            schemas.len(),
+            if schemas.len() == 1 { "" } else { "s" }
+        ));
+    }
+
+    if value.get("columns").is_some() {
+        return Some("Relation structure loaded".to_owned());
+    }
+
+    None
+}
+
+fn truncate_preview(value: &str, max_chars: usize) -> String {
+    let mut chars = value.chars();
+    let truncated = chars.by_ref().take(max_chars).collect::<String>();
+
+    if chars.next().is_some() {
+        format!("{truncated}...")
+    } else {
+        truncated
+    }
+}
+
 pub(crate) async fn apply_agent_action(
+    state: &ApiState,
+    owner_user_id: &str,
+    action: &AgentAction,
+) -> Result<(AgentResourceKind, String, AgentEventType, Value), ApiError> {
+    let started_at = Instant::now();
+    let result = apply_agent_action_inner(state, owner_user_id, action).await;
+    match &result {
+        Ok((resource_kind, resource_id, _, _)) => {
+            tracing::info!(
+                action_id = %action.id,
+                action_kind = %action.kind.as_str(),
+                turn_id = %action.turn_id,
+                conversation_id = %action.conversation_id,
+                resource_kind = %resource_kind.as_str(),
+                resource_id = %resource_id,
+                elapsed_ms = started_at.elapsed().as_millis(),
+                "agent action core execution completed"
+            );
+        }
+        Err(error) => {
+            tracing::error!(
+                action_id = %action.id,
+                action_kind = %action.kind.as_str(),
+                turn_id = %action.turn_id,
+                conversation_id = %action.conversation_id,
+                error = %error,
+                elapsed_ms = started_at.elapsed().as_millis(),
+                "agent action core execution failed"
+            );
+        }
+    }
+
+    result
+}
+
+async fn apply_agent_action_inner(
     state: &ApiState,
     owner_user_id: &str,
     action: &AgentAction,
 ) -> Result<(AgentResourceKind, String, AgentEventType, Value), ApiError> {
     match action.kind {
         AgentActionKind::CreateSqlAudit => {
-            let payload: CreateSqlAuditActionPayload =
-                serde_json::from_value(action.payload.clone())
-                    .map_err(|error| ApiError::bad_request(error.to_string()))?;
-            let record = create_sql_audit_for_user(
-                state,
-                owner_user_id,
-                &payload.managed_database_id,
-                payload.request,
-            )
-            .await?;
-
-            Ok(sql_audit_result(record, AgentEventType::ResourceCreated))
+            apply_create_sql_audit_action(state, owner_user_id, action).await
         }
         AgentActionKind::CreateBiCard => {
             let payload: CreateBiCardActionPayload = serde_json::from_value(action.payload.clone())
@@ -410,6 +783,317 @@ pub(crate) async fn apply_agent_action(
             "this agent action kind is not supported by the workbench API yet",
         )),
     }
+}
+
+async fn apply_create_sql_audit_action(
+    state: &ApiState,
+    owner_user_id: &str,
+    action: &AgentAction,
+) -> Result<(AgentResourceKind, String, AgentEventType, Value), ApiError> {
+    let payload: CreateSqlAuditActionPayload = serde_json::from_value(action.payload.clone())
+        .map_err(|error| ApiError::bad_request(error.to_string()))?;
+
+    let audit_tool_id = format!("{}:sql_audit", action.id);
+    let audit_started_at = Instant::now();
+    append_tool_started(
+        state,
+        owner_user_id,
+        &action.turn_id,
+        &audit_tool_id,
+        "sql_audit",
+        "Audit SQL",
+        "Checking SQL safety and policy",
+        "auditing_sql",
+    )
+    .await?;
+    let record = match create_sql_audit_for_user(
+        state,
+        owner_user_id,
+        &payload.managed_database_id,
+        payload.request,
+    )
+    .await
+    {
+        Ok(record) => {
+            append_tool_finished(
+                state,
+                owner_user_id,
+                &action.turn_id,
+                ToolFinishedPayload {
+                    id: &audit_tool_id,
+                    name: "sql_audit",
+                    status: "succeeded",
+                    summary: "SQL audit completed",
+                    elapsed_ms: audit_started_at.elapsed().as_millis() as u64,
+                    output_preview: Some(format!(
+                        "Audit {} is {} with risk {}/100",
+                        record.id,
+                        record.status.as_str(),
+                        record.risk_score
+                    )),
+                    next_summary: Some("Continuing with the confirmed action"),
+                },
+            )
+            .await?;
+            record
+        }
+        Err(error) => {
+            append_tool_finished(
+                state,
+                owner_user_id,
+                &action.turn_id,
+                ToolFinishedPayload {
+                    id: &audit_tool_id,
+                    name: "sql_audit",
+                    status: "failed",
+                    summary: "SQL audit failed",
+                    elapsed_ms: audit_started_at.elapsed().as_millis() as u64,
+                    output_preview: Some(error.to_string()),
+                    next_summary: Some("Preparing the failure response"),
+                },
+            )
+            .await?;
+            return Err(error);
+        }
+    };
+
+    if !matches!(record.status, SqlAuditStatus::PendingApproval) {
+        return Ok(sql_audit_result(record, AgentEventType::ResourceCreated));
+    }
+
+    let execute_tool_id = format!("{}:sql_execute", action.id);
+    let execute_started_at = Instant::now();
+    append_tool_started(
+        state,
+        owner_user_id,
+        &action.turn_id,
+        &execute_tool_id,
+        "sql_execute",
+        "Execute SQL",
+        "Executing the approved SQL operation",
+        "executing_sql",
+    )
+    .await?;
+    let approved = state
+        .store
+        .approve_sql_audit(
+            owner_user_id,
+            &record.id,
+            ApproveSqlAuditRequest {
+                comment: Some("Approved from confirmed chat action.".to_owned()),
+            },
+        )
+        .await?;
+    let outcome = match execute_sql_audit_for_user(state, owner_user_id, &approved.id).await {
+        Ok(outcome) => {
+            append_tool_finished(
+                state,
+                owner_user_id,
+                &action.turn_id,
+                ToolFinishedPayload {
+                    id: &execute_tool_id,
+                    name: "sql_execute",
+                    status: "succeeded",
+                    summary: "SQL execution completed",
+                    elapsed_ms: execute_started_at.elapsed().as_millis() as u64,
+                    output_preview: Some(sql_execution_output_preview(&outcome)),
+                    next_summary: Some("Preparing the final response"),
+                },
+            )
+            .await?;
+            outcome
+        }
+        Err(error) => {
+            append_tool_finished(
+                state,
+                owner_user_id,
+                &action.turn_id,
+                ToolFinishedPayload {
+                    id: &execute_tool_id,
+                    name: "sql_execute",
+                    status: "failed",
+                    summary: "SQL execution failed",
+                    elapsed_ms: execute_started_at.elapsed().as_millis() as u64,
+                    output_preview: Some(error.to_string()),
+                    next_summary: Some("Preparing the failure response"),
+                },
+            )
+            .await?;
+            return Err(error);
+        }
+    };
+
+    Ok(sql_audit_execution_result(
+        outcome,
+        AgentEventType::ResourceUpdated,
+    ))
+}
+
+pub(crate) async fn synthesize_action_observation(
+    state: &ApiState,
+    owner_user_id: &str,
+    action: &AgentAction,
+    observation: Value,
+) -> anyhow::Result<()> {
+    append_event(
+        state,
+        owner_user_id,
+        &action.turn_id,
+        AgentEventType::ToolCallStarted,
+        json!({
+            "name": "synthesize_observation",
+            "stage": "synthesizing",
+            "summary": "Preparing the final response"
+        }),
+    )
+    .await?;
+
+    let Some(provider) = user_llm_provider_for_user(state, owner_user_id).await? else {
+        anyhow::bail!(MISSING_LLM_PROVIDER_MESSAGE);
+    };
+    let turn = state
+        .store
+        .get_agent_turn(owner_user_id, &action.turn_id)
+        .await?;
+    let context = load_llm_workbench_context(state, owner_user_id, &turn).await?;
+    let agent = LlmWorkbenchAgent::new(provider.client, provider.model, provider.protocol);
+    let response = agent
+        .synthesize_observation(context, observation)
+        .await
+        .context("LLM observation synthesis failed")?;
+
+    persist_workbench_response(state, owner_user_id, &turn, response)
+        .await
+        .context("failed to persist synthesized workbench response")?;
+
+    Ok(())
+}
+
+async fn load_llm_workbench_context(
+    state: &ApiState,
+    owner_user_id: &str,
+    turn: &AgentTurn,
+) -> anyhow::Result<LlmWorkbenchContext> {
+    let databases = state.store.list_managed_databases(owner_user_id).await?;
+    let summary = state.agent.audit_summary().await.ok();
+    let selected_sql_audit_id = turn
+        .dashboard_context
+        .as_ref()
+        .and_then(|context| context.selected_sql_audit_id.clone());
+    let recent_sql_audits = state
+        .store
+        .list_sql_audits(owner_user_id, turn.managed_database_id.as_deref(), None, 20)
+        .await?;
+    let recent_actions = state
+        .store
+        .list_agent_actions(owner_user_id, Some(&turn.conversation_id), None)
+        .await?;
+    let messages = state
+        .store
+        .list_agent_messages(owner_user_id, &turn.conversation_id, 40, None)
+        .await?;
+    let managed_database = turn
+        .managed_database_id
+        .as_deref()
+        .and_then(|managed_database_id| {
+            databases
+                .iter()
+                .find(|database| database.id == managed_database_id)
+                .cloned()
+        });
+
+    Ok(LlmWorkbenchContext {
+        messages,
+        managed_database,
+        selected_sql_audit_id,
+        audit_summary: summary,
+        recent_sql_audits,
+        recent_actions,
+    })
+}
+
+struct ToolFinishedPayload<'a> {
+    id: &'a str,
+    name: &'a str,
+    status: &'a str,
+    summary: &'a str,
+    elapsed_ms: u64,
+    output_preview: Option<String>,
+    next_summary: Option<&'a str>,
+}
+
+async fn append_tool_started(
+    state: &ApiState,
+    owner_user_id: &str,
+    turn_id: &str,
+    id: &str,
+    name: &str,
+    title: &str,
+    summary: &str,
+    stage: &str,
+) -> Result<(), ApiError> {
+    append_event(
+        state,
+        owner_user_id,
+        turn_id,
+        AgentEventType::ToolCallStarted,
+        json!({
+            "id": id,
+            "name": name,
+            "title": title,
+            "summary": summary,
+            "stage": stage,
+        }),
+    )
+    .await?;
+
+    Ok(())
+}
+
+async fn append_tool_finished(
+    state: &ApiState,
+    owner_user_id: &str,
+    turn_id: &str,
+    payload: ToolFinishedPayload<'_>,
+) -> Result<(), ApiError> {
+    append_event(
+        state,
+        owner_user_id,
+        turn_id,
+        AgentEventType::ToolCallFinished,
+        json!({
+            "id": payload.id,
+            "name": payload.name,
+            "status": payload.status,
+            "summary": payload.summary,
+            "elapsed_ms": payload.elapsed_ms,
+            "output_preview": payload.output_preview,
+            "next_summary": payload.next_summary,
+        }),
+    )
+    .await?;
+
+    Ok(())
+}
+
+fn sql_execution_output_preview(outcome: &SqlAuditExecutionOutcome) -> String {
+    if let Some(result) = &outcome.record.execution_result {
+        return format!(
+            "{} completed; affected rows: {}",
+            result.statement_kind.as_str(),
+            result.affected_rows
+        );
+    }
+
+    if let Some(query_result) = &outcome.query_result {
+        return format!("{} rows returned", query_result.row_count);
+    }
+
+    format!(
+        "Audit {} is {}",
+        outcome.record.id,
+        outcome.record.status.as_str()
+    )
 }
 
 fn ensure_chart_keys_available(

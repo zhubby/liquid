@@ -3,6 +3,7 @@ import type { ChatAction } from "./ChatAction";
 import type { ChatErrorCode } from "./ChatErrorCode";
 import type { ChatMessage } from "./ChatMessage";
 import type { ChatStreamStage } from "./ChatStreamStage";
+import type { ChatToolStatus } from "./ChatToolStatus";
 import type { ChatTurn } from "./ChatTurn";
 
 export type ChatStreamEvent =
@@ -17,9 +18,28 @@ export type ChatStreamEvent =
     };
   }
   | { "type": "assistant_done"; "payload": { message: ChatMessage } }
-  | { "type": "status_changed"; "payload": { stage: ChatStreamStage } }
+  | {
+    "type": "status_changed";
+    "payload": { stage: ChatStreamStage; summary?: string };
+  }
+  | {
+    "type": "tool_started";
+    "payload": { id: string; name: string; title: string; summary: string };
+  }
+  | {
+    "type": "tool_finished";
+    "payload": {
+      id: string;
+      name: string;
+      status: ChatToolStatus;
+      summary: string;
+      elapsed_ms: number;
+      output_preview?: string;
+    };
+  }
   | { "type": "action_proposed"; "payload": { action: ChatAction } }
   | { "type": "action_updated"; "payload": { action: ChatAction } }
+  | { "type": "turn_waiting_for_user"; "payload": { turn: ChatTurn } }
   | { "type": "turn_completed"; "payload": { turn: ChatTurn } }
   | {
     "type": "turn_failed";

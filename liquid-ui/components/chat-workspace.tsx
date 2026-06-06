@@ -86,6 +86,28 @@ type FailedTurn = {
 
 type PendingActionDecision = "apply" | "reject";
 
+type ActivityItem = {
+  id: string;
+  kind: "status" | "tool";
+  stage?: ChatStreamStage;
+  name?: string;
+  title: string;
+  summary: string;
+  status: "running" | "succeeded" | "failed";
+  elapsedMs?: number;
+  outputPreview?: string;
+};
+
+type ToolStartedPayload = Extract<
+  ChatStreamEvent,
+  { type: "tool_started" }
+>["payload"];
+
+type ToolFinishedPayload = Extract<
+  ChatStreamEvent,
+  { type: "tool_finished" }
+>["payload"];
+
 type ChatPanelProps = {
   token: string;
   selectedDatabase: ManagedDatabase;
@@ -118,7 +140,7 @@ export function ChatPanel({
   const [isSavingTitle, setIsSavingTitle] = useState(false);
   const [isDeleteDialogOpen, setIsDeleteDialogOpen] = useState(false);
   const [providerReady, setProviderReady] = useState<boolean | null>(null);
-  const [streamStage, setStreamStage] = useState<ChatStreamStage | null>(null);
+  const [activityItems, setActivityItems] = useState<ActivityItem[]>([]);
   const [activeTurn, setActiveTurn] = useState<ChatTurn | null>(null);
   const [failedTurn, setFailedTurn] = useState<FailedTurn | null>(null);
   const [pendingActionDecisions, setPendingActionDecisions] = useState<
@@ -127,9 +149,11 @@ export function ChatPanel({
   const listRef = useRef<HTMLDivElement>(null);
   const composerRef = useRef<HTMLTextAreaElement>(null);
   const activeStreamRef = useRef<AbortController | null>(null);
+  const activeActionStreamRef = useRef<AbortController | null>(null);
   const activeTurnRef = useRef<ChatTurn | null>(null);
   const activeConversationIdRef = useRef(conversation.id);
   const activeSendRef = useRef<string | null>(null);
+  const activeActionStreamKeyRef = useRef<string | null>(null);
   const pendingActionIdsRef = useRef(new Set<string>());
   const loadVersionRef = useRef(0);
   const nearBottomRef = useRef(true);
@@ -181,16 +205,19 @@ export function ChatPanel({
     loadVersionRef.current = loadVersion;
     activeConversationIdRef.current = conversation.id;
     activeStreamRef.current?.abort();
+    activeActionStreamRef.current?.abort();
     activeStreamRef.current = null;
+    activeActionStreamRef.current = null;
     activeTurnRef.current = null;
     activeSendRef.current = null;
+    activeActionStreamKeyRef.current = null;
     pendingActionIdsRef.current.clear();
     nearBottomRef.current = true;
     setInput("");
     setMessages([]);
     setActions([]);
     setIsSending(false);
-    setStreamStage(null);
+    setActivityItems([]);
     setActiveTurn(null);
     setFailedTurn(null);
     setPendingActionDecisions({});
@@ -225,9 +252,12 @@ export function ChatPanel({
     return () => {
       cancelled = true;
       activeStreamRef.current?.abort();
+      activeActionStreamRef.current?.abort();
       activeStreamRef.current = null;
+      activeActionStreamRef.current = null;
       activeTurnRef.current = null;
       activeSendRef.current = null;
+      activeActionStreamKeyRef.current = null;
     };
   }, [conversation.id, loadConversationState, t.workspace.agentLoadFailed]);
 
@@ -254,7 +284,7 @@ export function ChatPanel({
     }
 
     list.scrollTo({ top: list.scrollHeight, behavior: "smooth" });
-  }, [messages, actions, streamStage, isSending]);
+  }, [messages, actions, activityItems, isSending]);
 
   const mergeAction = useCallback((action: ChatAction) => {
     setActions((current) => {
@@ -317,16 +347,40 @@ export function ChatPanel({
   ]);
 
   const handleStreamEvent = useCallback(
-    (event: ChatStreamEvent, turn: ChatTurn, prompt: string) => {
+    (
+      event: ChatStreamEvent,
+      turn: ChatTurn,
+      prompt: string,
+      actionStreamActionId?: string,
+    ) => {
       switch (event.type) {
         case "turn_started":
-          setStreamStage("thinking");
+          setActivityItems((current) =>
+            upsertStatusActivity(current, "planning", undefined, t),
+          );
           return false;
         case "message_created":
           setMessages((current) => upsertMessage(current, event.payload.message));
           return false;
         case "status_changed":
-          setStreamStage(event.payload.stage);
+          setActivityItems((current) =>
+            upsertStatusActivity(
+              current,
+              event.payload.stage,
+              event.payload.summary,
+              t,
+            ),
+          );
+          return false;
+        case "tool_started":
+          setActivityItems((current) =>
+            upsertToolStartedActivity(current, event.payload, t),
+          );
+          return false;
+        case "tool_finished":
+          setActivityItems((current) =>
+            upsertToolFinishedActivity(current, event.payload),
+          );
           return false;
         case "assistant_delta": {
           const content =
@@ -345,20 +399,40 @@ export function ChatPanel({
           return false;
         }
         case "assistant_done":
+          setActivityItems((current) => completeRunningActivities(current));
           setMessages((current) =>
             upsertAssistantDone(current, event.payload.message, turn.id),
           );
           return false;
         case "action_proposed":
-          setStreamStage("proposing_action");
+          setActivityItems((current) =>
+            upsertStatusActivity(current, "proposing_action", undefined, t),
+          );
           mergeAction(event.payload.action);
           return false;
         case "action_updated":
+          if (
+            actionStreamActionId &&
+            event.payload.action.id === actionStreamActionId &&
+            event.payload.action.status === "applying"
+          ) {
+            setActivityItems([
+              createStatusActivity("planning", undefined, t),
+            ]);
+          }
           mergeAction(event.payload.action);
+          return false;
+        case "turn_waiting_for_user":
+          setActiveTurn(event.payload.turn);
+          setActivityItems((current) =>
+            completeRunningActivities(
+              upsertStatusActivity(current, "proposing_action", undefined, t),
+            ),
+          );
           return false;
         case "turn_completed":
           setActiveTurn(event.payload.turn);
-          setStreamStage(null);
+          setActivityItems([]);
           return false;
         case "turn_failed": {
           const message = chatErrorMessage(
@@ -367,7 +441,7 @@ export function ChatPanel({
             t,
           );
 
-          setStreamStage(null);
+          setActivityItems((current) => failRunningActivities(current, message));
           setActiveTurn({
             ...turn,
             status: event.payload.error_code === "turn_cancelled" ? "cancelled" : "failed",
@@ -420,7 +494,7 @@ export function ChatPanel({
       activeStreamRef.current?.abort();
       setInput("");
       setIsSending(true);
-      setStreamStage("thinking");
+      setActivityItems([createStatusActivity("planning", undefined, t)]);
       setActiveTurn(null);
       setFailedTurn(null);
       setMessages((current) => [...current, localUserMessage]);
@@ -516,7 +590,6 @@ export function ChatPanel({
           activeStreamRef.current = null;
           activeTurnRef.current = null;
           setIsSending(false);
-          setStreamStage(null);
         }
       }
     },
@@ -526,7 +599,7 @@ export function ChatPanel({
       input,
       isSending,
       selectedDatabase.id,
-      t.workspace.sendFailed,
+      t,
       token,
     ],
   );
@@ -551,7 +624,7 @@ export function ChatPanel({
       activeTurnRef.current = null;
       activeSendRef.current = null;
       setIsSending(false);
-      setStreamStage(null);
+      setActivityItems([]);
       setFailedTurn({
         turnId: turn.id,
         prompt: lastUserPrompt(messages),
@@ -567,7 +640,89 @@ export function ChatPanel({
         ),
       );
     }
-  }, [activeTurn, messages, t.workspace.errorMessages.turn_cancelled, t.workspace.sendFailed, token]);
+  }, [activeTurn, messages, t, token]);
+
+  const streamActionTurn = useCallback(
+    async (action: ChatAction) => {
+      const conversationId = conversation.id;
+      const streamKey = `${conversationId}:${action.id}:${Date.now()}`;
+      const controller = new AbortController();
+      const turn: ChatTurn = {
+        id: action.turn_id,
+        conversation_id: conversationId,
+        status: "running",
+        input_message_id: action.turn_id,
+      };
+
+      activeActionStreamRef.current?.abort();
+      activeActionStreamRef.current = controller;
+      activeActionStreamKeyRef.current = streamKey;
+      setActivityItems([createStatusActivity("planning", undefined, t)]);
+      setFailedTurn(null);
+
+      try {
+        await apiStream<ChatStreamEvent>(
+          `/api/v1/chat/turns/${action.turn_id}/stream?after_seq=0`,
+          {
+            token,
+            signal: controller.signal,
+            onEvent: (event) => {
+              if (
+                activeConversationIdRef.current !== conversationId ||
+                activeActionStreamKeyRef.current !== streamKey
+              ) {
+                return;
+              }
+
+              handleStreamEvent(event, turn, "", action.id);
+            },
+          },
+        );
+      } catch (error) {
+        if (error instanceof DOMException && error.name === "AbortError") {
+          return;
+        }
+
+        if (activeConversationIdRef.current !== conversationId) {
+          return;
+        }
+
+        toast.error(error instanceof Error ? error.message : t.workspace.actionFailed);
+        setActivityItems((current) =>
+          failRunningActivities(
+            current.length > 0
+              ? current
+              : [createStatusActivity("planning", undefined, t)],
+            error instanceof Error ? error.message : t.workspace.actionFailed,
+          ),
+        );
+
+        try {
+          const refreshed = await loadConversationState(conversationId);
+
+          if (activeConversationIdRef.current === conversationId) {
+            setMessages(refreshed.messages);
+            setActions(refreshed.actions);
+            setProviderReady(refreshed.providerReady);
+          }
+        } catch {
+          // The stream error toast already gives the user immediate feedback.
+        }
+      } finally {
+        if (activeActionStreamKeyRef.current === streamKey) {
+          activeActionStreamRef.current = null;
+          activeActionStreamKeyRef.current = null;
+        }
+      }
+    },
+    [
+      conversation.id,
+      handleStreamEvent,
+      loadConversationState,
+      t,
+      token,
+    ],
+  );
 
   const handleSubmit = (event: FormEvent<HTMLFormElement>) => {
     event.preventDefault();
@@ -608,6 +763,12 @@ export function ChatPanel({
       );
 
       mergeAction(updated);
+
+      if (decision === "apply" && updated.status === "applying") {
+        void streamActionTurn(updated);
+        return;
+      }
+
       const refreshed = await loadConversationState(conversation.id);
 
       if (activeConversationIdRef.current === conversation.id) {
@@ -617,9 +778,7 @@ export function ChatPanel({
       }
 
       toast.success(
-        decision === "apply"
-          ? t.workspace.actionApplied
-          : t.workspace.actionRejected,
+        decision === "apply" ? t.workspace.actionApplied : t.workspace.actionRejected,
       );
     } catch (error) {
       toast.error(error instanceof Error ? error.message : t.workspace.actionFailed);
@@ -679,7 +838,7 @@ export function ChatPanel({
           orphanActions={orphanActions}
           isLoading={isLoading}
           isSending={isSending}
-          streamStage={streamStage}
+          activityItems={activityItems}
           selectedDatabase={selectedDatabase}
           providerReady={providerReady}
           pendingActionDecisions={pendingActionDecisions}
@@ -820,7 +979,7 @@ const MessageList = ({
   orphanActions,
   isLoading,
   isSending,
-  streamStage,
+  activityItems,
   selectedDatabase,
   providerReady,
   pendingActionDecisions,
@@ -835,7 +994,7 @@ const MessageList = ({
   orphanActions: ChatAction[];
   isLoading: boolean;
   isSending: boolean;
-  streamStage: ChatStreamStage | null;
+  activityItems: ActivityItem[];
   selectedDatabase: ManagedDatabase;
   providerReady: boolean | null;
   pendingActionDecisions: Record<string, PendingActionDecision>;
@@ -845,6 +1004,26 @@ const MessageList = ({
   onActionReject: (action: ChatAction) => void;
 }) => {
   const { t } = useI18n();
+  const actionAnchorMessageIds = useMemo(() => {
+    const anchoredTurnIds = new Set<string>();
+    const messageIds = new Set<string>();
+
+    for (const message of messages) {
+      if (
+        message.role !== "assistant" ||
+        !message.turn_id ||
+        anchoredTurnIds.has(message.turn_id) ||
+        !(actionsByTurn.get(message.turn_id)?.length)
+      ) {
+        continue;
+      }
+
+      anchoredTurnIds.add(message.turn_id);
+      messageIds.add(message.id);
+    }
+
+    return messageIds;
+  }, [actionsByTurn, messages]);
 
   return (
     <div
@@ -877,7 +1056,9 @@ const MessageList = ({
             <MessageStack
               key={message.id}
               message={message}
-              actions={message.role === "assistant" ? messageActions : []}
+              actions={
+                actionAnchorMessageIds.has(message.id) ? messageActions : []
+              }
               selectedDatabase={selectedDatabase}
               pendingActionDecisions={pendingActionDecisions}
               onActionApply={onActionApply}
@@ -887,8 +1068,14 @@ const MessageList = ({
         })}
       </div>
 
-      {isSending || streamStage ? (
-        <ChatStreamState stage={streamStage ?? "thinking"} />
+      {activityItems.length > 0 || isSending ? (
+        <ActivityTimeline
+          items={
+            activityItems.length > 0
+              ? activityItems
+              : [createStatusActivity("planning", undefined, t)]
+          }
+        />
       ) : null}
 
       {orphanActions.length > 0 ? (
@@ -1095,7 +1282,7 @@ function MessagePart({ part }: { part: ChatMessagePart }) {
         </div>
       );
     case "status":
-      return <ChatStreamState stage={part.stage} compact />;
+      return <InlineStageState stage={part.stage} />;
     case "action_ref":
       return null;
   }
@@ -1219,8 +1406,9 @@ function ActionCard({
 }) {
   const { t } = useI18n();
   const isProposed = action.status === "proposed";
-  const isActionable = isProposed || action.status === "failed";
-  const isBusy = Boolean(pendingDecision);
+  const isApplying = action.status === "applying";
+  const isBusy = Boolean(pendingDecision) || isApplying;
+  const isActionable = !isBusy && (isProposed || action.status === "failed");
   const databaseName =
     action.preview?.kind === "sql_audit"
       ? action.preview.database_name ?? selectedDatabase.name
@@ -1257,7 +1445,7 @@ function ActionCard({
           </p>
         </div>
         <Badge
-          variant={isProposed ? "secondary" : "outline"}
+          variant={isProposed || isApplying ? "secondary" : "outline"}
           className={cn("rounded-md", isBusy && "gap-1.5")}
         >
           {isBusy ? (
@@ -1326,8 +1514,17 @@ function ActionCard({
           </>
         ) : (
           <div className="flex items-center gap-2 text-xs text-muted-foreground">
-            <Check className="size-3.5" aria-hidden />
-            {t.workspace.actionStatusUpdated}
+            {isApplying ? (
+              <>
+                <Loader2 className="size-3.5 animate-spin" aria-hidden />
+                {t.workspace.actionProcessing}
+              </>
+            ) : (
+              <>
+                <Check className="size-3.5" aria-hidden />
+                {t.workspace.actionStatusUpdated}
+              </>
+            )}
           </div>
         )}
       </div>
@@ -1536,22 +1733,91 @@ function formatPreviewValue(value: unknown) {
   return String(value);
 }
 
-function ChatStreamState({
-  stage,
-  compact = false,
-}: {
-  stage: ChatStreamStage;
-  compact?: boolean;
-}) {
+function ActivityTimeline({ items }: { items: ActivityItem[] }) {
   const { t } = useI18n();
 
   return (
-    <div
-      className={cn(
-        "flex items-center gap-2 text-sm text-muted-foreground",
-        compact ? "py-1" : "mt-4 pl-11",
-      )}
-    >
+    <div className="mt-4 pl-11">
+      <div className="relative">
+        {items.length > 1 ? (
+          <div
+            className="absolute bottom-3 left-[7px] top-3 w-px bg-border"
+            aria-hidden
+          />
+        ) : null}
+        <div className="space-y-0">
+          {items.map((item) => (
+            <div key={item.id} className="relative flex gap-3 pb-3 last:pb-0">
+              <ActivityMarker status={item.status} />
+              <div className="min-w-0 flex-1 pt-0.5">
+                <div className="flex min-w-0 flex-wrap items-center gap-x-2 gap-y-1">
+                  <span className="truncate text-sm font-medium text-foreground">
+                    {item.kind === "tool"
+                      ? toolTitle(item.name, item.title, t)
+                      : item.title}
+                  </span>
+                  {item.kind === "tool" && item.elapsedMs !== undefined ? (
+                    <span className="text-[11px] text-muted-foreground">
+                      {formatElapsed(item.elapsedMs)}
+                    </span>
+                  ) : null}
+                  {item.status === "failed" ? (
+                    <span className="text-[11px] text-destructive">
+                      {t.workspace.toolStatuses.failed}
+                    </span>
+                  ) : null}
+                </div>
+                <p className="mt-0.5 break-words text-xs leading-5 text-muted-foreground">
+                  {item.summary}
+                </p>
+                {item.outputPreview ? (
+                  <p className="mt-1 truncate rounded-sm bg-muted/60 px-2 py-1 font-mono text-[11px] text-muted-foreground">
+                    {item.outputPreview}
+                  </p>
+                ) : null}
+              </div>
+            </div>
+          ))}
+        </div>
+      </div>
+    </div>
+  );
+}
+
+function ActivityMarker({
+  status,
+}: {
+  status: ActivityItem["status"];
+}) {
+  if (status === "running") {
+    return (
+      <span className="relative mt-1 flex size-4 shrink-0">
+        <span className="absolute inline-flex size-full animate-ping rounded-full bg-primary/25" />
+        <span className="relative inline-flex size-4 rounded-full border border-primary/30 bg-background" />
+      </span>
+    );
+  }
+
+  if (status === "failed") {
+    return (
+      <span className="relative mt-1 flex size-4 shrink-0 items-center justify-center rounded-full border border-destructive/30 bg-background text-destructive">
+        <AlertTriangle className="size-3" aria-hidden />
+      </span>
+    );
+  }
+
+  return (
+    <span className="relative mt-1 flex size-4 shrink-0 items-center justify-center rounded-full border border-emerald-500/30 bg-background text-emerald-600">
+      <Check className="size-3" aria-hidden />
+    </span>
+  );
+}
+
+function InlineStageState({ stage }: { stage: ChatStreamStage }) {
+  const { t } = useI18n();
+
+  return (
+    <div className="flex items-center gap-2 py-1 text-sm text-muted-foreground">
       <span className="relative flex size-4">
         <span className="absolute inline-flex size-full animate-ping rounded-full bg-primary/25" />
         <span className="relative inline-flex size-4 rounded-full border border-primary/30 bg-primary/15" />
@@ -1779,6 +2045,152 @@ function CopyButton({
       <Copy className="size-3.5" aria-hidden />
     </Button>
   );
+}
+
+function createStatusActivity(
+  stage: ChatStreamStage,
+  summary: string | undefined,
+  t: ReturnType<typeof useI18n>["t"],
+): ActivityItem {
+  return {
+    id: `status-${stage}`,
+    kind: "status",
+    stage,
+    title: t.workspace.stages[stage],
+    summary: summary?.trim() || t.workspace.stageSummaries[stage],
+    status: "running",
+  };
+}
+
+function upsertStatusActivity(
+  items: ActivityItem[],
+  stage: ChatStreamStage,
+  summary: string | undefined,
+  t: ReturnType<typeof useI18n>["t"],
+): ActivityItem[] {
+  const next = items.map((item) =>
+    item.kind === "status" && item.status === "running"
+      ? { ...item, status: "succeeded" as const }
+      : item,
+  );
+  const activity = createStatusActivity(stage, summary, t);
+  const existingIndex = next.findIndex((item) => item.id === activity.id);
+
+  if (existingIndex === -1) {
+    return [...next, activity];
+  }
+
+  return next.map((item, index) =>
+    index === existingIndex ? { ...item, ...activity } : item,
+  );
+}
+
+function upsertToolStartedActivity(
+  items: ActivityItem[],
+  payload: ToolStartedPayload,
+  t: ReturnType<typeof useI18n>["t"],
+): ActivityItem[] {
+  const next = items.map((item) =>
+    item.kind === "status" && item.status === "running"
+      ? { ...item, status: "succeeded" as const }
+      : item,
+  );
+  const activity: ActivityItem = {
+    id: `tool-${payload.id}`,
+    kind: "tool",
+    name: payload.name,
+    title: toolTitle(payload.name, payload.title, t),
+    summary: payload.summary || t.workspace.toolStatuses.running,
+    status: "running",
+  };
+  const existingIndex = next.findIndex((item) => item.id === activity.id);
+
+  if (existingIndex === -1) {
+    return [...next, activity];
+  }
+
+  return next.map((item, index) =>
+    index === existingIndex ? { ...item, ...activity } : item,
+  );
+}
+
+function upsertToolFinishedActivity(
+  items: ActivityItem[],
+  payload: ToolFinishedPayload,
+): ActivityItem[] {
+  const status = payload.status === "failed" ? "failed" : "succeeded";
+  const nextActivity: ActivityItem = {
+    id: `tool-${payload.id}`,
+    kind: "tool",
+    name: payload.name,
+    title: payload.name.replaceAll("_", " "),
+    summary: payload.summary,
+    status,
+    elapsedMs: payload.elapsed_ms,
+    outputPreview: payload.output_preview,
+  };
+  const existingIndex = items.findIndex((item) => item.id === nextActivity.id);
+
+  if (existingIndex === -1) {
+    return [...items, nextActivity];
+  }
+
+  return items.map((item, index) =>
+    index === existingIndex
+      ? {
+          ...item,
+          summary: payload.summary,
+          status,
+          elapsedMs: payload.elapsed_ms,
+          outputPreview: payload.output_preview,
+        }
+      : item,
+  );
+}
+
+function completeRunningActivities(items: ActivityItem[]): ActivityItem[] {
+  return items.map((item) =>
+    item.status === "running" ? { ...item, status: "succeeded" } : item,
+  );
+}
+
+function failRunningActivities(
+  items: ActivityItem[],
+  message: string,
+): ActivityItem[] {
+  if (items.length === 0) {
+    return [];
+  }
+
+  return items.map((item, index) =>
+    item.status === "running" || index === items.length - 1
+      ? {
+          ...item,
+          status: "failed",
+          summary: message || item.summary,
+        }
+      : item,
+  );
+}
+
+function toolTitle(
+  name: string | undefined,
+  fallback: string,
+  t: ReturnType<typeof useI18n>["t"],
+) {
+  if (name && name in t.workspace.toolTitles) {
+    return t.workspace.toolTitles[name as keyof typeof t.workspace.toolTitles];
+  }
+
+  return fallback || t.workspace.toolTitles.tool;
+}
+
+function formatElapsed(elapsedMs: number) {
+  if (elapsedMs < 1000) {
+    return `${elapsedMs}ms`;
+  }
+
+  return `${(elapsedMs / 1000).toFixed(1)}s`;
 }
 
 function groupActionsByTurn(actions: ChatAction[]) {

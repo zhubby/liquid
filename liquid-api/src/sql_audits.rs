@@ -16,7 +16,7 @@ use liquid_sql::{
 };
 use liquid_storage::CreateSqlAuditRecord;
 use serde::Deserialize;
-use std::sync::Arc;
+use std::{sync::Arc, time::Instant};
 
 use crate::{auth::authenticated_user, error::ApiError, state::ApiState};
 use crate::{bi_panels::materialize_bi_query, llm_provider::user_llm_provider_for_user};
@@ -66,6 +66,7 @@ pub(crate) async fn create_sql_audit_for_user(
     managed_database_id: &str,
     request: CreateSqlAuditRequest,
 ) -> Result<SqlAuditRecord, ApiError> {
+    let started_at = Instant::now();
     let pool = state
         .managed_database_pools
         .get_pool(ManagedDatabasePoolKey::new(
@@ -86,10 +87,18 @@ pub(crate) async fn create_sql_audit_for_user(
         state.sql_execution,
     ));
     let agent = sql_audit_agent_for_user(state, owner_user_id).await?;
+    let agent_started_at = Instant::now();
     let report = agent
         .audit_sql_with_tools(request.clone().into_audit_request(), tools)
         .await
         .map_err(ApiError::internal)?;
+    tracing::info!(
+        managed_database_id,
+        statement_kind = ?statement_kind.as_ref(),
+        risk_score = report.risk_score,
+        elapsed_ms = agent_started_at.elapsed().as_millis(),
+        "SQL audit agent completed"
+    );
     let risk_score = risk_score.max(report.risk_score);
     let record = state
         .store
@@ -106,6 +115,14 @@ pub(crate) async fn create_sql_audit_for_user(
             },
         )
         .await?;
+    tracing::info!(
+        managed_database_id,
+        sql_audit_id = %record.id,
+        status = ?record.status,
+        risk_score = record.risk_score,
+        elapsed_ms = started_at.elapsed().as_millis(),
+        "SQL audit record created"
+    );
 
     Ok(record)
 }
@@ -195,6 +212,7 @@ pub(crate) async fn execute_sql_audit_for_user(
     owner_user_id: &str,
     id: &str,
 ) -> Result<SqlAuditExecutionOutcome, ApiError> {
+    let started_at = Instant::now();
     let record = state.store.get_sql_audit(owner_user_id, id).await?;
     ensure_database_snapshot_matches(state, owner_user_id, &record).await?;
 
@@ -251,6 +269,15 @@ pub(crate) async fn execute_sql_audit_for_user(
                     },
                 )
                 .await?;
+            tracing::info!(
+                sql_audit_id = id,
+                managed_database_id = %record.managed_database_id,
+                statement_kind = ?record.statement_kind,
+                affected_rows = result.affected_rows,
+                executor_elapsed_ms = result.elapsed_ms,
+                elapsed_ms = started_at.elapsed().as_millis(),
+                "approved SQL audit execution completed"
+            );
 
             Ok(SqlAuditExecutionOutcome {
                 record,
@@ -263,6 +290,14 @@ pub(crate) async fn execute_sql_audit_for_user(
                 .store
                 .fail_sql_audit_execution(owner_user_id, id, message.clone())
                 .await?;
+            tracing::error!(
+                sql_audit_id = id,
+                managed_database_id = %record.managed_database_id,
+                statement_kind = ?record.statement_kind,
+                error = %message,
+                elapsed_ms = started_at.elapsed().as_millis(),
+                "approved SQL audit execution failed"
+            );
 
             if deterministic_execution_rejection(&message) {
                 Err(ApiError::conflict(message))
@@ -281,6 +316,7 @@ async fn execute_readonly_sql_audit(
     owner_user_id: &str,
     record: SqlAuditRecord,
 ) -> Result<SqlAuditExecutionOutcome, ApiError> {
+    let started_at = Instant::now();
     match record.status {
         SqlAuditStatus::Audited | SqlAuditStatus::Approved | SqlAuditStatus::Executed => {}
         SqlAuditStatus::PendingApproval
@@ -302,6 +338,14 @@ async fn execute_readonly_sql_audit(
         SQL_AUDIT_READONLY_RESULT_LIMIT,
     )
     .await?;
+    tracing::info!(
+        sql_audit_id = %record.id,
+        managed_database_id = %record.managed_database_id,
+        row_count = query_result.row_count,
+        truncated = query_result.truncated,
+        elapsed_ms = started_at.elapsed().as_millis(),
+        "read-only SQL audit result materialized"
+    );
 
     Ok(SqlAuditExecutionOutcome {
         record,

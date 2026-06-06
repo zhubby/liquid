@@ -3,6 +3,7 @@
 export type AgentTurnStatus =
   | "queued"
   | "running"
+  | "waiting_for_user"
   | "completed"
   | "blocked"
   | "failed"

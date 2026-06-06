@@ -33,6 +33,7 @@ export type { ChatMessagePart } from "./generated/api-types/ChatMessagePart";
 export type { ChatMessageStatus } from "./generated/api-types/ChatMessageStatus";
 export type { ChatStreamEvent } from "./generated/api-types/ChatStreamEvent";
 export type { ChatStreamStage } from "./generated/api-types/ChatStreamStage";
+export type { ChatToolStatus } from "./generated/api-types/ChatToolStatus";
 export type { ChatTurn } from "./generated/api-types/ChatTurn";
 export type { ChatTurnDashboardContext } from "./generated/api-types/ChatTurnDashboardContext";
 export type { CreateAgentActionRequest } from "./generated/api-types/CreateAgentActionRequest";

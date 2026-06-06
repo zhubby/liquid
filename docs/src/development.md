@@ -88,6 +88,8 @@ enables read-only execution, and `write_gated` exposes gated write execution for
 audited, user-approved statements. Each managed database instance gets a lazy
 SQLx pool that is closed after
 `LIQUID_SQL_MANAGED_POOL_IDLE_TTL_SECONDS` seconds without use.
+SQLx query logs are disabled by default; set `LIQUID_SQLX_LOGS=true` to enable
+the pretty SQLx query log layer while debugging.
 
 ## Frontend
 

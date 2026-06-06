@@ -84,6 +84,22 @@ impl ToolRegistry {
         registry
     }
 
+    pub fn with_workbench_readonly_postgres_tools(config: PostgresToolConfig) -> Self {
+        let mut registry = Self::new();
+
+        let Some(pool) = config.pool.clone() else {
+            return registry;
+        };
+
+        let context = PostgresToolContext::new(pool, &config);
+        registry.register(PgListSchemasTool::new(context.clone()));
+        registry.register(PgListRelationsTool::new(context.clone()));
+        registry.register(PgDescribeRelationTool::new(context.clone()));
+        registry.register(PgExplainSqlTool::new(context.clone()));
+        registry.register(PgExecuteReadonlySqlTool::new(context));
+        registry
+    }
+
     pub fn with_database_operation_tools(context: DatabaseOperationToolContext) -> Self {
         let mut registry = Self::new();
         registry.register(PgStartDatabaseBackupTool::new(context.clone()));
@@ -106,6 +122,10 @@ impl ToolRegistry {
 
     pub fn definitions(&self) -> Vec<ToolDefinition> {
         self.tools.values().map(|tool| tool.definition()).collect()
+    }
+
+    pub fn contains(&self, name: &str) -> bool {
+        self.tools.contains_key(name)
     }
 
     pub async fn execute(&self, call: &ToolCall) -> Result<ToolOutput> {
