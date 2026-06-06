@@ -6,7 +6,10 @@ use argon2::{
     },
 };
 use base64::{Engine as _, engine::general_purpose::URL_SAFE_NO_PAD};
-use liquid_core::{AuthResponse, CurrentUserResponse, LoginRequest, PublicUser, RegisterRequest};
+use liquid_core::{
+    AuthResponse, CurrentUserResponse, LoginRequest, PublicUser, RegisterRequest,
+    UpdateCurrentUserRequest, UpdatePasswordRequest,
+};
 use sha2::{Digest, Sha256};
 
 use crate::{
@@ -137,6 +140,71 @@ pub(crate) async fn authenticate_token(
     .await?;
 
     Ok(user.map(public_user))
+}
+
+pub(crate) async fn update_current_user(
+    storage: &Storage,
+    owner_user_id: &str,
+    request: UpdateCurrentUserRequest,
+) -> Result<PublicUser, StorageError> {
+    let display_name = required_string("display_name", &request.display_name)?;
+    let row = sqlx::query_as::<_, (String, String, String)>(
+        r#"
+        update users
+        set display_name = $2,
+            updated_at = now()
+        where id = $1::uuid
+        returning id::text, email, display_name
+        "#,
+    )
+    .bind(owner_user_id)
+    .bind(display_name)
+    .fetch_optional(&storage.pool)
+    .await?;
+
+    row.map(public_user).ok_or(StorageError::NotFound)
+}
+
+pub(crate) async fn update_password(
+    storage: &Storage,
+    owner_user_id: &str,
+    request: UpdatePasswordRequest,
+) -> Result<(), StorageError> {
+    validate_password(&request.new_password)?;
+    let row = sqlx::query_as::<_, (String,)>(
+        r#"
+        select password_hash
+        from users
+        where id = $1::uuid
+        "#,
+    )
+    .bind(owner_user_id)
+    .fetch_optional(&storage.pool)
+    .await?;
+
+    let Some((password_hash,)) = row else {
+        return Err(StorageError::NotFound);
+    };
+
+    if !verify_password(&password_hash, &request.current_password) {
+        return Err(StorageError::InvalidCredentials);
+    }
+
+    let new_password_hash = hash_password(&request.new_password)?;
+    sqlx::query(
+        r#"
+        update users
+        set password_hash = $2,
+            updated_at = now()
+        where id = $1::uuid
+        "#,
+    )
+    .bind(owner_user_id)
+    .bind(new_password_hash)
+    .execute(&storage.pool)
+    .await?;
+
+    Ok(())
 }
 
 pub(crate) async fn revoke_token(storage: &Storage, token: &str) -> Result<(), StorageError> {

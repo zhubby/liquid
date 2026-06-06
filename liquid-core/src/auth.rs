@@ -38,3 +38,16 @@ pub struct AuthResponse {
 pub struct CurrentUserResponse {
     pub user: PublicUser,
 }
+
+#[derive(Debug, Clone, Serialize, Deserialize, TS, PartialEq, Eq)]
+#[ts(export)]
+pub struct UpdateCurrentUserRequest {
+    pub display_name: String,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, TS, PartialEq, Eq)]
+#[ts(export)]
+pub struct UpdatePasswordRequest {
+    pub current_password: String,
+    pub new_password: String,
+}

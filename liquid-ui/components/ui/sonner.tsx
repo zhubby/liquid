@@ -12,6 +12,7 @@ function Toaster({ className, toastOptions, ...props }: ToasterProps) {
     <Sonner
       theme={theme as ToasterProps["theme"]}
       className={cn("toaster group", className)}
+      duration={props.duration ?? 3000}
       toastOptions={{
         ...toastOptions,
         classNames: {

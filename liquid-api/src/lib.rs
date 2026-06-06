@@ -8,6 +8,7 @@ mod error;
 mod health;
 mod managed_databases;
 mod server;
+mod settings;
 mod sql_audits;
 mod state;
 
@@ -24,6 +25,7 @@ pub fn router(state: ApiState) -> Router {
         .merge(auth::routes())
         .merge(audit::routes())
         .merge(managed_databases::routes())
+        .merge(settings::routes())
         .merge(sql_audits::routes())
         .with_state(state)
 }

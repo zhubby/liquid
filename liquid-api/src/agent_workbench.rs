@@ -4,7 +4,7 @@ use async_stream::stream;
 use axum::{
     Json, Router,
     extract::{Path, Query, State},
-    http::HeaderMap,
+    http::{HeaderMap, StatusCode},
     response::sse::{Event, KeepAlive, Sse},
     routing::{get, post},
 };
@@ -37,7 +37,9 @@ pub(crate) fn routes() -> Router<ApiState> {
         )
         .route(
             "/api/v1/agent/conversations/{conversation_id}",
-            get(get_conversation).patch(update_conversation),
+            get(get_conversation)
+                .patch(update_conversation)
+                .delete(delete_conversation),
         )
         .route(
             "/api/v1/agent/conversations/{conversation_id}/messages",
@@ -152,6 +154,20 @@ async fn update_conversation(
         .await?;
 
     Ok(Json(conversation))
+}
+
+async fn delete_conversation(
+    State(state): State<ApiState>,
+    headers: HeaderMap,
+    Path(conversation_id): Path<String>,
+) -> Result<StatusCode, ApiError> {
+    let user = authenticated_user(&state, &headers).await?;
+    state
+        .store
+        .delete_agent_conversation(&user.id, &conversation_id)
+        .await?;
+
+    Ok(StatusCode::NO_CONTENT)
 }
 
 async fn list_messages(

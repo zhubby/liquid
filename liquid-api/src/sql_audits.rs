@@ -4,18 +4,20 @@ use axum::{
     http::{HeaderMap, StatusCode},
     routing::{get, post},
 };
-use liquid_agent::PostgresToolConfig;
+use liquid_agent::{PostgresToolConfig, SqlAuditAgent, ToolCallingSqlAuditAgent};
 use liquid_core::{
-    ApproveSqlAuditRequest, CreateSqlAuditRequest, ManagedDatabase, ManagedDatabasePoolKey,
-    RejectSqlAuditRequest, SqlAuditExecutionResult, SqlAuditRecord, SqlAuditStatus,
-    SqlStatementKind,
+    ApproveSqlAuditRequest, CreateSqlAuditRequest, LlmProviderApiMode, LlmProviderKind,
+    ManagedDatabase, ManagedDatabasePoolKey, RejectSqlAuditRequest, ResolvedLlmProviderSettings,
+    SqlAuditExecutionResult, SqlAuditRecord, SqlAuditStatus, SqlStatementKind,
 };
+use liquid_llm::{LlmProtocol, OpenAiCompatibleClient, OpenAiCompatibleConfig};
 use liquid_sql::{
     PgSqlAnalysis, PgSqlAnalysisRequest, PgSqlRiskSeverity, PgSqlStatementKind,
     analyze_postgres_sql,
 };
 use liquid_storage::CreateSqlAuditRecord;
 use serde::Deserialize;
+use std::sync::Arc;
 
 use crate::{auth::authenticated_user, error::ApiError, state::ApiState};
 
@@ -76,8 +78,8 @@ pub(crate) async fn create_sql_audit_for_user(
         state.sql_metadata_required,
         state.sql_execution,
     ));
-    let report = state
-        .agent
+    let agent = sql_audit_agent_for_user(state, owner_user_id).await?;
+    let report = agent
         .audit_sql_with_tools(request.clone().into_audit_request(), tools)
         .await
         .map_err(ApiError::internal)?;
@@ -99,6 +101,40 @@ pub(crate) async fn create_sql_audit_for_user(
         .await?;
 
     Ok(record)
+}
+
+async fn sql_audit_agent_for_user(
+    state: &ApiState,
+    owner_user_id: &str,
+) -> Result<Arc<dyn SqlAuditAgent>, ApiError> {
+    let Some(settings) = state
+        .store
+        .resolve_llm_provider_settings(owner_user_id)
+        .await?
+        .filter(|settings| settings.api_key.is_some())
+    else {
+        return Ok(state.agent.clone());
+    };
+
+    user_configured_agent(settings)
+        .map(Arc::new)
+        .map(|agent| agent as Arc<dyn SqlAuditAgent>)
+}
+
+fn user_configured_agent(
+    settings: ResolvedLlmProviderSettings,
+) -> Result<ToolCallingSqlAuditAgent, ApiError> {
+    let LlmProviderKind::OpenaiCompatible = settings.provider;
+    let protocol = match settings.api_mode {
+        LlmProviderApiMode::ChatCompletions => LlmProtocol::ChatCompletions,
+        LlmProviderApiMode::Responses => LlmProtocol::Responses,
+    };
+    let llm = Arc::new(OpenAiCompatibleClient::new(OpenAiCompatibleConfig::new(
+        settings.api_key,
+        settings.base_url,
+    )));
+
+    Ok(ToolCallingSqlAuditAgent::new(llm, settings.model, protocol))
 }
 
 async fn list_sql_audits(

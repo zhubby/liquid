@@ -115,6 +115,7 @@ export function LiquidApp() {
         user={user}
         onDatabaseSelected={setSelectedDatabase}
         onLogout={handleLogout}
+        onUserUpdated={setUser}
       />
     );
   }

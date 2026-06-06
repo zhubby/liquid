@@ -5,11 +5,12 @@ use liquid_core::{
     ApproveSqlAuditRequest, AuthResponse, CompleteDatabaseBackup, CreateAgentActionRequest,
     CreateAgentConversationRequest, CreateAgentTurnRequest, CreateManagedDatabaseRequest,
     DatabaseBackupMetadataStore, DatabaseBackupMetadataStoreError, DatabaseBackupRecord,
-    DatabaseBackupStatus, DatabaseRestoreRecord, LoginRequest, ManagedDatabase,
-    ManagedDatabaseConnectionLoader, ManagedDatabaseConnectionLoaderError,
+    DatabaseBackupStatus, DatabaseRestoreRecord, LlmProviderSettings, LoginRequest,
+    ManagedDatabase, ManagedDatabaseConnectionLoader, ManagedDatabaseConnectionLoaderError,
     ManagedDatabaseConnectionSpec, ManagedDatabasePoolKey, PublicUser, RegisterRequest,
-    RejectSqlAuditRequest, SqlAuditExecutionResult, SqlAuditRecord, SqlAuditStatus,
-    UpdateAgentConversationRequest, UpdateManagedDatabaseRequest,
+    RejectSqlAuditRequest, ResolvedLlmProviderSettings, SqlAuditExecutionResult, SqlAuditRecord,
+    SqlAuditStatus, UpdateAgentConversationRequest, UpdateCurrentUserRequest,
+    UpdateLlmProviderSettingsRequest, UpdateManagedDatabaseRequest, UpdatePasswordRequest,
 };
 use serde_json::Value;
 use sqlx::{PgPool, postgres::PgPoolOptions};
@@ -21,7 +22,7 @@ use crate::{
     error::StorageError,
     managed_databases,
     options::StorageOptions,
-    sql_audits,
+    settings, sql_audits,
     traits::{CreateSqlAuditRecord, LiquidStore},
 };
 
@@ -285,8 +286,46 @@ impl LiquidStore for Storage {
         auth::authenticate_token(self, token).await
     }
 
+    async fn update_current_user(
+        &self,
+        owner_user_id: &str,
+        request: UpdateCurrentUserRequest,
+    ) -> Result<PublicUser, StorageError> {
+        auth::update_current_user(self, owner_user_id, request).await
+    }
+
+    async fn update_password(
+        &self,
+        owner_user_id: &str,
+        request: UpdatePasswordRequest,
+    ) -> Result<(), StorageError> {
+        auth::update_password(self, owner_user_id, request).await
+    }
+
     async fn revoke_token(&self, token: &str) -> Result<(), StorageError> {
         auth::revoke_token(self, token).await
+    }
+
+    async fn get_llm_provider_settings(
+        &self,
+        owner_user_id: &str,
+    ) -> Result<Option<LlmProviderSettings>, StorageError> {
+        settings::get_llm_provider_settings(self, owner_user_id).await
+    }
+
+    async fn upsert_llm_provider_settings(
+        &self,
+        owner_user_id: &str,
+        request: UpdateLlmProviderSettingsRequest,
+    ) -> Result<LlmProviderSettings, StorageError> {
+        settings::upsert_llm_provider_settings(self, owner_user_id, request).await
+    }
+
+    async fn resolve_llm_provider_settings(
+        &self,
+        owner_user_id: &str,
+    ) -> Result<Option<ResolvedLlmProviderSettings>, StorageError> {
+        settings::resolve_llm_provider_settings(self, owner_user_id).await
     }
 
     async fn list_managed_databases(
@@ -446,6 +485,14 @@ impl LiquidStore for Storage {
         request: UpdateAgentConversationRequest,
     ) -> Result<AgentConversation, StorageError> {
         agent_workbench::update_agent_conversation(self, owner_user_id, id, request).await
+    }
+
+    async fn delete_agent_conversation(
+        &self,
+        owner_user_id: &str,
+        id: &str,
+    ) -> Result<(), StorageError> {
+        agent_workbench::delete_agent_conversation(self, owner_user_id, id).await
     }
 
     async fn list_agent_messages(

@@ -165,6 +165,31 @@ pub(crate) async fn update_agent_conversation(
     row.ok_or(StorageError::NotFound)?.try_into()
 }
 
+pub(crate) async fn delete_agent_conversation(
+    storage: &Storage,
+    owner_user_id: &str,
+    id: &str,
+) -> Result<(), StorageError> {
+    let result = sqlx::query(
+        r#"
+        delete from agent_conversations
+        where id = $1::uuid
+          and owner_user_id = $2::uuid
+        "#,
+    )
+    .bind(id)
+    .bind(owner_user_id)
+    .execute(&storage.pool)
+    .await
+    .map_err(map_database_error)?;
+
+    if result.rows_affected() == 0 {
+        return Err(StorageError::NotFound);
+    }
+
+    Ok(())
+}
+
 pub(crate) async fn list_agent_messages(
     storage: &Storage,
     owner_user_id: &str,

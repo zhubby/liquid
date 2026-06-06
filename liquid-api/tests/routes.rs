@@ -26,12 +26,14 @@ use liquid_core::{
     AgentMessage, AgentMessageRole, AgentResourceKind, AgentTurn, AgentTurnStatus,
     ApproveSqlAuditRequest, AuditSummary, AuthResponse, CreateAgentActionRequest,
     CreateAgentConversationRequest, CreateAgentTurnRequest, CreateManagedDatabaseRequest,
-    LoginRequest, ManagedDatabase, ManagedDatabaseConnectionLoader,
-    ManagedDatabaseConnectionLoaderError, ManagedDatabaseConnectionSpec, ManagedDatabaseEngine,
-    ManagedDatabasePoolKey, ManagedDatabasePoolPolicy, ManagedDatabaseSslMode, PublicUser,
-    RegisterRequest, RejectSqlAuditRequest, SqlAuditExecutionResult, SqlAuditRecord,
+    LlmProviderApiMode, LlmProviderKind, LlmProviderSettings, LoginRequest, ManagedDatabase,
+    ManagedDatabaseConnectionLoader, ManagedDatabaseConnectionLoaderError,
+    ManagedDatabaseConnectionSpec, ManagedDatabaseEngine, ManagedDatabasePoolKey,
+    ManagedDatabasePoolPolicy, ManagedDatabaseSslMode, PublicUser, RegisterRequest,
+    RejectSqlAuditRequest, ResolvedLlmProviderSettings, SqlAuditExecutionResult, SqlAuditRecord,
     SqlAuditReport, SqlAuditRequest, SqlAuditStatus, UpdateAgentConversationRequest,
-    UpdateManagedDatabaseRequest,
+    UpdateCurrentUserRequest, UpdateLlmProviderSettingsRequest, UpdateManagedDatabaseRequest,
+    UpdatePasswordRequest,
 };
 use liquid_sql::{PgSqlAnalysisRequest, PgSqlStatementKind, analyze_postgres_sql};
 use liquid_storage::{
@@ -43,11 +45,14 @@ use sqlx::{
     PgPool,
     postgres::{PgConnectOptions, PgPoolOptions},
 };
+use tokio::{
+    io::{AsyncReadExt, AsyncWriteExt},
+    net::TcpListener,
+};
 use tower::ServiceExt;
 
 const VALID_TOKEN: &str = "valid-token";
 
-#[derive(Default)]
 struct TestStore {
     revoked: Mutex<bool>,
     databases: Mutex<Vec<ManagedDatabase>>,
@@ -58,6 +63,26 @@ struct TestStore {
     turns: Mutex<Vec<AgentTurn>>,
     events: Mutex<Vec<AgentEventRecord>>,
     actions: Mutex<Vec<AgentAction>>,
+    user: Mutex<PublicUser>,
+    llm_settings: Mutex<Option<ResolvedLlmProviderSettings>>,
+}
+
+impl Default for TestStore {
+    fn default() -> Self {
+        Self {
+            revoked: Mutex::new(false),
+            databases: Mutex::new(Vec::new()),
+            current_database_id: Mutex::new(None),
+            audits: Mutex::new(Vec::new()),
+            conversations: Mutex::new(Vec::new()),
+            messages: Mutex::new(Vec::new()),
+            turns: Mutex::new(Vec::new()),
+            events: Mutex::new(Vec::new()),
+            actions: Mutex::new(Vec::new()),
+            user: Mutex::new(test_user()),
+            llm_settings: Mutex::new(None),
+        }
+    }
 }
 
 #[async_trait]
@@ -79,10 +104,44 @@ impl LiquidStore for TestStore {
 
     async fn authenticate_token(&self, token: &str) -> Result<Option<PublicUser>, StorageError> {
         if token == VALID_TOKEN && !*self.revoked.lock().unwrap() {
-            Ok(Some(test_user()))
+            Ok(Some(self.user.lock().unwrap().clone()))
         } else {
             Ok(None)
         }
+    }
+
+    async fn update_current_user(
+        &self,
+        _owner_user_id: &str,
+        request: UpdateCurrentUserRequest,
+    ) -> Result<PublicUser, StorageError> {
+        if request.display_name.trim().is_empty() {
+            return Err(StorageError::Validation(
+                "display_name is required".to_owned(),
+            ));
+        }
+
+        let mut user = self.user.lock().unwrap();
+        user.display_name = request.display_name.trim().to_owned();
+
+        Ok(user.clone())
+    }
+
+    async fn update_password(
+        &self,
+        _owner_user_id: &str,
+        request: UpdatePasswordRequest,
+    ) -> Result<(), StorageError> {
+        if request.current_password != "password123" {
+            return Err(StorageError::InvalidCredentials);
+        }
+        if request.new_password.len() < 8 {
+            return Err(StorageError::Validation(
+                "password must be at least 8 characters".to_owned(),
+            ));
+        }
+
+        Ok(())
     }
 
     async fn revoke_token(&self, token: &str) -> Result<(), StorageError> {
@@ -91,6 +150,55 @@ impl LiquidStore for TestStore {
         }
 
         Ok(())
+    }
+
+    async fn get_llm_provider_settings(
+        &self,
+        _owner_user_id: &str,
+    ) -> Result<Option<LlmProviderSettings>, StorageError> {
+        Ok(self
+            .llm_settings
+            .lock()
+            .unwrap()
+            .as_ref()
+            .map(public_llm_settings))
+    }
+
+    async fn upsert_llm_provider_settings(
+        &self,
+        _owner_user_id: &str,
+        request: UpdateLlmProviderSettingsRequest,
+    ) -> Result<LlmProviderSettings, StorageError> {
+        let mut settings = self.llm_settings.lock().unwrap();
+        let api_key = request
+            .api_key
+            .as_deref()
+            .map(str::trim)
+            .filter(|value| !value.is_empty())
+            .map(str::to_owned)
+            .or_else(|| {
+                settings
+                    .as_ref()
+                    .and_then(|settings| settings.api_key.clone())
+            });
+        let resolved = ResolvedLlmProviderSettings {
+            provider: request.provider,
+            base_url: request.base_url,
+            model: request.model,
+            api_mode: request.api_mode,
+            api_key,
+        };
+        let public = public_llm_settings(&resolved);
+        *settings = Some(resolved);
+
+        Ok(public)
+    }
+
+    async fn resolve_llm_provider_settings(
+        &self,
+        _owner_user_id: &str,
+    ) -> Result<Option<ResolvedLlmProviderSettings>, StorageError> {
+        Ok(self.llm_settings.lock().unwrap().clone())
     }
 
     async fn list_managed_databases(
@@ -500,6 +608,25 @@ impl LiquidStore for TestStore {
         }
 
         Ok(conversation.clone())
+    }
+
+    async fn delete_agent_conversation(
+        &self,
+        owner_user_id: &str,
+        id: &str,
+    ) -> Result<(), StorageError> {
+        let mut conversations = self.conversations.lock().unwrap();
+        let before = conversations.len();
+
+        conversations.retain(|conversation| {
+            !(conversation.id == id && conversation.owner_user_id == owner_user_id)
+        });
+
+        if conversations.len() == before {
+            return Err(StorageError::NotFound);
+        }
+
+        Ok(())
     }
 
     async fn list_agent_messages(
@@ -938,6 +1065,45 @@ impl ManagedDatabaseConnectionTester for FakeManagedDatabaseConnectionTester {
     }
 }
 
+async fn spawn_openai_compatible_mock() -> (String, Arc<Mutex<Option<Value>>>) {
+    let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let addr = listener.local_addr().unwrap();
+    let captured_body = Arc::new(Mutex::new(None));
+    let captured_for_task = captured_body.clone();
+
+    tokio::spawn(async move {
+        let Ok((mut socket, _addr)) = listener.accept().await else {
+            return;
+        };
+        let mut buffer = vec![0; 16 * 1024];
+        let Ok(read) = socket.read(&mut buffer).await else {
+            return;
+        };
+        let request = String::from_utf8_lossy(&buffer[..read]);
+        if let Some((_, body)) = request.split_once("\r\n\r\n") {
+            if let Ok(json) = serde_json::from_str::<Value>(body) {
+                *captured_for_task.lock().unwrap() = Some(json);
+            }
+        }
+        let body = json!({
+            "choices": [{
+                "message": {
+                    "content": "{\"summary\":\"User configured model\",\"risk_score\":7,\"findings\":[]}"
+                }
+            }]
+        })
+        .to_string();
+        let response = format!(
+            "HTTP/1.1 200 OK\r\ncontent-type: application/json\r\ncontent-length: {}\r\n\r\n{}",
+            body.len(),
+            body
+        );
+        let _ = socket.write_all(response.as_bytes()).await;
+    });
+
+    (format!("http://{addr}"), captured_body)
+}
+
 fn test_app() -> Router {
     test_app_with_agent(Arc::new(MockSqlAuditAgent))
 }
@@ -1023,6 +1189,16 @@ fn test_user() -> PublicUser {
         id: "user-1".to_owned(),
         email: "user@test.local".to_owned(),
         display_name: "Test User".to_owned(),
+    }
+}
+
+fn public_llm_settings(settings: &ResolvedLlmProviderSettings) -> LlmProviderSettings {
+    LlmProviderSettings {
+        provider: settings.provider,
+        base_url: settings.base_url.clone(),
+        model: settings.model.clone(),
+        api_mode: settings.api_mode,
+        has_api_key: settings.api_key.is_some(),
     }
 }
 
@@ -1195,6 +1371,107 @@ async fn me_returns_current_user_for_valid_token() {
 }
 
 #[tokio::test]
+async fn update_me_changes_display_name() {
+    let app = test_app();
+    let response = app
+        .clone()
+        .oneshot(auth_json_request(
+            "PATCH",
+            "/api/v1/auth/me",
+            json!({ "display_name": "Renamed User" }),
+        ))
+        .await
+        .unwrap();
+
+    assert_eq!(response.status(), StatusCode::OK);
+    let payload = response_json(response).await;
+    assert_eq!(payload["user"]["display_name"], "Renamed User");
+
+    let response = app.oneshot(auth_request("/api/v1/auth/me")).await.unwrap();
+    let payload = response_json(response).await;
+    assert_eq!(payload["user"]["display_name"], "Renamed User");
+}
+
+#[tokio::test]
+async fn update_password_rejects_wrong_current_password() {
+    let response = test_app()
+        .oneshot(auth_json_request(
+            "PATCH",
+            "/api/v1/auth/password",
+            json!({
+                "current_password": "wrong-password",
+                "new_password": "new-password123"
+            }),
+        ))
+        .await
+        .unwrap();
+
+    assert_eq!(response.status(), StatusCode::UNAUTHORIZED);
+}
+
+#[tokio::test]
+async fn update_password_accepts_current_password() {
+    let response = test_app()
+        .oneshot(auth_json_request(
+            "PATCH",
+            "/api/v1/auth/password",
+            json!({
+                "current_password": "password123",
+                "new_password": "new-password123"
+            }),
+        ))
+        .await
+        .unwrap();
+
+    assert_eq!(response.status(), StatusCode::NO_CONTENT);
+}
+
+#[tokio::test]
+async fn llm_provider_settings_round_trip_without_api_key_echo() {
+    let app = test_app();
+    let response = app
+        .clone()
+        .oneshot(auth_request("/api/v1/settings/llm-provider"))
+        .await
+        .unwrap();
+
+    assert_eq!(response.status(), StatusCode::OK);
+    let payload = response_json(response).await;
+    assert!(payload["settings"].is_null());
+
+    let response = app
+        .clone()
+        .oneshot(auth_json_request(
+            "PUT",
+            "/api/v1/settings/llm-provider",
+            json!({
+                "provider": "openai_compatible",
+                "base_url": "https://api.openai.com",
+                "model": "gpt-4.1",
+                "api_mode": "chat_completions",
+                "api_key": "sk-test"
+            }),
+        ))
+        .await
+        .unwrap();
+
+    assert_eq!(response.status(), StatusCode::OK);
+    let payload = response_json(response).await;
+    assert_eq!(payload["settings"]["provider"], "openai_compatible");
+    assert_eq!(payload["settings"]["model"], "gpt-4.1");
+    assert_eq!(payload["settings"]["has_api_key"], true);
+    assert!(payload["settings"].get("api_key").is_none());
+
+    let response = app
+        .oneshot(auth_request("/api/v1/settings/llm-provider"))
+        .await
+        .unwrap();
+    let payload = response_json(response).await;
+    assert_eq!(payload["settings"]["has_api_key"], true);
+    assert!(payload["settings"].get("api_key").is_none());
+}
+
+#[tokio::test]
 async fn logout_revokes_token() {
     let app = test_app();
     let response = app
@@ -1256,6 +1533,43 @@ async fn agent_conversations_require_authentication() {
         .unwrap();
 
     assert_eq!(response.status(), StatusCode::UNAUTHORIZED);
+}
+
+#[tokio::test]
+async fn agent_conversation_can_be_deleted() {
+    let app = test_app();
+    let create_response = app
+        .clone()
+        .oneshot(auth_json_request(
+            "POST",
+            "/api/v1/agent/conversations",
+            json!({ "title": "Disposable workspace" }),
+        ))
+        .await
+        .unwrap();
+    assert_eq!(create_response.status(), StatusCode::OK);
+
+    let delete_response = app
+        .clone()
+        .oneshot(
+            Request::builder()
+                .method("DELETE")
+                .uri("/api/v1/agent/conversations/conversation-1")
+                .header(AUTHORIZATION, format!("Bearer {VALID_TOKEN}"))
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(delete_response.status(), StatusCode::NO_CONTENT);
+
+    let list_response = app
+        .oneshot(auth_request("/api/v1/agent/conversations"))
+        .await
+        .unwrap();
+    assert_eq!(list_response.status(), StatusCode::OK);
+    let conversations = response_json(list_response).await;
+    assert_eq!(conversations.as_array().unwrap().len(), 0);
 }
 
 #[tokio::test]
@@ -1791,6 +2105,51 @@ async fn sql_audit_persistence_creates_audited_select_record() {
     assert_eq!(list_response.status(), StatusCode::OK);
     let payload = response_json(list_response).await;
     assert_eq!(payload.as_array().unwrap().len(), 1);
+}
+
+#[tokio::test]
+async fn sql_audit_uses_user_llm_provider_settings_when_configured() {
+    let app = test_app();
+    create_test_database(&app).await;
+    let (base_url, captured_body) = spawn_openai_compatible_mock().await;
+
+    let settings_response = app
+        .clone()
+        .oneshot(auth_json_request(
+            "PUT",
+            "/api/v1/settings/llm-provider",
+            json!({
+                "provider": "openai_compatible",
+                "base_url": base_url,
+                "model": "user-model",
+                "api_mode": "chat_completions",
+                "api_key": "sk-user"
+            }),
+        ))
+        .await
+        .unwrap();
+    assert_eq!(settings_response.status(), StatusCode::OK);
+
+    let response = app
+        .clone()
+        .oneshot(auth_json_request(
+            "POST",
+            "/api/v1/managed-databases/db-1/sql-audits",
+            json!({
+                "sql": "select * from users",
+                "context": "user configured model"
+            }),
+        ))
+        .await
+        .unwrap();
+
+    assert_eq!(response.status(), StatusCode::CREATED);
+    let payload = response_json(response).await;
+    assert_eq!(payload["report"]["summary"], "User configured model");
+    assert_eq!(payload["report"]["risk_score"], 7);
+
+    let captured = captured_body.lock().unwrap().clone().unwrap();
+    assert_eq!(captured["model"], "user-model");
 }
 
 #[tokio::test]

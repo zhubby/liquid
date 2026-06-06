@@ -35,6 +35,10 @@ export type { DatabaseBackupRecord } from "./generated/api-types/DatabaseBackupR
 export type { DatabaseBackupStatus } from "./generated/api-types/DatabaseBackupStatus";
 export type { DatabaseRestoreRecord } from "./generated/api-types/DatabaseRestoreRecord";
 export type { LoginRequest } from "./generated/api-types/LoginRequest";
+export type { LlmProviderApiMode } from "./generated/api-types/LlmProviderApiMode";
+export type { LlmProviderKind } from "./generated/api-types/LlmProviderKind";
+export type { LlmProviderSettings } from "./generated/api-types/LlmProviderSettings";
+export type { LlmProviderSettingsResponse } from "./generated/api-types/LlmProviderSettingsResponse";
 export type { ManagedDatabase } from "./generated/api-types/ManagedDatabase";
 export type { ManagedDatabaseConnectionTestResponse } from "./generated/api-types/ManagedDatabaseConnectionTestResponse";
 export type { ManagedDatabaseEngine } from "./generated/api-types/ManagedDatabaseEngine";
@@ -54,7 +58,10 @@ export type { SqlAuditRequest } from "./generated/api-types/SqlAuditRequest";
 export type { SqlAuditStatus } from "./generated/api-types/SqlAuditStatus";
 export type { SqlStatementKind } from "./generated/api-types/SqlStatementKind";
 export type { UpdateAgentConversationRequest } from "./generated/api-types/UpdateAgentConversationRequest";
+export type { UpdateCurrentUserRequest } from "./generated/api-types/UpdateCurrentUserRequest";
+export type { UpdateLlmProviderSettingsRequest } from "./generated/api-types/UpdateLlmProviderSettingsRequest";
 export type { UpdateManagedDatabaseRequest } from "./generated/api-types/UpdateManagedDatabaseRequest";
+export type { UpdatePasswordRequest } from "./generated/api-types/UpdatePasswordRequest";
 
 export class ApiError extends Error {
   status: number;

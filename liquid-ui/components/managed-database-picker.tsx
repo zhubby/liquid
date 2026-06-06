@@ -1,7 +1,15 @@
 "use client";
 
-import { type FormEvent, useCallback, useEffect, useMemo, useState } from "react";
 import {
+  type FormEvent,
+  useCallback,
+  useEffect,
+  useMemo,
+  useRef,
+  useState,
+} from "react";
+import {
+  ChevronDown,
   CircleAlert,
   CircleCheck,
   Database,
@@ -13,12 +21,14 @@ import {
   Plus,
   Save,
   Search,
+  Settings,
   ShieldCheck,
   Trash2,
   X,
 } from "lucide-react";
 import { toast } from "sonner";
 
+import { AccountSettingsDialog } from "@/components/account-settings-dialog";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import {
@@ -44,6 +54,7 @@ type ManagedDatabasePickerProps = {
   user: PublicUser;
   onDatabaseSelected: (database: ManagedDatabase) => void;
   onLogout: () => void;
+  onUserUpdated: (user: PublicUser) => void;
 };
 
 type ManagedDatabaseForm = {
@@ -76,6 +87,7 @@ export function ManagedDatabasePicker({
   user,
   onDatabaseSelected,
   onLogout,
+  onUserUpdated,
 }: ManagedDatabasePickerProps) {
   const [databases, setDatabases] = useState<ManagedDatabase[]>([]);
   const [query, setQuery] = useState("");
@@ -90,6 +102,9 @@ export function ManagedDatabasePicker({
   const [enteringId, setEnteringId] = useState<string | null>(null);
   const [deletingId, setDeletingId] = useState<string | null>(null);
   const [formError, setFormError] = useState<string | null>(null);
+  const [isAccountMenuOpen, setIsAccountMenuOpen] = useState(false);
+  const [isSettingsOpen, setIsSettingsOpen] = useState(false);
+  const accountMenuRef = useRef<HTMLDivElement | null>(null);
   const [testResults, setTestResults] = useState<
     Record<string, ConnectionTestState>
   >({});
@@ -114,6 +129,32 @@ export function ManagedDatabasePicker({
     void loadDatabases();
   }, [loadDatabases]);
 
+  useEffect(() => {
+    if (!isAccountMenuOpen) {
+      return;
+    }
+
+    const handlePointerDown = (event: PointerEvent) => {
+      if (!accountMenuRef.current?.contains(event.target as Node)) {
+        setIsAccountMenuOpen(false);
+      }
+    };
+
+    const handleKeyDown = (event: KeyboardEvent) => {
+      if (event.key === "Escape") {
+        setIsAccountMenuOpen(false);
+      }
+    };
+
+    document.addEventListener("pointerdown", handlePointerDown);
+    document.addEventListener("keydown", handleKeyDown);
+
+    return () => {
+      document.removeEventListener("pointerdown", handlePointerDown);
+      document.removeEventListener("keydown", handleKeyDown);
+    };
+  }, [isAccountMenuOpen]);
+
   const filteredDatabases = useMemo(() => {
     const term = query.trim().toLowerCase();
 
@@ -135,6 +176,15 @@ export function ManagedDatabasePicker({
     );
   }, [databases, query]);
 
+  const userInitials =
+    user.display_name
+      .split(/\s+/)
+      .filter(Boolean)
+      .slice(0, 2)
+      .map((part) => part[0])
+      .join("")
+      .toUpperCase() || user.email.slice(0, 1).toUpperCase();
+
   const resetForm = () => {
     setForm(emptyManagedDatabaseForm);
     setEditingId(null);
@@ -150,6 +200,16 @@ export function ManagedDatabasePicker({
     setIsFormOpen(false);
     setFormError(null);
     resetForm();
+  };
+
+  const openSettings = () => {
+    setIsAccountMenuOpen(false);
+    setIsSettingsOpen(true);
+  };
+
+  const handleLogout = () => {
+    setIsAccountMenuOpen(false);
+    onLogout();
   };
 
   const handleSubmit = async (event: FormEvent<HTMLFormElement>) => {
@@ -335,29 +395,94 @@ export function ManagedDatabasePicker({
   return (
     <main className="min-h-screen bg-muted/30 p-3 text-foreground">
       <div className="mx-auto flex min-h-[calc(100vh-1.5rem)] w-full max-w-5xl flex-col gap-3">
-        <Card className="rounded-lg py-4 shadow-xs">
-          <CardContent className="flex flex-col gap-3 px-4 sm:flex-row sm:items-center sm:justify-between">
-            <div className="flex min-w-0 items-center gap-3">
-              <div className="flex size-10 shrink-0 items-center justify-center rounded-md bg-primary text-primary-foreground">
+        <Card className="overflow-visible rounded-xl py-0 shadow-xs">
+          <CardContent className="flex flex-col gap-4 px-4 py-4 sm:flex-row sm:items-center sm:justify-between sm:px-5">
+            <div className="flex min-w-0 items-center gap-3.5">
+              <div className="flex size-11 shrink-0 items-center justify-center rounded-lg bg-primary text-primary-foreground shadow-sm ring-1 ring-primary/10">
                 <ShieldCheck className="size-5" aria-hidden />
               </div>
               <div className="min-w-0">
-                <h1 className="truncate text-base font-semibold">
-                  选择托管数据库
-                </h1>
+                <div className="flex min-w-0 items-center gap-2">
+                  <h1 className="truncate text-lg font-semibold">
+                    工作区概览
+                  </h1>
+                  <Badge
+                    variant="secondary"
+                    className="hidden rounded-md px-2 py-0.5 sm:inline-flex"
+                  >
+                    当前账户
+                  </Badge>
+                </div>
                 <p className="mt-1 truncate text-xs text-muted-foreground">
                   Liquid SQL Audit / {user.display_name}
                 </p>
               </div>
             </div>
-            <div className="flex flex-wrap items-center gap-2">
-              <Badge variant="secondary" className="rounded-md">
-                {user.email}
-              </Badge>
-              <Button type="button" variant="outline" size="sm" onClick={onLogout}>
-                <LogOut className="size-4" aria-hidden />
-                注销
-              </Button>
+            <div className="relative flex justify-end sm:block" ref={accountMenuRef}>
+              <button
+                type="button"
+                className={cn(
+                  "group flex min-w-0 items-center gap-3 rounded-lg border bg-background px-2.5 py-2 text-left shadow-xs outline-none transition-all hover:border-foreground/20 hover:bg-accent/70 focus-visible:border-ring focus-visible:ring-[3px] focus-visible:ring-ring/50",
+                  isAccountMenuOpen && "border-foreground/20 bg-accent/70",
+                )}
+                aria-haspopup="menu"
+                aria-expanded={isAccountMenuOpen}
+                aria-label={`${user.display_name} 账户菜单`}
+                onClick={() => setIsAccountMenuOpen((isOpen) => !isOpen)}
+              >
+                <span className="max-w-36 truncate text-sm font-medium text-foreground">
+                  {user.display_name}
+                </span>
+                <span className="flex size-8 shrink-0 items-center justify-center rounded-full bg-primary text-xs font-semibold text-primary-foreground shadow-sm">
+                  {userInitials}
+                </span>
+                <ChevronDown
+                  className={cn(
+                    "size-4 text-muted-foreground transition-transform group-hover:text-foreground",
+                    isAccountMenuOpen && "rotate-180",
+                  )}
+                  aria-hidden
+                />
+              </button>
+              {isAccountMenuOpen ? (
+                <div
+                  className="absolute right-0 top-[calc(100%+0.5rem)] z-20 w-64 overflow-hidden rounded-xl border bg-popover p-2 text-popover-foreground shadow-lg"
+                  role="menu"
+                >
+                  <div className="flex items-center gap-3 rounded-lg bg-muted/60 p-2.5">
+                    <span className="flex size-9 shrink-0 items-center justify-center rounded-full bg-primary text-xs font-semibold text-primary-foreground">
+                      {userInitials}
+                    </span>
+                    <div className="min-w-0">
+                      <div className="truncate text-sm font-semibold">
+                        {user.display_name}
+                      </div>
+                      <div className="truncate text-xs text-muted-foreground">
+                        {user.email}
+                      </div>
+                    </div>
+                  </div>
+                  <div className="my-1.5 h-px bg-border" />
+                  <button
+                    type="button"
+                    className="flex w-full items-center gap-2.5 rounded-lg px-2.5 py-2 text-left text-sm outline-none transition-colors hover:bg-accent hover:text-accent-foreground focus-visible:bg-accent focus-visible:text-accent-foreground"
+                    role="menuitem"
+                    onClick={openSettings}
+                  >
+                    <Settings className="size-4" aria-hidden />
+                    设置
+                  </button>
+                  <button
+                    type="button"
+                    className="flex w-full items-center gap-2.5 rounded-lg px-2.5 py-2 text-left text-sm text-destructive outline-none transition-colors hover:bg-destructive/10 focus-visible:bg-destructive/10"
+                    role="menuitem"
+                    onClick={handleLogout}
+                  >
+                    <LogOut className="size-4" aria-hidden />
+                    注销
+                  </button>
+                </div>
+              ) : null}
             </div>
           </CardContent>
         </Card>
@@ -437,6 +562,14 @@ export function ManagedDatabasePicker({
           onClose={closeForm}
           onSubmit={handleSubmit}
           onFormChange={setForm}
+        />
+      ) : null}
+      {isSettingsOpen ? (
+        <AccountSettingsDialog
+          token={token}
+          user={user}
+          onClose={() => setIsSettingsOpen(false)}
+          onUserUpdated={onUserUpdated}
         />
       ) : null}
     </main>

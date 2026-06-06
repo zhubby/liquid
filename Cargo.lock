@@ -1388,6 +1388,7 @@ dependencies = [
  "liquid-agent",
  "liquid-config",
  "liquid-core",
+ "liquid-llm",
  "liquid-sql",
  "liquid-storage",
  "serde",

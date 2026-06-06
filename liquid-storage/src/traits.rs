@@ -3,10 +3,12 @@ use liquid_core::{
     AgentAction, AgentActionStatus, AgentConversation, AgentEventRecord, AgentEventType,
     AgentMessage, AgentMessageRole, AgentResourceKind, AgentTurn, AgentTurnStatus,
     ApproveSqlAuditRequest, AuthResponse, CreateAgentActionRequest, CreateAgentConversationRequest,
-    CreateAgentTurnRequest, CreateManagedDatabaseRequest, CreateSqlAuditRequest, LoginRequest,
-    ManagedDatabase, PublicUser, RegisterRequest, RejectSqlAuditRequest, SqlAuditExecutionResult,
-    SqlAuditRecord, SqlAuditReport, SqlAuditStatus, SqlStatementKind,
-    UpdateAgentConversationRequest, UpdateManagedDatabaseRequest,
+    CreateAgentTurnRequest, CreateManagedDatabaseRequest, CreateSqlAuditRequest,
+    LlmProviderSettings, LoginRequest, ManagedDatabase, PublicUser, RegisterRequest,
+    RejectSqlAuditRequest, ResolvedLlmProviderSettings, SqlAuditExecutionResult, SqlAuditRecord,
+    SqlAuditReport, SqlAuditStatus, SqlStatementKind, UpdateAgentConversationRequest,
+    UpdateCurrentUserRequest, UpdateLlmProviderSettingsRequest, UpdateManagedDatabaseRequest,
+    UpdatePasswordRequest,
 };
 use serde_json::Value;
 
@@ -26,7 +28,30 @@ pub trait LiquidStore: Send + Sync {
     async fn register_user(&self, request: RegisterRequest) -> Result<AuthResponse, StorageError>;
     async fn login_user(&self, request: LoginRequest) -> Result<AuthResponse, StorageError>;
     async fn authenticate_token(&self, token: &str) -> Result<Option<PublicUser>, StorageError>;
+    async fn update_current_user(
+        &self,
+        owner_user_id: &str,
+        request: UpdateCurrentUserRequest,
+    ) -> Result<PublicUser, StorageError>;
+    async fn update_password(
+        &self,
+        owner_user_id: &str,
+        request: UpdatePasswordRequest,
+    ) -> Result<(), StorageError>;
     async fn revoke_token(&self, token: &str) -> Result<(), StorageError>;
+    async fn get_llm_provider_settings(
+        &self,
+        owner_user_id: &str,
+    ) -> Result<Option<LlmProviderSettings>, StorageError>;
+    async fn upsert_llm_provider_settings(
+        &self,
+        owner_user_id: &str,
+        request: UpdateLlmProviderSettingsRequest,
+    ) -> Result<LlmProviderSettings, StorageError>;
+    async fn resolve_llm_provider_settings(
+        &self,
+        owner_user_id: &str,
+    ) -> Result<Option<ResolvedLlmProviderSettings>, StorageError>;
     async fn list_managed_databases(
         &self,
         owner_user_id: &str,
@@ -126,6 +151,11 @@ pub trait LiquidStore: Send + Sync {
         id: &str,
         request: UpdateAgentConversationRequest,
     ) -> Result<AgentConversation, StorageError>;
+    async fn delete_agent_conversation(
+        &self,
+        owner_user_id: &str,
+        id: &str,
+    ) -> Result<(), StorageError>;
     async fn list_agent_messages(
         &self,
         owner_user_id: &str,

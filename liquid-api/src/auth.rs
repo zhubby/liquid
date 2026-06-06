@@ -4,7 +4,10 @@ use axum::{
     http::{HeaderMap, StatusCode, header::AUTHORIZATION},
     routing::{get, post},
 };
-use liquid_core::{AuthResponse, CurrentUserResponse, LoginRequest, PublicUser, RegisterRequest};
+use liquid_core::{
+    AuthResponse, CurrentUserResponse, LoginRequest, PublicUser, RegisterRequest,
+    UpdateCurrentUserRequest, UpdatePasswordRequest,
+};
 use liquid_storage::current_user_response;
 
 use crate::{error::ApiError, state::ApiState};
@@ -14,7 +17,11 @@ pub(crate) fn routes() -> Router<ApiState> {
         .route("/api/v1/auth/register", post(register))
         .route("/api/v1/auth/login", post(login))
         .route("/api/v1/auth/logout", post(logout))
-        .route("/api/v1/auth/me", get(me))
+        .route("/api/v1/auth/me", get(me).patch(update_me))
+        .route(
+            "/api/v1/auth/password",
+            axum::routing::patch(update_password),
+        )
 }
 
 async fn register(
@@ -49,6 +56,28 @@ async fn me(
     let user = authenticated_user(&state, &headers).await?;
 
     Ok(Json(current_user_response(user)))
+}
+
+async fn update_me(
+    State(state): State<ApiState>,
+    headers: HeaderMap,
+    Json(request): Json<UpdateCurrentUserRequest>,
+) -> Result<Json<CurrentUserResponse>, ApiError> {
+    let user = authenticated_user(&state, &headers).await?;
+    let user = state.store.update_current_user(&user.id, request).await?;
+
+    Ok(Json(current_user_response(user)))
+}
+
+async fn update_password(
+    State(state): State<ApiState>,
+    headers: HeaderMap,
+    Json(request): Json<UpdatePasswordRequest>,
+) -> Result<StatusCode, ApiError> {
+    let user = authenticated_user(&state, &headers).await?;
+    state.store.update_password(&user.id, request).await?;
+
+    Ok(StatusCode::NO_CONTENT)
 }
 
 pub(crate) async fn authenticated_user(

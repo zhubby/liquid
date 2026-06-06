@@ -4,6 +4,7 @@ import {
   type CSSProperties,
   type FormEvent,
   type MouseEvent,
+  type MouseEventHandler,
   type PointerEvent,
   type ReactNode,
   useCallback,
@@ -14,7 +15,7 @@ import {
 } from "react";
 import {
   Activity,
-  BarChart3,
+  AlertTriangle,
   Bot,
   CheckCircle2,
   ChevronDown,
@@ -24,12 +25,14 @@ import {
   LogOut,
   MessageSquare,
   PanelsLeftRight,
+  Plus,
   Search,
   Send,
   ShieldCheck,
   Sparkles,
   Table2,
   TrendingUp,
+  Trash2,
   X,
 } from "lucide-react";
 import { toast } from "sonner";
@@ -56,13 +59,13 @@ import {
 } from "@/components/ui/card";
 import {
   type AgentAction,
-  type AgentCapabilitiesResponse,
   type AgentConversation,
   type AgentEvent,
   type AgentMessage,
   type AgentTurn,
   type ManagedDatabase,
   type PublicUser,
+  type UpdateAgentConversationRequest,
   apiRequest,
   apiStream,
 } from "@/lib/api";
@@ -122,6 +125,7 @@ type AuditDashboardProps = {
 const MIN_AI_WIDTH = 320;
 const MIN_BI_WIDTH = 520;
 const DEFAULT_AI_PERCENT = 38;
+const WORKSPACE_TITLE_PREFIX = "AI工作区";
 
 const quickPrompts = [
   "解释风险上升原因",
@@ -241,6 +245,15 @@ const riskColors: Record<RiskLevel, string> = {
   严重: "var(--destructive)",
 };
 
+function newWorkspaceTitle() {
+  const alphabet = "ABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789";
+  const suffix = Array.from({ length: 5 }, () =>
+    alphabet[Math.floor(Math.random() * alphabet.length)],
+  ).join("");
+
+  return `${WORKSPACE_TITLE_PREFIX}-${suffix}`;
+}
+
 export function AuditDashboard({
   token,
   user,
@@ -250,6 +263,12 @@ export function AuditDashboard({
   const workspaceRef = useRef<HTMLDivElement>(null);
   const [aiWidth, setAiWidth] = useState(DEFAULT_AI_PERCENT);
   const [isDragging, setIsDragging] = useState(false);
+  const [conversations, setConversations] = useState<AgentConversation[]>([]);
+  const [activeConversation, setActiveConversation] =
+    useState<AgentConversation | null>(null);
+  const [isWorkspaceLoading, setIsWorkspaceLoading] = useState(true);
+  const [isCreatingWorkspace, setIsCreatingWorkspace] = useState(false);
+  const [isDeletingWorkspace, setIsDeletingWorkspace] = useState(false);
 
   const workspaceStyle = useMemo(
     () =>
@@ -257,6 +276,164 @@ export function AuditDashboard({
         "--ai-pane-width": `${aiWidth}%`,
       }) as CSSProperties,
     [aiWidth],
+  );
+
+  useEffect(() => {
+    let cancelled = false;
+
+    const initializeWorkspaces = async () => {
+      setIsWorkspaceLoading(true);
+
+      try {
+        const existingConversations = await apiRequest<AgentConversation[]>(
+          "/api/v1/agent/conversations",
+          { token },
+        );
+        const initialConversation =
+          existingConversations[0] ??
+          (await apiRequest<AgentConversation>("/api/v1/agent/conversations", {
+            method: "POST",
+            token,
+            body: { title: newWorkspaceTitle() },
+          }));
+
+        if (cancelled) {
+          return;
+        }
+
+        setConversations(
+          existingConversations.length > 0
+            ? existingConversations
+            : [initialConversation],
+        );
+        setActiveConversation(initialConversation);
+      } catch (error) {
+        if (!cancelled) {
+          toast.error(
+            error instanceof Error ? error.message : "加载工作区失败",
+          );
+        }
+      } finally {
+        if (!cancelled) {
+          setIsWorkspaceLoading(false);
+        }
+      }
+    };
+
+    void initializeWorkspaces();
+
+    return () => {
+      cancelled = true;
+    };
+  }, [token]);
+
+  const handleCreateWorkspace = useCallback(async () => {
+    if (isCreatingWorkspace) {
+      return;
+    }
+
+    setIsCreatingWorkspace(true);
+
+    try {
+      const nextConversation = await apiRequest<AgentConversation>(
+        "/api/v1/agent/conversations",
+        {
+          method: "POST",
+          token,
+          body: { title: newWorkspaceTitle() },
+        },
+      );
+
+      setConversations((current) => [
+        nextConversation,
+        ...current.filter(
+          (conversation) => conversation.id !== nextConversation.id,
+        ),
+      ]);
+      setActiveConversation(nextConversation);
+    } catch (error) {
+      toast.error(
+        error instanceof Error ? error.message : "新建工作区失败",
+      );
+    } finally {
+      setIsCreatingWorkspace(false);
+    }
+  }, [isCreatingWorkspace, token]);
+
+  const handleSelectWorkspace = useCallback(
+    (conversation: AgentConversation) => {
+      setActiveConversation(conversation);
+    },
+    [],
+  );
+
+  const handleConversationUpdated = useCallback(
+    (updatedConversation: AgentConversation) => {
+      setConversations((current) =>
+        current.map((conversation) =>
+          conversation.id === updatedConversation.id
+            ? updatedConversation
+            : conversation,
+        ),
+      );
+      setActiveConversation((current) =>
+        current?.id === updatedConversation.id ? updatedConversation : current,
+      );
+    },
+    [],
+  );
+
+  const handleDeleteWorkspace = useCallback(
+    async (conversationId: string) => {
+      if (isDeletingWorkspace) {
+        return;
+      }
+
+      setIsDeletingWorkspace(true);
+
+      try {
+        await apiRequest<void>(
+          `/api/v1/agent/conversations/${conversationId}`,
+          {
+            method: "DELETE",
+            token,
+          },
+        );
+
+        const remainingConversations = conversations.filter(
+          (conversation) => conversation.id !== conversationId,
+        );
+        let nextConversations = remainingConversations;
+        let nextActiveConversation =
+          activeConversation?.id === conversationId
+            ? remainingConversations[0] ?? null
+            : activeConversation;
+
+        if (nextConversations.length === 0) {
+          const replacementConversation = await apiRequest<AgentConversation>(
+            "/api/v1/agent/conversations",
+            {
+              method: "POST",
+              token,
+              body: { title: newWorkspaceTitle() },
+            },
+          );
+
+          nextConversations = [replacementConversation];
+          nextActiveConversation = replacementConversation;
+        }
+
+        setConversations(nextConversations);
+        setActiveConversation(nextActiveConversation);
+      } catch (error) {
+        toast.error(
+          error instanceof Error ? error.message : "删除工作区失败",
+        );
+      } finally {
+        setIsDeletingWorkspace(false);
+      }
+    },
+    [activeConversation, conversations, isDeletingWorkspace, token],
   );
 
   const updatePaneWidth = useCallback((clientX: number) => {
@@ -316,7 +493,16 @@ export function AuditDashboard({
   return (
     <main className="min-h-screen bg-background text-foreground">
       <div className="flex min-h-screen">
-        <IconSidebar user={user} onDatabaseExit={onDatabaseExit} />
+        <IconSidebar
+          user={user}
+          conversations={conversations}
+          activeConversationId={activeConversation?.id ?? null}
+          isCreatingWorkspace={isCreatingWorkspace}
+          isWorkspaceLoading={isWorkspaceLoading}
+          onCreateWorkspace={() => void handleCreateWorkspace()}
+          onSelectWorkspace={handleSelectWorkspace}
+          onDatabaseExit={onDatabaseExit}
+        />
         <section
           ref={workspaceRef}
           className={cn(
@@ -328,24 +514,64 @@ export function AuditDashboard({
           onPointerUp={handleWorkspacePointerUp}
           onPointerLeave={handleWorkspacePointerUp}
         >
-          <AiPanel token={token} selectedDatabase={selectedDatabase} />
-          <SplitHandle
-            isDragging={isDragging}
-            onPointerDown={handleDividerPointerDown}
-            onDoubleClick={handleDividerDoubleClick}
-          />
-          <BiPanel selectedDatabase={selectedDatabase} />
+          {isWorkspaceLoading || !activeConversation ? (
+            <WorkspaceLoadingPanel />
+          ) : (
+            <>
+              <AiPanel
+                key={`ai-${activeConversation.id}`}
+                token={token}
+                selectedDatabase={selectedDatabase}
+                conversation={activeConversation}
+                isDeletingWorkspace={isDeletingWorkspace}
+                onConversationUpdated={handleConversationUpdated}
+                onDeleteConversation={handleDeleteWorkspace}
+              />
+              <SplitHandle
+                isDragging={isDragging}
+                onPointerDown={handleDividerPointerDown}
+                onDoubleClick={handleDividerDoubleClick}
+              />
+              <BiPanel
+                key={`bi-${activeConversation.id}`}
+                selectedDatabase={selectedDatabase}
+              />
+            </>
+          )}
         </section>
       </div>
     </main>
   );
 }
 
+function WorkspaceLoadingPanel() {
+  return (
+    <section className="col-span-full flex min-h-[calc(100vh-1.5rem)] min-w-0 items-center justify-center rounded-lg border bg-card text-card-foreground shadow-sm lg:h-[calc(100vh-1.5rem)]">
+      <div className="flex items-center gap-3 text-sm text-muted-foreground">
+        <Loader2 className="size-4 animate-spin" aria-hidden />
+        正在加载工作区
+      </div>
+    </section>
+  );
+}
+
 function IconSidebar({
   user,
+  conversations,
+  activeConversationId,
+  isCreatingWorkspace,
+  isWorkspaceLoading,
+  onCreateWorkspace,
+  onSelectWorkspace,
   onDatabaseExit,
 }: {
   user: PublicUser;
+  conversations: AgentConversation[];
+  activeConversationId: string | null;
+  isCreatingWorkspace: boolean;
+  isWorkspaceLoading: boolean;
+  onCreateWorkspace: () => void;
+  onSelectWorkspace: (conversation: AgentConversation) => void;
   onDatabaseExit: () => void;
 }) {
   const initials = user.display_name
@@ -367,15 +593,28 @@ function IconSidebar({
           <Sparkles className="size-5" aria-hidden />
         </div>
       </div>
-      <nav className="flex flex-1 flex-col items-center gap-2 py-4">
+      <nav className="flex flex-1 flex-col items-center gap-2 overflow-y-auto py-4">
+        {conversations.map((conversation) => (
+          <SidebarIcon
+            key={conversation.id}
+            icon={<Bot className="size-5" aria-hidden />}
+            label={conversation.title}
+            active={conversation.id === activeConversationId}
+            onClick={() => onSelectWorkspace(conversation)}
+          />
+        ))}
         <SidebarIcon
-          icon={<Bot className="size-5" aria-hidden />}
-          label="AI"
-          active
-        />
-        <SidebarIcon
-          icon={<BarChart3 className="size-5" aria-hidden />}
-          label="BI"
+          icon={
+            isCreatingWorkspace ? (
+              <Loader2 className="size-5 animate-spin" aria-hidden />
+            ) : (
+              <Plus className="size-5" aria-hidden />
+            )
+          }
+          label="新建工作区"
+          active={isCreatingWorkspace}
+          disabled={isWorkspaceLoading || isCreatingWorkspace}
+          onClick={onCreateWorkspace}
         />
       </nav>
       <div className="flex w-full flex-col items-center gap-2 border-t border-sidebar-border py-3">
@@ -406,16 +645,21 @@ function SidebarIcon({
   icon,
   label,
   active = false,
+  disabled = false,
+  onClick,
 }: {
   icon: ReactNode;
   label: string;
   active?: boolean;
+  disabled?: boolean;
+  onClick?: MouseEventHandler<HTMLButtonElement>;
 }) {
   return (
     <Button
       type="button"
       variant="ghost"
       size="icon"
+      disabled={disabled}
       className={cn(
         "size-10 rounded-md text-sidebar-foreground/70 hover:bg-sidebar-accent hover:text-sidebar-accent-foreground",
         active &&
@@ -423,6 +667,7 @@ function SidebarIcon({
       )}
       aria-label={label}
       title={label}
+      onClick={onClick}
     >
       {icon}
     </Button>
@@ -432,20 +677,30 @@ function SidebarIcon({
 function AiPanel({
   token,
   selectedDatabase,
+  conversation,
+  isDeletingWorkspace,
+  onConversationUpdated,
+  onDeleteConversation,
 }: {
   token: string;
   selectedDatabase: ManagedDatabase;
+  conversation: AgentConversation;
+  isDeletingWorkspace: boolean;
+  onConversationUpdated: (conversation: AgentConversation) => void;
+  onDeleteConversation: (conversationId: string) => void | Promise<void>;
 }) {
-  const [conversation, setConversation] =
-    useState<AgentConversation | null>(null);
   const [messages, setMessages] = useState<ChatMessage[]>([]);
   const [actions, setActions] = useState<AgentAction[]>([]);
-  const [agentMode, setAgentMode] = useState("agent");
+  const [titleInput, setTitleInput] = useState(conversation.title);
+  const [isSavingTitle, setIsSavingTitle] = useState(false);
+  const [isDeleteDialogOpen, setIsDeleteDialogOpen] = useState(false);
   const [input, setInput] = useState("");
   const [isLoading, setIsLoading] = useState(true);
   const [isSending, setIsSending] = useState(false);
-  const initializedRef = useRef(false);
   const activeStreamRef = useRef<AbortController | null>(null);
+  const activeConversationIdRef = useRef(conversation.id);
+  const activeSendRef = useRef<string | null>(null);
+  const loadVersionRef = useRef(0);
 
   const loadMessagesAndActions = useCallback(
     async (conversationId: string) => {
@@ -460,56 +715,65 @@ function AiPanel({
         ),
       ]);
 
-      setMessages(nextMessages.map(chatMessageFromAgentMessage));
-      setActions(nextActions);
+      return {
+        actions: nextActions,
+        messages: nextMessages.map(chatMessageFromAgentMessage),
+      };
     },
     [token],
   );
 
-  const initializeWorkbench = useCallback(async () => {
-    setIsLoading(true);
-
-    try {
-      const [conversations, capabilities] = await Promise.all([
-        apiRequest<AgentConversation[]>("/api/v1/agent/conversations", {
-          token,
-        }),
-        apiRequest<AgentCapabilitiesResponse>("/api/v1/agent/capabilities", {
-          token,
-        }),
-      ]);
-      const activeConversation =
-        conversations[0] ??
-        (await apiRequest<AgentConversation>("/api/v1/agent/conversations", {
-          method: "POST",
-          token,
-          body: { title: "Agent workbench" },
-        }));
-
-      setConversation(activeConversation);
-      setAgentMode(capabilities.mode);
-      await loadMessagesAndActions(activeConversation.id);
-    } catch (error) {
-      toast.error(
-        error instanceof Error ? error.message : "加载 agent 工作台失败",
-      );
-    } finally {
-      setIsLoading(false);
-    }
-  }, [loadMessagesAndActions, token]);
+  useEffect(() => {
+    setTitleInput(conversation.title);
+  }, [conversation.id, conversation.title]);
 
   useEffect(() => {
-    if (initializedRef.current) {
-      return;
-    }
+    let cancelled = false;
+    const loadVersion = loadVersionRef.current + 1;
 
-    initializedRef.current = true;
-    void initializeWorkbench();
+    loadVersionRef.current = loadVersion;
+    activeConversationIdRef.current = conversation.id;
+    activeSendRef.current = null;
+    activeStreamRef.current?.abort();
+    activeStreamRef.current = null;
+    setInput("");
+    setIsSending(false);
+    setMessages([]);
+    setActions([]);
+    setIsLoading(true);
+
+    const loadConversationState = async () => {
+      try {
+        const nextState = await loadMessagesAndActions(conversation.id);
+
+        if (cancelled || loadVersionRef.current !== loadVersion) {
+          return;
+        }
+
+        setMessages(nextState.messages);
+        setActions(nextState.actions);
+      } catch (error) {
+        if (!cancelled && loadVersionRef.current === loadVersion) {
+          toast.error(
+            error instanceof Error ? error.message : "加载 agent 工作台失败",
+          );
+        }
+      } finally {
+        if (!cancelled && loadVersionRef.current === loadVersion) {
+          setIsLoading(false);
+        }
+      }
+    };
+
+    void loadConversationState();
 
     return () => {
+      cancelled = true;
+      activeSendRef.current = null;
       activeStreamRef.current?.abort();
+      activeStreamRef.current = null;
     };
-  }, [initializeWorkbench]);
+  }, [conversation.id, loadMessagesAndActions, token]);
 
   const mergeAction = useCallback((action: AgentAction) => {
     setActions((current) => {
@@ -521,14 +785,57 @@ function AiPanel({
     });
   }, []);
 
+  const commitWorkspaceTitle = useCallback(async () => {
+    const title = titleInput.trim();
+
+    if (!title) {
+      setTitleInput(conversation.title);
+      return;
+    }
+
+    if (title === conversation.title || isSavingTitle) {
+      return;
+    }
+
+    setIsSavingTitle(true);
+
+    try {
+      const body: UpdateAgentConversationRequest = { title };
+      const updatedConversation = await apiRequest<AgentConversation>(
+        `/api/v1/agent/conversations/${conversation.id}`,
+        {
+          method: "PATCH",
+          token,
+          body,
+        },
+      );
+
+      setTitleInput(updatedConversation.title);
+      onConversationUpdated(updatedConversation);
+    } catch (error) {
+      setTitleInput(conversation.title);
+      toast.error(error instanceof Error ? error.message : "工作区重命名失败");
+    } finally {
+      setIsSavingTitle(false);
+    }
+  }, [
+    conversation.id,
+    conversation.title,
+    isSavingTitle,
+    onConversationUpdated,
+    titleInput,
+    token,
+  ]);
+
   const submitPrompt = useCallback(
     async (prompt?: string) => {
       const content = (prompt ?? input).trim();
 
-      if (!content || !conversation || isSending) {
+      if (!content || isSending || activeSendRef.current) {
         return;
       }
 
+      const conversationId = conversation.id;
       setInput("");
       setIsSending(true);
       activeStreamRef.current?.abort();
@@ -540,11 +847,14 @@ function AiPanel({
         time: nowTimeLabel(),
         pending: true,
       };
+      const sendKey = `${conversationId}:${localUserMessage.id}`;
+
+      activeSendRef.current = sendKey;
       setMessages((current) => [...current, localUserMessage]);
 
       try {
         const turn = await apiRequest<AgentTurn>(
-          `/api/v1/agent/conversations/${conversation.id}/turns`,
+          `/api/v1/agent/conversations/${conversationId}/turns`,
           {
             method: "POST",
             token,
@@ -568,6 +878,10 @@ function AiPanel({
             token,
             signal: controller.signal,
             onEvent: (event) => {
+              if (activeConversationIdRef.current !== conversationId) {
+                return;
+              }
+
               if (event.type === "assistant_delta") {
                 const assistantContent = eventPayloadString(
                   event.payload,
@@ -596,17 +910,32 @@ function AiPanel({
           },
         );
 
-        await loadMessagesAndActions(conversation.id);
+        const nextState = await loadMessagesAndActions(conversationId);
+
+        if (
+          activeConversationIdRef.current === conversationId &&
+          activeSendRef.current === sendKey
+        ) {
+          setMessages(nextState.messages);
+          setActions(nextState.actions);
+        }
       } catch (error) {
-        if (!(error instanceof DOMException && error.name === "AbortError")) {
+        if (
+          !(error instanceof DOMException && error.name === "AbortError") &&
+          activeConversationIdRef.current === conversationId
+        ) {
           toast.error(error instanceof Error ? error.message : "发送失败");
         }
       } finally {
-        setIsSending(false);
+        if (activeSendRef.current === sendKey) {
+          activeSendRef.current = null;
+          activeStreamRef.current = null;
+          setIsSending(false);
+        }
       }
     },
     [
-      conversation,
+      conversation.id,
       input,
       isSending,
       loadMessagesAndActions,
@@ -657,27 +986,69 @@ function AiPanel({
   return (
     <section className="flex min-h-[calc(100vh-1.5rem)] min-w-0 flex-col rounded-lg border bg-card text-card-foreground shadow-sm lg:h-[calc(100vh-1.5rem)]">
       <header className="flex shrink-0 items-center justify-between gap-3 border-b px-4 py-3">
-        <div className="min-w-0">
-          <div className="flex items-center gap-2">
-            <h1 className="truncate text-base font-semibold">AI 数据助手</h1>
-            <Badge variant="secondary" className="h-6 rounded-md">
-              {agentMode === "write_gated" ? "Write gated" : "Live Agent"}
-            </Badge>
+        <div className="min-w-0 flex-1">
+          <div className="flex min-w-0 items-center gap-2">
+            <label
+              className="sr-only"
+              htmlFor={`workspace-title-${conversation.id}`}
+            >
+              工作区名称
+            </label>
+            <input
+              id={`workspace-title-${conversation.id}`}
+              className="min-w-0 flex-1 truncate rounded-sm bg-transparent text-base font-semibold outline-none transition-colors hover:bg-muted/50 focus-visible:bg-background focus-visible:ring-[3px] focus-visible:ring-ring/50 disabled:opacity-70"
+              value={titleInput}
+              disabled={isSavingTitle}
+              onChange={(event) => setTitleInput(event.target.value)}
+              onBlur={() => void commitWorkspaceTitle()}
+              onKeyDown={(event) => {
+                if (event.key === "Enter") {
+                  event.preventDefault();
+                  event.currentTarget.blur();
+                }
+
+                if (event.key === "Escape") {
+                  setTitleInput(conversation.title);
+                  event.currentTarget.blur();
+                }
+              }}
+            />
           </div>
-          <p className="mt-1 truncate text-xs text-muted-foreground">
-            {selectedDatabase.name} / {selectedDatabase.database}
-          </p>
+          <div className="mt-1 flex min-w-0 items-center gap-1.5 text-xs text-muted-foreground">
+            <Database className="size-3.5 shrink-0" aria-hidden />
+            <span className="truncate">
+              {selectedDatabase.name} / {selectedDatabase.database}
+            </span>
+          </div>
         </div>
         <Button
           type="button"
           variant="outline"
           size="icon"
-          aria-label="打开对话记录"
-          title="对话记录"
+          className="size-9 shrink-0 rounded-md text-destructive hover:bg-destructive/10 hover:text-destructive"
+          aria-label={`删除工作区 ${conversation.title}`}
+          title="删除工作区"
+          disabled={isDeletingWorkspace}
+          onClick={() => setIsDeleteDialogOpen(true)}
         >
-          <MessageSquare className="size-4" aria-hidden />
+          {isDeletingWorkspace ? (
+            <Loader2 className="size-4 animate-spin" aria-hidden />
+          ) : (
+            <Trash2 className="size-4" aria-hidden />
+          )}
         </Button>
       </header>
+
+      {isDeleteDialogOpen ? (
+        <ConfirmDeleteWorkspaceDialog
+          conversationTitle={conversation.title}
+          isDeleting={isDeletingWorkspace}
+          onCancel={() => setIsDeleteDialogOpen(false)}
+          onConfirm={() => {
+            void onDeleteConversation(conversation.id);
+          }}
+        />
+      ) : null}
 
       <div className="flex min-h-0 flex-1 flex-col">
         <div className="flex-1 space-y-4 overflow-y-auto px-4 py-4">
@@ -705,18 +1076,6 @@ function AiPanel({
         </div>
 
         <div className="border-t bg-card px-4 py-3">
-          <div className="mb-3 flex items-center gap-2 rounded-md border bg-background px-3 py-2">
-            <Database className="size-4 shrink-0 text-muted-foreground" aria-hidden />
-            <div className="min-w-0">
-              <div className="truncate text-xs font-medium">
-                {selectedDatabase.name}
-              </div>
-              <div className="mt-0.5 truncate text-xs text-muted-foreground">
-                {selectedDatabase.host}:{selectedDatabase.port} /{" "}
-                {selectedDatabase.database}
-              </div>
-            </div>
-          </div>
           <div className="mb-3 flex flex-wrap gap-2">
             {quickPrompts.map((prompt) => (
               <Button
@@ -764,6 +1123,68 @@ function AiPanel({
         </div>
       </div>
     </section>
+  );
+}
+
+function ConfirmDeleteWorkspaceDialog({
+  conversationTitle,
+  isDeleting,
+  onCancel,
+  onConfirm,
+}: {
+  conversationTitle: string;
+  isDeleting: boolean;
+  onCancel: () => void;
+  onConfirm: () => void;
+}) {
+  return (
+    <div
+      className="fixed inset-0 z-50 flex items-center justify-center bg-background/70 p-4"
+      role="dialog"
+      aria-modal="true"
+      aria-labelledby="delete-workspace-title"
+    >
+      <div className="w-full max-w-sm rounded-lg border bg-card p-4 text-card-foreground shadow-lg">
+        <div className="flex items-start gap-3">
+          <div className="flex size-9 shrink-0 items-center justify-center rounded-md border border-destructive/25 bg-destructive/10 text-destructive">
+            <AlertTriangle className="size-4" aria-hidden />
+          </div>
+          <div className="min-w-0">
+            <h2 id="delete-workspace-title" className="text-sm font-semibold">
+              删除工作区
+            </h2>
+            <p className="mt-1 text-sm leading-6 text-muted-foreground">
+              确认删除「{conversationTitle}」？该工作区的会话内容会一并移除。
+            </p>
+          </div>
+        </div>
+        <div className="mt-4 flex justify-end gap-2">
+          <Button
+            type="button"
+            variant="outline"
+            size="sm"
+            disabled={isDeleting}
+            onClick={onCancel}
+          >
+            取消
+          </Button>
+          <Button
+            type="button"
+            variant="destructive"
+            size="sm"
+            disabled={isDeleting}
+            onClick={onConfirm}
+          >
+            {isDeleting ? (
+              <Loader2 className="size-4 animate-spin" aria-hidden />
+            ) : (
+              <Trash2 className="size-4" aria-hidden />
+            )}
+            删除
+          </Button>
+        </div>
+      </div>
+    </div>
   );
 }
 
