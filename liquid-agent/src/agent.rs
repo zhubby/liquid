@@ -76,9 +76,10 @@ impl ToolCallingSqlAuditAgent {
                 return parse_audit_report(&response.content);
             }
 
-            messages.push(LlmMessage::assistant_with_tool_calls(
-                response.content,
+            messages.push(LlmMessage::assistant_with_response_items(
+                response.content.clone(),
                 response.tool_calls.clone(),
+                response.output_items.clone(),
             ));
 
             for call in &response.tool_calls {
@@ -139,9 +140,10 @@ impl SqlAuditAgent for ToolCallingSqlAuditAgent {
                     return;
                 }
 
-                messages.push(LlmMessage::assistant_with_tool_calls(
-                    response.content,
+                messages.push(LlmMessage::assistant_with_response_items(
+                    response.content.clone(),
                     response.tool_calls.clone(),
+                    response.output_items.clone(),
                 ));
 
                 for call in &response.tool_calls {
@@ -173,7 +175,7 @@ mod tests {
 
     use futures_util::stream;
     use liquid_core::RiskSeverity;
-    use liquid_llm::{LlmEvent, LlmResponse, ToolCall, ToolDefinition};
+    use liquid_llm::{LlmEvent, LlmResponse, MessageRole, ToolCall, ToolDefinition};
     use serde_json::{Value, json};
 
     use crate::{tools::AgentTool, types::ToolOutput};
@@ -235,19 +237,26 @@ mod tests {
 
     struct ScriptedLlm {
         responses: Mutex<VecDeque<LlmResponse>>,
+        requests: Mutex<Vec<LlmRequest>>,
     }
 
     impl ScriptedLlm {
         fn new(responses: Vec<LlmResponse>) -> Self {
             Self {
                 responses: Mutex::new(VecDeque::from(responses)),
+                requests: Mutex::new(Vec::new()),
             }
+        }
+
+        fn requests(&self) -> Vec<LlmRequest> {
+            self.requests.lock().unwrap().clone()
         }
     }
 
     #[async_trait]
     impl LlmClient for ScriptedLlm {
-        async fn complete(&self, _request: LlmRequest) -> Result<LlmResponse> {
+        async fn complete(&self, request: LlmRequest) -> Result<LlmResponse> {
+            self.requests.lock().unwrap().push(request);
             self.responses
                 .lock()
                 .unwrap()
@@ -293,6 +302,58 @@ mod tests {
 
         assert_eq!(report.risk_score, 25);
         assert_eq!(report.findings[0].severity, RiskSeverity::Low);
+    }
+
+    #[tokio::test]
+    async fn audit_agent_replays_responses_output_items_before_tool_results() {
+        let function_call_item = json!({
+            "id": "fc_1",
+            "type": "function_call",
+            "call_id": "call_1",
+            "name": "echo_tool",
+            "arguments": "{\"value\":\"ok\"}"
+        });
+        let llm = Arc::new(ScriptedLlm::new(vec![
+            LlmResponse {
+                id: Some("resp_1".to_owned()),
+                content: String::new(),
+                tool_calls: vec![ToolCall::new("call_1", "echo_tool", r#"{"value":"ok"}"#)],
+                output_items: vec![function_call_item.clone()],
+                raw: json!({}),
+            },
+            LlmResponse::text(
+                r#"{
+                    "summary": "The query is acceptable.",
+                    "risk_score": 10,
+                    "findings": []
+                }"#,
+            ),
+        ]));
+        let mut tools = ToolRegistry::new();
+        tools.register(EchoTool);
+        let agent = ToolCallingSqlAuditAgent::new(llm.clone(), "gpt-test", LlmProtocol::Responses)
+            .with_tools(tools);
+
+        let report = agent
+            .audit_sql(SqlAuditRequest::new("select id from users"))
+            .await
+            .unwrap();
+
+        let requests = llm.requests();
+        assert_eq!(report.risk_score, 10);
+        assert_eq!(requests.len(), 2);
+        let assistant_message = requests[1]
+            .messages
+            .iter()
+            .find(|message| !message.response_items.is_empty())
+            .unwrap();
+        let tool_message = requests[1]
+            .messages
+            .iter()
+            .find(|message| message.role == MessageRole::Tool)
+            .unwrap();
+        assert_eq!(assistant_message.response_items, vec![function_call_item]);
+        assert_eq!(tool_message.tool_call_id.as_deref(), Some("call_1"));
     }
 
     #[tokio::test]

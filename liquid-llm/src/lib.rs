@@ -93,6 +93,8 @@ pub struct LlmMessage {
     pub tool_call_id: Option<String>,
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub tool_calls: Vec<ToolCall>,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub response_items: Vec<Value>,
 }
 
 impl LlmMessage {
@@ -118,6 +120,17 @@ impl LlmMessage {
         }
     }
 
+    pub fn assistant_with_response_items(
+        content: impl Into<String>,
+        tool_calls: Vec<ToolCall>,
+        response_items: Vec<Value>,
+    ) -> Self {
+        Self {
+            response_items,
+            ..Self::assistant_with_tool_calls(content, tool_calls)
+        }
+    }
+
     pub fn tool_result(tool_call_id: impl Into<String>, content: impl Into<String>) -> Self {
         Self {
             role: MessageRole::Tool,
@@ -125,6 +138,7 @@ impl LlmMessage {
             name: None,
             tool_call_id: Some(tool_call_id.into()),
             tool_calls: Vec::new(),
+            response_items: Vec::new(),
         }
     }
 
@@ -135,6 +149,7 @@ impl LlmMessage {
             name: None,
             tool_call_id: None,
             tool_calls: Vec::new(),
+            response_items: Vec::new(),
         }
     }
 }
@@ -187,6 +202,7 @@ pub struct LlmResponse {
     pub id: Option<String>,
     pub content: String,
     pub tool_calls: Vec<ToolCall>,
+    pub output_items: Vec<Value>,
     pub raw: Value,
 }
 
@@ -196,6 +212,7 @@ impl LlmResponse {
             id: None,
             content: content.into(),
             tool_calls: Vec::new(),
+            output_items: Vec::new(),
             raw: Value::Null,
         }
     }
@@ -491,6 +508,10 @@ fn responses_input_items(message: &LlmMessage) -> Vec<Value> {
             })
             .unwrap_or_default(),
         MessageRole::Assistant if !message.tool_calls.is_empty() => {
+            if !message.response_items.is_empty() {
+                return message.response_items.clone();
+            }
+
             let mut items = Vec::new();
 
             if !message.content.is_empty() {
@@ -566,6 +587,7 @@ fn chat_response_from_value(raw: Value) -> Result<LlmResponse> {
         id: raw.get("id").and_then(Value::as_str).map(str::to_owned),
         content,
         tool_calls,
+        output_items: Vec::new(),
         raw,
     })
 }
@@ -598,6 +620,12 @@ fn responses_response_from_value(raw: Value) -> Result<LlmResponse> {
         .map(str::to_owned)
         .unwrap_or_else(|| collect_responses_output_text(&raw));
 
+    let output_items = raw
+        .get("output")
+        .and_then(Value::as_array)
+        .cloned()
+        .unwrap_or_default();
+
     let tool_calls = raw
         .get("output")
         .and_then(Value::as_array)
@@ -615,6 +643,7 @@ fn responses_response_from_value(raw: Value) -> Result<LlmResponse> {
         id: raw.get("id").and_then(Value::as_str).map(str::to_owned),
         content,
         tool_calls,
+        output_items,
         raw,
     })
 }
@@ -887,6 +916,7 @@ mod tests {
         let body = chat_completions_body(&request, false);
 
         assert_eq!(body["model"], "gpt-test");
+        assert!(body["messages"][1]["content"].is_null());
         assert_eq!(body["messages"][1]["tool_calls"][0]["id"], "call_1");
         assert_eq!(body["messages"][2]["role"], "tool");
         assert_eq!(body["messages"][2]["tool_call_id"], "call_1");
@@ -911,6 +941,46 @@ mod tests {
         assert_eq!(body["input"][0]["role"], "user");
         assert_eq!(body["input"][1]["type"], "function_call_output");
         assert_eq!(body["input"][1]["call_id"], "call_1");
+    }
+
+    #[test]
+    fn responses_body_replays_raw_response_items_before_tool_outputs() {
+        let reasoning_item = json!({
+            "id": "rs_1",
+            "type": "reasoning",
+            "summary": []
+        });
+        let function_call_item = json!({
+            "id": "fc_1",
+            "type": "function_call",
+            "call_id": "call_1",
+            "name": "inspect_sql",
+            "arguments": "{\"sql\":\"select *\"}"
+        });
+        let request = LlmRequest::new(
+            "gpt-test",
+            LlmProtocol::Responses,
+            vec![
+                LlmMessage::user("select * from users"),
+                LlmMessage::assistant_with_response_items(
+                    "",
+                    vec![ToolCall::new(
+                        "call_1",
+                        "inspect_sql",
+                        r#"{"sql":"select *"}"#,
+                    )],
+                    vec![reasoning_item.clone(), function_call_item.clone()],
+                ),
+                LlmMessage::tool_result("call_1", r#"{"risk":"medium"}"#),
+            ],
+        );
+
+        let body = responses_body(&request, false);
+
+        assert_eq!(body["input"][1], reasoning_item);
+        assert_eq!(body["input"][2], function_call_item);
+        assert_eq!(body["input"][3]["type"], "function_call_output");
+        assert_eq!(body["input"][3]["call_id"], "call_1");
     }
 
     #[test]
@@ -960,6 +1030,8 @@ mod tests {
 
         assert_eq!(response.content, "{\"summary\":\"ok\"}");
         assert_eq!(response.tool_calls[0].id, "call_1");
+        assert_eq!(response.output_items.len(), 1);
+        assert_eq!(response.output_items[0]["type"], "function_call");
     }
 
     #[test]
