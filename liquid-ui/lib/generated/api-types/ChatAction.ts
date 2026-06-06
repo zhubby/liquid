@@ -15,4 +15,5 @@ export type ChatAction = {
   resource_id?: string;
   requires_confirmation: boolean;
   preview?: ChatActionPreview;
+  stream_after_seq?: number;
 };

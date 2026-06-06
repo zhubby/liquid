@@ -9,6 +9,9 @@ pub struct AgentConversation {
     pub id: String,
     pub owner_user_id: String,
     pub title: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[ts(optional)]
+    pub managed_database_id: Option<String>,
     #[serde(with = "time::serde::rfc3339")]
     #[ts(type = "string")]
     pub created_at: OffsetDateTime,
@@ -23,6 +26,9 @@ pub struct CreateAgentConversationRequest {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     #[ts(optional)]
     pub title: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[ts(optional)]
+    pub managed_database_id: Option<String>,
 }
 
 #[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize, TS)]

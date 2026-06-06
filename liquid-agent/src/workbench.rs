@@ -25,6 +25,7 @@ Use the provided conversation, managed database, audit summary, SQL audits, and 
 Never invent database IDs, SQL audit IDs, action IDs, credentials, execution status, created resources, query rows, or direct tool results.
 If the answer is already available from context, answer directly and return no actions.
 If a tool is needed, use it. Do not replace safe read-only tool execution with a confirmation card.
+The workbench_context.tool_capabilities object tells you what the server can actually do in this turn.
 
 Operating modes:
 - planning: decide whether to answer directly, use automatic read-only tools, or create a confirmation proposal.
@@ -34,7 +35,7 @@ Tool selection rules:
 - Read-only data retrieval, inspection, listing, reporting, or analytics: use automatic read-only PostgreSQL tools such as pg_list_schemas, pg_list_relations, pg_describe_relation, pg_explain_sql, and pg_execute_readonly_sql. This includes requests like "what databases are there", "list tables", "show sizes", "count rows", "trend", or "show me the result". After tool observations arrive, answer with the returned data.
 - Saving, importing, pinning, or generating a persistent BI card/chart/panel: call propose_bi_card_action with one safe SELECT statement. Do this only when the user asks to save/import/create a dashboard card or chart, not for ordinary read questions.
 - SQL review, risk analysis, approval, rejection, or explicit audit requests: call propose_sql_operation without execution_purpose when the user wants review only.
-- Mutating work such as create, alter, drop, insert, update, delete, migrate, grant, revoke, or any DDL/DML execution: call propose_sql_operation with execution_purpose that describes the user's business goal. The server will audit and, after user confirmation, execute through the write-gated path.
+- Mutating work such as create, alter, drop, insert, update, delete, migrate, grant, revoke, or any DDL/DML execution: only call propose_sql_operation with execution_purpose when tool_capabilities.write_sql_execution is true. The server will audit and, after user confirmation, execute through the write-gated path. If write_sql_execution is false, do not create a confirmation proposal for the write; explain that the server must be started with LIQUID_SQL_EXECUTION=write_gated before Liquid can perform the operation.
 - Existing SQL audit lifecycle requests: call propose_sql_audit_decision only for SQL audit IDs that appear in the provided context.
 - If no available tool can complete the user's task, say that plainly and propose the closest safe next step.
 
@@ -61,6 +62,7 @@ pub struct WorkbenchContext {
 pub struct LlmWorkbenchContext {
     pub messages: Vec<AgentMessage>,
     pub managed_database: Option<ManagedDatabase>,
+    pub write_sql_execution_enabled: bool,
     pub selected_sql_audit_id: Option<String>,
     pub audit_summary: Option<AuditSummary>,
     pub recent_sql_audits: Vec<SqlAuditRecord>,
@@ -763,6 +765,11 @@ fn workbench_context_value(context: &LlmWorkbenchContext) -> Value {
             "ssl_mode": database.ssl_mode,
             "has_password": database.has_password,
         })),
+        "tool_capabilities": {
+            "read_only_sql": context.managed_database.is_some(),
+            "write_sql_execution": context.write_sql_execution_enabled,
+            "writes_require_confirmation": true,
+        },
         "selected_sql_audit_id": context.selected_sql_audit_id,
         "audit_summary": context.audit_summary,
         "recent_sql_audits": context.recent_sql_audits.iter().map(sql_audit_context).collect::<Vec<_>>(),
@@ -830,8 +837,31 @@ impl LlmWorkbenchResponse {
             return Ok(response);
         }
 
-        bail!("LLM workbench response was not valid JSON")
+        if looks_like_structured_json(trimmed) {
+            bail!("LLM workbench response was not valid JSON");
+        }
+
+        if let Some(json_content) = fenced_json(trimmed)
+            && looks_like_structured_json(json_content)
+        {
+            bail!("LLM workbench response was not valid JSON");
+        }
+
+        tracing::debug!(
+            response_length = trimmed.len(),
+            "LLM workbench response was plain text; treating it as final assistant message"
+        );
+        Ok(Self {
+            message: trimmed.to_owned(),
+            actions: Vec::new(),
+        })
     }
+}
+
+fn looks_like_structured_json(content: &str) -> bool {
+    let trimmed = content.trim_start();
+
+    trimmed.starts_with('{') || trimmed.starts_with('[') || trimmed.starts_with("```json")
 }
 
 #[derive(Debug, Deserialize)]
@@ -1365,6 +1395,7 @@ mod tests {
                 ssl_mode: ManagedDatabaseSslMode::Disable,
                 has_password: true,
             }),
+            write_sql_execution_enabled: true,
             selected_sql_audit_id: Some("audit-1".to_owned()),
             audit_summary: None,
             recent_sql_audits: vec![SqlAuditRecord {
@@ -1677,8 +1708,20 @@ mod tests {
     }
 
     #[test]
-    fn rejects_invalid_llm_workbench_json() {
-        let error = parse_llm_workbench_response("not json", &llm_context()).unwrap_err();
+    fn parses_plain_text_llm_workbench_response_as_final_message() {
+        let response =
+            parse_llm_workbench_response("可以，我会先查看当前数据库列表。", &llm_context())
+                .unwrap();
+
+        assert_eq!(response.content, "可以，我会先查看当前数据库列表。");
+        assert!(response.actions.is_empty());
+        assert!(!response.waiting_for_user);
+    }
+
+    #[test]
+    fn rejects_malformed_json_llm_workbench_response() {
+        let error = parse_llm_workbench_response(r#"{"message":"missing end""#, &llm_context())
+            .unwrap_err();
 
         assert_eq!(
             error.to_string(),
@@ -2052,12 +2095,19 @@ mod tests {
         assert!(system_prompt.contains("SQL audit is only one safety gate"));
         assert!(system_prompt.contains("Read-only data retrieval"));
         assert!(system_prompt.contains("use automatic read-only PostgreSQL tools"));
+        assert!(system_prompt.contains("tool_capabilities.write_sql_execution"));
+        assert!(system_prompt.contains("LIQUID_SQL_EXECUTION=write_gated"));
         assert!(system_prompt.contains("propose_bi_card_action"));
         assert!(system_prompt.contains("not for ordinary read questions"));
         assert!(
             request.messages[1]
                 .content
                 .contains("\"mode\": \"planning\"")
+        );
+        assert!(
+            request.messages[1]
+                .content
+                .contains("\"write_sql_execution\": true")
         );
     }
 }

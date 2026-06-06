@@ -550,6 +550,7 @@ impl LiquidStore for TestStore {
     async fn list_agent_conversations(
         &self,
         owner_user_id: &str,
+        managed_database_id: Option<&str>,
         limit: i64,
     ) -> Result<Vec<AgentConversation>, StorageError> {
         Ok(self
@@ -558,6 +559,13 @@ impl LiquidStore for TestStore {
             .unwrap()
             .iter()
             .filter(|conversation| conversation.owner_user_id == owner_user_id)
+            .filter(|conversation| {
+                managed_database_id
+                    .map(|database_id| {
+                        conversation.managed_database_id.as_deref() == Some(database_id)
+                    })
+                    .unwrap_or(true)
+            })
             .take(limit.clamp(1, 100) as usize)
             .cloned()
             .collect())
@@ -568,6 +576,20 @@ impl LiquidStore for TestStore {
         owner_user_id: &str,
         request: CreateAgentConversationRequest,
     ) -> Result<AgentConversation, StorageError> {
+        let managed_database_id = request.managed_database_id;
+        if let Some(database_id) = managed_database_id.as_deref() {
+            let exists = self
+                .databases
+                .lock()
+                .unwrap()
+                .iter()
+                .any(|database| database.id == database_id);
+
+            if !exists {
+                return Err(StorageError::NotFound);
+            }
+        }
+
         let mut conversations = self.conversations.lock().unwrap();
         let conversation = AgentConversation {
             id: format!("conversation-{}", conversations.len() + 1),
@@ -575,6 +597,7 @@ impl LiquidStore for TestStore {
             title: request
                 .title
                 .unwrap_or_else(|| "New conversation".to_owned()),
+            managed_database_id,
             created_at: time::OffsetDateTime::UNIX_EPOCH,
             updated_at: time::OffsetDateTime::UNIX_EPOCH,
         };
@@ -688,8 +711,45 @@ impl LiquidStore for TestStore {
         conversation_id: &str,
         request: CreateAgentTurnRequest,
     ) -> Result<AgentTurn, StorageError> {
-        self.get_agent_conversation(owner_user_id, conversation_id)
+        let conversation = self
+            .get_agent_conversation(owner_user_id, conversation_id)
             .await?;
+        let managed_database_id = match (
+            conversation.managed_database_id,
+            request.managed_database_id,
+        ) {
+            (Some(conversation_database_id), Some(requested_database_id))
+                if conversation_database_id != requested_database_id =>
+            {
+                return Err(StorageError::Validation(
+                    "conversation belongs to a different managed database".to_owned(),
+                ));
+            }
+            (Some(conversation_database_id), _) => Some(conversation_database_id),
+            (None, Some(requested_database_id)) => {
+                let exists = self
+                    .databases
+                    .lock()
+                    .unwrap()
+                    .iter()
+                    .any(|database| database.id == requested_database_id);
+
+                if !exists {
+                    return Err(StorageError::NotFound);
+                }
+
+                if let Some(conversation) =
+                    self.conversations.lock().unwrap().iter_mut().find(|item| {
+                        item.id == conversation_id && item.owner_user_id == owner_user_id
+                    })
+                {
+                    conversation.managed_database_id = Some(requested_database_id.clone());
+                }
+
+                Some(requested_database_id)
+            }
+            (None, None) => None,
+        };
         let user_message = self
             .append_agent_message(
                 owner_user_id,
@@ -709,7 +769,7 @@ impl LiquidStore for TestStore {
             assistant_message_id: None,
             error: None,
             client_request_id: request.client_request_id,
-            managed_database_id: request.managed_database_id,
+            managed_database_id,
             dashboard_context: request.dashboard_context,
             created_at: time::OffsetDateTime::UNIX_EPOCH,
             updated_at: time::OffsetDateTime::UNIX_EPOCH,
@@ -2103,6 +2163,91 @@ async fn chat_conversation_can_be_deleted() {
 }
 
 #[tokio::test]
+async fn chat_conversations_are_scoped_to_managed_database() {
+    let app = test_app();
+    create_test_database(&app).await;
+
+    let second_database_response = app
+        .clone()
+        .oneshot(auth_json_request(
+            "POST",
+            "/api/v1/managed-databases",
+            json!({
+                "name": "Doro",
+                "engine": "postgres",
+                "host": "localhost",
+                "port": 5432,
+                "database": "doro",
+                "username": "readonly",
+                "password": "password123",
+                "ssl_mode": "disable"
+            }),
+        ))
+        .await
+        .unwrap();
+    assert_eq!(second_database_response.status(), StatusCode::CREATED);
+
+    let warehouse_response = app
+        .clone()
+        .oneshot(auth_json_request(
+            "POST",
+            "/api/v1/chat/conversations",
+            json!({
+                "title": "Warehouse workspace",
+                "managed_database_id": "db-1"
+            }),
+        ))
+        .await
+        .unwrap();
+    assert_eq!(warehouse_response.status(), StatusCode::OK);
+    let warehouse = response_json(warehouse_response).await;
+    assert_eq!(warehouse["managed_database_id"], "db-1");
+    assert_eq!(warehouse["selected_database"]["id"], "db-1");
+
+    let doro_response = app
+        .clone()
+        .oneshot(auth_json_request(
+            "POST",
+            "/api/v1/chat/conversations",
+            json!({
+                "title": "Doro workspace",
+                "managed_database_id": "db-2"
+            }),
+        ))
+        .await
+        .unwrap();
+    assert_eq!(doro_response.status(), StatusCode::OK);
+    let doro = response_json(doro_response).await;
+    assert_eq!(doro["managed_database_id"], "db-2");
+    assert_eq!(doro["selected_database"]["id"], "db-2");
+
+    let warehouse_list_response = app
+        .clone()
+        .oneshot(auth_request(
+            "/api/v1/chat/conversations?managed_database_id=db-1",
+        ))
+        .await
+        .unwrap();
+    assert_eq!(warehouse_list_response.status(), StatusCode::OK);
+    let warehouse_conversations = response_json(warehouse_list_response).await;
+    assert_eq!(warehouse_conversations.as_array().unwrap().len(), 1);
+    assert_eq!(warehouse_conversations[0]["title"], "Warehouse workspace");
+    assert_eq!(warehouse_conversations[0]["managed_database_id"], "db-1");
+
+    let doro_list_response = app
+        .oneshot(auth_request(
+            "/api/v1/chat/conversations?managed_database_id=db-2",
+        ))
+        .await
+        .unwrap();
+    assert_eq!(doro_list_response.status(), StatusCode::OK);
+    let doro_conversations = response_json(doro_list_response).await;
+    assert_eq!(doro_conversations.as_array().unwrap().len(), 1);
+    assert_eq!(doro_conversations[0]["title"], "Doro workspace");
+    assert_eq!(doro_conversations[0]["managed_database_id"], "db-2");
+}
+
+#[tokio::test]
 async fn chat_turn_streams_typed_events_and_action() {
     let app = test_app();
     create_test_database(&app).await;
@@ -2615,6 +2760,12 @@ async fn chat_turn_uses_user_llm_provider_settings_when_configured() {
     let captured = captured_body.lock().unwrap().clone().unwrap();
     assert_eq!(captured["model"], "chat-model");
     assert_eq!(captured["messages"][0]["role"], "system");
+    assert!(
+        captured["messages"][1]["content"]
+            .as_str()
+            .unwrap()
+            .contains("\"write_sql_execution\": false")
+    );
 }
 
 #[tokio::test]
@@ -2704,7 +2855,8 @@ async fn chat_turn_blocks_without_llm_provider_key() {
 async fn chat_turn_fails_when_llm_returns_invalid_json() {
     let app = test_app();
     create_test_database(&app).await;
-    let (base_url, _captured_body) = spawn_openai_compatible_mock_with_content("not-json").await;
+    let (base_url, _captured_body) =
+        spawn_openai_compatible_mock_with_content(r#"{"message":"missing end""#).await;
 
     let settings_response = app
         .clone()
@@ -2779,6 +2931,70 @@ async fn chat_turn_fails_when_llm_returns_invalid_json() {
         .unwrap();
     let actions = response_json(actions_response).await;
     assert_eq!(actions.as_array().unwrap().len(), 0);
+}
+
+#[tokio::test]
+async fn chat_turn_accepts_plain_text_llm_final_message() {
+    let app = test_app();
+    create_test_database(&app).await;
+    let (base_url, _captured_body) =
+        spawn_openai_compatible_mock_with_content("我可以帮你查询数据库状态。").await;
+
+    let settings_response = app
+        .clone()
+        .oneshot(auth_json_request(
+            "PUT",
+            "/api/v1/settings/llm-provider",
+            json!({
+                "provider": "openai_compatible",
+                "base_url": base_url,
+                "model": "chat-model",
+                "api_mode": "chat_completions",
+                "api_key": "sk-user"
+            }),
+        ))
+        .await
+        .unwrap();
+    assert_eq!(settings_response.status(), StatusCode::OK);
+
+    let _conversation = app
+        .clone()
+        .oneshot(auth_json_request(
+            "POST",
+            "/api/v1/chat/conversations",
+            json!({ "title": "Plain text chat" }),
+        ))
+        .await
+        .unwrap();
+    let turn_response = app
+        .clone()
+        .oneshot(auth_json_request(
+            "POST",
+            "/api/v1/chat/conversations/conversation-1/turns",
+            json!({
+                "message": "你好",
+                "managed_database_id": "db-1"
+            }),
+        ))
+        .await
+        .unwrap();
+    assert_eq!(turn_response.status(), StatusCode::OK);
+    tokio::time::sleep(std::time::Duration::from_millis(50)).await;
+
+    let stream_response = app
+        .clone()
+        .oneshot(auth_request("/api/v1/chat/turns/turn-1/stream?after_seq=0"))
+        .await
+        .unwrap();
+    assert_eq!(stream_response.status(), StatusCode::OK);
+    let stream_body = axum::body::to_bytes(stream_response.into_body(), usize::MAX)
+        .await
+        .unwrap();
+    let stream_body = String::from_utf8(stream_body.to_vec()).unwrap();
+    assert!(stream_body.contains(r#""type":"assistant_delta""#));
+    assert!(stream_body.contains("我可以帮你查询数据库状态。"));
+    assert!(stream_body.contains(r#""type":"turn_completed""#));
+    assert!(!stream_body.contains(r#""type":"turn_failed""#));
 }
 
 #[tokio::test]
@@ -2930,6 +3146,8 @@ async fn applying_chat_sql_audit_action_uses_existing_audit_flow() {
     assert_eq!(apply_response.status(), StatusCode::OK);
     let action = response_json(apply_response).await;
     assert_eq!(action["status"], "applying");
+    let stream_after_seq = action["stream_after_seq"].as_i64().unwrap();
+    assert!(stream_after_seq > 0);
 
     let action = wait_for_chat_action_status(
         app.clone(),
@@ -2961,7 +3179,9 @@ async fn applying_chat_sql_audit_action_uses_existing_audit_flow() {
 
     let stream_response = app
         .clone()
-        .oneshot(auth_request("/api/v1/chat/turns/turn-1/stream?after_seq=0"))
+        .oneshot(auth_request(&format!(
+            "/api/v1/chat/turns/turn-1/stream?after_seq={stream_after_seq}"
+        )))
         .await
         .unwrap();
     assert_eq!(stream_response.status(), StatusCode::OK);
@@ -2971,11 +3191,19 @@ async fn applying_chat_sql_audit_action_uses_existing_audit_flow() {
     let stream_body = String::from_utf8(stream_body.to_vec()).unwrap();
     assert!(stream_body.contains(r#""type":"tool_started""#));
     assert!(stream_body.contains(r#""type":"tool_finished""#));
-    assert!(stream_body.contains(r#""auditing_sql""#));
+    assert_eq!(
+        stream_body
+            .matches("Checking SQL safety and policy")
+            .count(),
+        1
+    );
+    assert!(stream_body.contains(r#""name":"sql_audit""#));
     assert!(stream_body.contains(r#""synthesizing""#));
     assert!(stream_body.contains(r#""type":"assistant_delta""#));
     assert!(stream_body.contains(r#""type":"assistant_done""#));
     assert!(!stream_body.contains(r#""role":"tool""#));
+    assert!(!stream_body.contains(r#""type":"action_proposed""#));
+    assert!(!stream_body.contains(r#""type":"turn_waiting_for_user""#));
     assert!(stream_body.contains(r#""type":"action_updated""#));
 
     let audit_response = app
@@ -3059,6 +3287,8 @@ async fn applying_chat_sql_execution_action_executes_after_audit_approval() {
     assert_eq!(apply_response.status(), StatusCode::OK);
     let action = response_json(apply_response).await;
     assert_eq!(action["status"], "applying");
+    let stream_after_seq = action["stream_after_seq"].as_i64().unwrap();
+    assert!(stream_after_seq > 0);
 
     let action = wait_for_chat_action_status(
         app.clone(),
@@ -3080,7 +3310,9 @@ async fn applying_chat_sql_execution_action_executes_after_audit_approval() {
 
     let stream_response = app
         .clone()
-        .oneshot(auth_request("/api/v1/chat/turns/turn-1/stream?after_seq=0"))
+        .oneshot(auth_request(&format!(
+            "/api/v1/chat/turns/turn-1/stream?after_seq={stream_after_seq}"
+        )))
         .await
         .unwrap();
     assert_eq!(stream_response.status(), StatusCode::OK);
@@ -3090,12 +3322,26 @@ async fn applying_chat_sql_execution_action_executes_after_audit_approval() {
     let stream_body = String::from_utf8(stream_body.to_vec()).unwrap();
     assert!(stream_body.contains(r#""type":"tool_started""#));
     assert!(stream_body.contains(r#""type":"tool_finished""#));
-    assert!(stream_body.contains(r#""auditing_sql""#));
-    assert!(stream_body.contains(r#""executing_sql""#));
+    assert_eq!(
+        stream_body
+            .matches("Checking SQL safety and policy")
+            .count(),
+        1
+    );
+    assert_eq!(
+        stream_body
+            .matches("Executing the approved SQL operation")
+            .count(),
+        1
+    );
+    assert!(stream_body.contains(r#""name":"sql_audit""#));
+    assert!(stream_body.contains(r#""name":"sql_execute""#));
     assert!(stream_body.contains(r#""synthesizing""#));
     assert!(stream_body.contains(r#""type":"assistant_delta""#));
     assert!(stream_body.contains(r#""type":"assistant_done""#));
     assert!(!stream_body.contains(r#""role":"tool""#));
+    assert!(!stream_body.contains(r#""type":"action_proposed""#));
+    assert!(!stream_body.contains(r#""type":"turn_waiting_for_user""#));
 
     let audit_response = app
         .oneshot(auth_request("/api/v1/sql-audits/audit-1"))
@@ -3336,6 +3582,7 @@ async fn create_bi_card_action_fixture(store: &Arc<TestStore>) -> (AgentConversa
             "user-1",
             CreateAgentConversationRequest {
                 title: Some("BI workspace".to_owned()),
+                managed_database_id: Some(database.id.clone()),
             },
         )
         .await
@@ -3418,6 +3665,7 @@ async fn refreshing_bi_card_rejects_non_select_sql_before_pool_use() {
             "user-1",
             CreateAgentConversationRequest {
                 title: Some("BI workspace".to_owned()),
+                managed_database_id: Some(database.id.clone()),
             },
         )
         .await

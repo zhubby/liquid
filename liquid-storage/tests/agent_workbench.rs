@@ -27,6 +27,7 @@ async fn agent_workbench_store_persists_turn_events_and_actions() {
             &auth.user.id,
             CreateAgentConversationRequest {
                 title: Some("SQL agent".to_owned()),
+                managed_database_id: None,
             },
         )
         .await
@@ -149,6 +150,7 @@ async fn bi_panel_store_persists_cards_layouts_and_export() {
             &auth.user.id,
             CreateAgentConversationRequest {
                 title: Some("Sales analysis".to_owned()),
+                managed_database_id: Some(database.id.clone()),
             },
         )
         .await

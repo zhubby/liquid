@@ -292,14 +292,14 @@ async fn set_tool_timeouts(
     transaction: &mut sqlx::Transaction<'_, sqlx::Postgres>,
     context: &PostgresToolContext,
 ) -> Result<()> {
-    sqlx::query("set local statement_timeout = $1")
+    sqlx::query("select set_config('statement_timeout', $1, true)")
         .bind(format!(
             "{}ms",
             context.metadata_options.statement_timeout_ms
         ))
         .execute(&mut **transaction)
         .await?;
-    sqlx::query("set local lock_timeout = $1")
+    sqlx::query("select set_config('lock_timeout', $1, true)")
         .bind(format!("{}ms", context.metadata_options.lock_timeout_ms))
         .execute(&mut **transaction)
         .await?;
@@ -311,14 +311,14 @@ async fn set_session_tool_timeouts(
     connection: &mut sqlx::pool::PoolConnection<sqlx::Postgres>,
     context: &PostgresToolContext,
 ) -> Result<()> {
-    sqlx::query("set statement_timeout = $1")
+    sqlx::query("select set_config('statement_timeout', $1, false)")
         .bind(format!(
             "{}ms",
             context.metadata_options.statement_timeout_ms
         ))
         .execute(&mut **connection)
         .await?;
-    sqlx::query("set lock_timeout = $1")
+    sqlx::query("select set_config('lock_timeout', $1, false)")
         .bind(format!("{}ms", context.metadata_options.lock_timeout_ms))
         .execute(&mut **connection)
         .await?;

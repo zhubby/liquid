@@ -135,6 +135,7 @@ pub trait LiquidStore: Send + Sync {
     async fn list_agent_conversations(
         &self,
         owner_user_id: &str,
+        managed_database_id: Option<&str>,
         limit: i64,
     ) -> Result<Vec<AgentConversation>, StorageError>;
     async fn create_agent_conversation(

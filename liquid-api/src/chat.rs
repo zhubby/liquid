@@ -22,6 +22,7 @@ use liquid_core::{
     CreateChatTurnRequest, ManagedDatabase, SqlAuditRecord, UpdateAgentConversationRequest,
     UpdateChatConversationRequest,
 };
+use liquid_storage::StorageError;
 use serde::Deserialize;
 use serde_json::Value;
 use tokio::{spawn, time::sleep};
@@ -73,6 +74,7 @@ pub(crate) fn routes() -> Router<ApiState> {
 
 #[derive(Debug, Deserialize)]
 struct ListConversationsQuery {
+    managed_database_id: Option<String>,
     limit: Option<i64>,
 }
 
@@ -98,13 +100,20 @@ async fn list_conversations(
     Query(query): Query<ListConversationsQuery>,
 ) -> Result<Json<Vec<ChatConversation>>, ApiError> {
     let user = authenticated_user(&state, &headers).await?;
-    let current_database = selected_chat_database(&state, &user.id).await?;
+    let selected_database =
+        selected_chat_database(&state, &user.id, query.managed_database_id.as_deref()).await?;
     let conversations = state
         .store
-        .list_agent_conversations(&user.id, query.limit.unwrap_or(50))
+        .list_agent_conversations(
+            &user.id,
+            selected_database
+                .as_ref()
+                .map(|database| database.id.as_str()),
+            query.limit.unwrap_or(50),
+        )
         .await?
         .into_iter()
-        .map(|conversation| chat_conversation(conversation, current_database.as_ref()))
+        .map(|conversation| chat_conversation(conversation, selected_database.as_ref()))
         .collect();
 
     Ok(Json(conversations))
@@ -116,15 +125,24 @@ async fn create_conversation(
     Json(request): Json<CreateChatConversationRequest>,
 ) -> Result<Json<ChatConversation>, ApiError> {
     let user = authenticated_user(&state, &headers).await?;
+    let selected_database =
+        selected_chat_database(&state, &user.id, request.managed_database_id.as_deref()).await?;
     let conversation = state
         .store
-        .create_agent_conversation(&user.id, create_agent_conversation_request(request))
+        .create_agent_conversation(
+            &user.id,
+            create_agent_conversation_request(
+                request,
+                selected_database
+                    .as_ref()
+                    .map(|database| database.id.clone()),
+            ),
+        )
         .await?;
-    let current_database = selected_chat_database(&state, &user.id).await?;
 
     Ok(Json(chat_conversation(
         conversation,
-        current_database.as_ref(),
+        selected_database.as_ref(),
     )))
 }
 
@@ -138,11 +156,11 @@ async fn get_conversation(
         .store
         .get_agent_conversation(&user.id, &conversation_id)
         .await?;
-    let current_database = selected_chat_database(&state, &user.id).await?;
+    let selected_database = conversation_database(&state, &user.id, &conversation).await?;
 
     Ok(Json(chat_conversation(
         conversation,
-        current_database.as_ref(),
+        selected_database.as_ref(),
     )))
 }
 
@@ -161,11 +179,11 @@ async fn update_conversation(
             update_agent_conversation_request(request),
         )
         .await?;
-    let current_database = selected_chat_database(&state, &user.id).await?;
+    let selected_database = conversation_database(&state, &user.id, &conversation).await?;
 
     Ok(Json(chat_conversation(
         conversation,
-        current_database.as_ref(),
+        selected_database.as_ref(),
     )))
 }
 
@@ -430,8 +448,12 @@ async fn apply_action(
         .store
         .update_agent_turn_status(&user.id, &action.turn_id, AgentTurnStatus::Running, None)
         .await?;
-    append_action_update_event(&state, &user.id, &applying).await;
-    append_action_apply_status_event(&state, &user.id, &applying).await;
+    let apply_event = append_action_update_event(&state, &user.id, &applying).await;
+    let apply_status_event = append_action_apply_status_event(&state, &user.id, &applying).await;
+    let stream_after_seq = apply_event
+        .as_ref()
+        .or(apply_status_event.as_ref())
+        .map(|event| event.seq);
 
     let background_state = state.clone();
     let background_user_id = user.id.clone();
@@ -449,7 +471,10 @@ async fn apply_action(
         "chat action apply accepted for background execution"
     );
 
-    Ok(Json(chat_action(applying)))
+    Ok(Json(chat_action_with_stream_after_seq(
+        applying,
+        stream_after_seq,
+    )))
 }
 
 fn action_error_details(action: &AgentAction) -> Value {
@@ -497,7 +522,7 @@ async fn finish_action_apply(state: ApiState, owner_user_id: String, action: Age
 
             append_action_resource_event(&state, &owner_user_id, &action, event_type, payload)
                 .await;
-            append_action_update_event(&state, &owner_user_id, &updated).await;
+            let _ = append_action_update_event(&state, &owner_user_id, &updated).await;
             let observation = action_observation_payload(
                 &updated,
                 true,
@@ -548,7 +573,7 @@ async fn finish_action_apply(state: ApiState, owner_user_id: String, action: Age
                 .await
             {
                 Ok(updated) => {
-                    append_action_update_event(&state, &owner_user_id, &updated).await;
+                    let _ = append_action_update_event(&state, &owner_user_id, &updated).await;
                     let observation = action_observation_payload(
                         &updated,
                         false,
@@ -588,8 +613,12 @@ async fn finish_action_apply(state: ApiState, owner_user_id: String, action: Age
     }
 }
 
-async fn append_action_update_event(state: &ApiState, owner_user_id: &str, action: &AgentAction) {
-    if let Err(error) = append_event(
+async fn append_action_update_event(
+    state: &ApiState,
+    owner_user_id: &str,
+    action: &AgentAction,
+) -> Option<AgentEventRecord> {
+    match append_event(
         state,
         owner_user_id,
         &action.turn_id,
@@ -598,13 +627,17 @@ async fn append_action_update_event(state: &ApiState, owner_user_id: &str, actio
     )
     .await
     {
-        tracing::warn!(
-            action_id = %action.id,
-            action_kind = %action.kind.as_str(),
-            action_status = %action.status.as_str(),
-            error = %error,
-            "failed to append chat action update event"
-        );
+        Ok(event) => Some(event),
+        Err(error) => {
+            tracing::warn!(
+                action_id = %action.id,
+                action_kind = %action.kind.as_str(),
+                action_status = %action.status.as_str(),
+                error = %error,
+                "failed to append chat action update event"
+            );
+            None
+        }
     }
 }
 
@@ -612,8 +645,8 @@ async fn append_action_apply_status_event(
     state: &ApiState,
     owner_user_id: &str,
     action: &AgentAction,
-) {
-    if let Err(error) = append_event(
+) -> Option<AgentEventRecord> {
+    match append_event(
         state,
         owner_user_id,
         &action.turn_id,
@@ -626,12 +659,16 @@ async fn append_action_apply_status_event(
     )
     .await
     {
-        tracing::warn!(
-            action_id = %action.id,
-            action_kind = %action.kind.as_str(),
-            error = %error,
-            "failed to append chat action apply status event"
-        );
+        Ok(event) => Some(event),
+        Err(error) => {
+            tracing::warn!(
+                action_id = %action.id,
+                action_kind = %action.kind.as_str(),
+                error = %error,
+                "failed to append chat action apply status event"
+            );
+            None
+        }
     }
 }
 
@@ -1258,24 +1295,20 @@ async fn chat_stream_events(
 fn tool_started_events(payload: &Value) -> Vec<ChatStreamEvent> {
     let stage = chat_stream_stage_from_payload(payload);
     let summary = payload_string(payload, "summary").or_else(|| default_stage_summary(stage));
-    let mut events = vec![ChatStreamEvent::StatusChanged {
-        stage,
-        summary: summary.clone(),
-    }];
 
     if let Some(id) = payload_string(payload, "id") {
         let name = payload_string(payload, "name").unwrap_or_else(|| "tool".to_owned());
         let title = payload_string(payload, "title").unwrap_or_else(|| default_tool_title(&name));
 
-        events.push(ChatStreamEvent::ToolStarted {
+        return vec![ChatStreamEvent::ToolStarted {
             id,
             name,
             title,
             summary: summary.unwrap_or_else(|| "Running tool".to_owned()),
-        });
+        }];
     }
 
-    events
+    vec![ChatStreamEvent::StatusChanged { stage, summary }]
 }
 
 fn tool_finished_events(payload: &Value) -> Vec<ChatStreamEvent> {
@@ -1365,6 +1398,7 @@ fn chat_conversation(
     ChatConversation {
         id: conversation.id,
         title: conversation.title,
+        managed_database_id: conversation.managed_database_id,
         selected_database: selected_database.map(chat_database_summary),
         created_at: conversation.created_at,
         updated_at: conversation.updated_at,
@@ -1374,7 +1408,14 @@ fn chat_conversation(
 async fn selected_chat_database(
     state: &ApiState,
     owner_user_id: &str,
+    requested_database_id: Option<&str>,
 ) -> Result<Option<ManagedDatabase>, ApiError> {
+    if let Some(database_id) = requested_database_id {
+        return load_chat_database(state, owner_user_id, database_id)
+            .await
+            .map(Some);
+    }
+
     let current_database = state
         .store
         .get_current_managed_database(owner_user_id)
@@ -1390,6 +1431,33 @@ async fn selected_chat_database(
         .await?
         .into_iter()
         .next())
+}
+
+async fn conversation_database(
+    state: &ApiState,
+    owner_user_id: &str,
+    conversation: &AgentConversation,
+) -> Result<Option<ManagedDatabase>, ApiError> {
+    match conversation.managed_database_id.as_deref() {
+        Some(database_id) => load_chat_database(state, owner_user_id, database_id)
+            .await
+            .map(Some),
+        None => selected_chat_database(state, owner_user_id, None).await,
+    }
+}
+
+async fn load_chat_database(
+    state: &ApiState,
+    owner_user_id: &str,
+    database_id: &str,
+) -> Result<ManagedDatabase, ApiError> {
+    state
+        .store
+        .list_managed_databases(owner_user_id)
+        .await?
+        .into_iter()
+        .find(|database| database.id == database_id)
+        .ok_or_else(|| ApiError::from(StorageError::NotFound))
 }
 
 fn chat_database_summary(database: &ManagedDatabase) -> ChatManagedDatabaseSummary {
@@ -1462,6 +1530,13 @@ fn chat_turn(turn: AgentTurn) -> ChatTurn {
 }
 
 fn chat_action(action: AgentAction) -> ChatAction {
+    chat_action_with_stream_after_seq(action, None)
+}
+
+fn chat_action_with_stream_after_seq(
+    action: AgentAction,
+    stream_after_seq: Option<i32>,
+) -> ChatAction {
     let preview = chat_action_preview(&action);
 
     ChatAction {
@@ -1475,6 +1550,7 @@ fn chat_action(action: AgentAction) -> ChatAction {
         resource_id: action.resource_id,
         requires_confirmation: action.requires_confirmation,
         preview,
+        stream_after_seq,
     }
 }
 
@@ -1555,9 +1631,11 @@ fn sse_chat_event(event: ChatStreamEvent) -> Event {
 
 fn create_agent_conversation_request(
     request: CreateChatConversationRequest,
+    managed_database_id: Option<String>,
 ) -> CreateAgentConversationRequest {
     CreateAgentConversationRequest {
         title: request.title,
+        managed_database_id,
     }
 }
 

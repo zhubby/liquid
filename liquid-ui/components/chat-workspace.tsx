@@ -647,6 +647,8 @@ export function ChatPanel({
       const conversationId = conversation.id;
       const streamKey = `${conversationId}:${action.id}:${Date.now()}`;
       const controller = new AbortController();
+      const afterSeq = action.stream_after_seq ?? 0;
+      let reachedApplyStart = afterSeq > 0;
       const turn: ChatTurn = {
         id: action.turn_id,
         conversation_id: conversationId,
@@ -662,7 +664,7 @@ export function ChatPanel({
 
       try {
         await apiStream<ChatStreamEvent>(
-          `/api/v1/chat/turns/${action.turn_id}/stream?after_seq=0`,
+          `/api/v1/chat/turns/${action.turn_id}/stream?after_seq=${afterSeq}`,
           {
             token,
             signal: controller.signal,
@@ -672,6 +674,14 @@ export function ChatPanel({
                 activeActionStreamKeyRef.current !== streamKey
               ) {
                 return;
+              }
+
+              if (!reachedApplyStart) {
+                if (isApplyingActionUpdateEvent(event, action.id)) {
+                  reachedApplyStart = true;
+                } else {
+                  return;
+                }
               }
 
               handleStreamEvent(event, turn, "", action.id);
@@ -2170,6 +2180,17 @@ function failRunningActivities(
           summary: message || item.summary,
         }
       : item,
+  );
+}
+
+function isApplyingActionUpdateEvent(
+  event: ChatStreamEvent,
+  actionId: string,
+): boolean {
+  return (
+    event.type === "action_updated" &&
+    event.payload.action.id === actionId &&
+    event.payload.action.status === "applying"
   );
 }
 

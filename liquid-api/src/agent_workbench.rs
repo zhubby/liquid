@@ -197,6 +197,7 @@ async fn run_agent_turn_inner(
             LlmWorkbenchContext {
                 messages,
                 managed_database,
+                write_sql_execution_enabled: state.approved_write_execution_enabled,
                 selected_sql_audit_id,
                 audit_summary: summary,
                 recent_sql_audits,
@@ -1005,6 +1006,7 @@ async fn load_llm_workbench_context(
     Ok(LlmWorkbenchContext {
         messages,
         managed_database,
+        write_sql_execution_enabled: state.approved_write_execution_enabled,
         selected_sql_audit_id,
         audit_summary: summary,
         recent_sql_audits,

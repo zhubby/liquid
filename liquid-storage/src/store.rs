@@ -459,9 +459,11 @@ impl LiquidStore for Storage {
     async fn list_agent_conversations(
         &self,
         owner_user_id: &str,
+        managed_database_id: Option<&str>,
         limit: i64,
     ) -> Result<Vec<AgentConversation>, StorageError> {
-        agent_workbench::list_agent_conversations(self, owner_user_id, limit).await
+        agent_workbench::list_agent_conversations(self, owner_user_id, managed_database_id, limit)
+            .await
     }
 
     async fn create_agent_conversation(

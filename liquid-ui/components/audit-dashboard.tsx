@@ -74,13 +74,20 @@ export function AuditDashboard({
 
   useEffect(() => {
     let cancelled = false;
+    const conversationsPath = `/api/v1/chat/conversations?managed_database_id=${encodeURIComponent(
+      selectedDatabase.id,
+    )}`;
+    const createWorkspaceBody = () => ({
+      title: newWorkspaceTitle(t.workspace.defaultTitlePrefix),
+      managed_database_id: selectedDatabase.id,
+    });
 
     const initializeWorkspaces = async () => {
       setIsWorkspaceLoading(true);
 
       try {
         const existingConversations = await apiRequest<ChatConversation[]>(
-          "/api/v1/chat/conversations",
+          conversationsPath,
           { token },
         );
         const initialConversation =
@@ -88,7 +95,7 @@ export function AuditDashboard({
           (await apiRequest<ChatConversation>("/api/v1/chat/conversations", {
             method: "POST",
             token,
-            body: { title: newWorkspaceTitle(t.workspace.defaultTitlePrefix) },
+            body: createWorkspaceBody(),
           }));
 
         if (cancelled) {
@@ -119,7 +126,12 @@ export function AuditDashboard({
     return () => {
       cancelled = true;
     };
-  }, [t.workspace.defaultTitlePrefix, t.workspace.loadFailed, token]);
+  }, [
+    selectedDatabase.id,
+    t.workspace.defaultTitlePrefix,
+    t.workspace.loadFailed,
+    token,
+  ]);
 
   const handleCreateWorkspace = useCallback(async () => {
     if (isCreatingWorkspace) {
@@ -134,7 +146,10 @@ export function AuditDashboard({
         {
           method: "POST",
           token,
-          body: { title: newWorkspaceTitle(t.workspace.defaultTitlePrefix) },
+          body: {
+            title: newWorkspaceTitle(t.workspace.defaultTitlePrefix),
+            managed_database_id: selectedDatabase.id,
+          },
         },
       );
 
@@ -154,6 +169,7 @@ export function AuditDashboard({
     }
   }, [
     isCreatingWorkspace,
+    selectedDatabase.id,
     t.workspace.createFailed,
     t.workspace.defaultTitlePrefix,
     token,
@@ -204,7 +220,10 @@ export function AuditDashboard({
             {
               method: "POST",
               token,
-              body: { title: newWorkspaceTitle(t.workspace.defaultTitlePrefix) },
+              body: {
+                title: newWorkspaceTitle(t.workspace.defaultTitlePrefix),
+                managed_database_id: selectedDatabase.id,
+              },
             },
           );
 
@@ -226,6 +245,7 @@ export function AuditDashboard({
       activeConversation,
       conversations,
       isDeletingWorkspace,
+      selectedDatabase.id,
       t.workspace.defaultTitlePrefix,
       t.workspace.deleteFailed,
       token,
@@ -315,7 +335,7 @@ export function AuditDashboard({
           ) : (
             <>
               <ChatPanel
-                key={`ai-${activeConversation.id}`}
+                key={`ai-${selectedDatabase.id}-${activeConversation.id}`}
                 token={token}
                 selectedDatabase={selectedDatabase}
                 conversation={activeConversation}
@@ -329,7 +349,7 @@ export function AuditDashboard({
                 onDoubleClick={handleDividerDoubleClick}
               />
               <BiWorkspacePanel
-                key={`bi-${activeConversation.id}`}
+                key={`bi-${selectedDatabase.id}-${activeConversation.id}`}
                 token={token}
                 conversationId={activeConversation.id}
                 selectedDatabase={selectedDatabase}

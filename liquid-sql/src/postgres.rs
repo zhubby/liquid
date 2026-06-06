@@ -449,11 +449,11 @@ async fn fetch_explain(
     options: &PgSqlMetadataOptions,
 ) -> Result<Option<PgSqlPlanMetadata>, sqlx::Error> {
     let mut transaction = pool.begin().await?;
-    sqlx::query("set local statement_timeout = $1")
+    sqlx::query("select set_config('statement_timeout', $1, true)")
         .bind(format!("{}ms", options.statement_timeout_ms))
         .execute(&mut *transaction)
         .await?;
-    sqlx::query("set local lock_timeout = $1")
+    sqlx::query("select set_config('lock_timeout', $1, true)")
         .bind(format!("{}ms", options.lock_timeout_ms))
         .execute(&mut *transaction)
         .await?;

@@ -13,6 +13,9 @@ use crate::{
 pub struct ChatConversation {
     pub id: String,
     pub title: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[ts(optional)]
+    pub managed_database_id: Option<String>,
     pub selected_database: Option<ChatManagedDatabaseSummary>,
     #[serde(with = "time::serde::rfc3339")]
     #[ts(type = "string")]
@@ -28,6 +31,9 @@ pub struct CreateChatConversationRequest {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     #[ts(optional)]
     pub title: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[ts(optional)]
+    pub managed_database_id: Option<String>,
 }
 
 #[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize, TS)]
@@ -282,6 +288,9 @@ pub struct ChatAction {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     #[ts(optional)]
     pub preview: Option<ChatActionPreview>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[ts(optional)]
+    pub stream_after_seq: Option<i32>,
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize, TS)]

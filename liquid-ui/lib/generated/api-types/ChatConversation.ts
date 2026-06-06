@@ -4,6 +4,7 @@ import type { ChatManagedDatabaseSummary } from "./ChatManagedDatabaseSummary";
 export type ChatConversation = {
   id: string;
   title: string;
+  managed_database_id?: string;
   selected_database: ChatManagedDatabaseSummary | null;
   created_at: string;
   updated_at: string;

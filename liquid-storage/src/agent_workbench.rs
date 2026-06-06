@@ -17,6 +17,7 @@ const AGENT_CONVERSATION_COLUMNS: &str = r#"
 id::text,
 owner_user_id::text,
 title,
+managed_database_id::text,
 created_at,
 updated_at
 "#;
@@ -81,6 +82,7 @@ updated_at
 pub(crate) async fn list_agent_conversations(
     storage: &Storage,
     owner_user_id: &str,
+    managed_database_id: Option<&str>,
     limit: i64,
 ) -> Result<Vec<AgentConversation>, StorageError> {
     let rows = sqlx::query_as::<_, AgentConversationRow>(&format!(
@@ -88,11 +90,13 @@ pub(crate) async fn list_agent_conversations(
         select {AGENT_CONVERSATION_COLUMNS}
         from agent_conversations
         where owner_user_id = $1::uuid
+          and ($2::uuid is null or managed_database_id = $2::uuid)
         order by updated_at desc
-        limit $2
+        limit $3
         "#
     ))
     .bind(owner_user_id)
+    .bind(managed_database_id)
     .bind(limit.clamp(1, 100))
     .fetch_all(&storage.pool)
     .await
@@ -108,20 +112,28 @@ pub(crate) async fn create_agent_conversation(
 ) -> Result<AgentConversation, StorageError> {
     let title =
         optional_string("title", request.title)?.unwrap_or_else(|| "New conversation".into());
+    let managed_database_id = optional_string("managed_database_id", request.managed_database_id)?;
     let row = sqlx::query_as::<_, AgentConversationRow>(&format!(
         r#"
-        insert into agent_conversations (owner_user_id, title)
-        values ($1::uuid, $2)
+        insert into agent_conversations (owner_user_id, title, managed_database_id)
+        select $1::uuid, $2, null
+        where $3::uuid is null
+        union all
+        select $1::uuid, $2, managed_databases.id
+        from managed_databases
+        where managed_databases.id = $3::uuid
+          and managed_databases.owner_user_id = $1::uuid
         returning {AGENT_CONVERSATION_COLUMNS}
         "#
     ))
     .bind(owner_user_id)
     .bind(title)
-    .fetch_one(&storage.pool)
+    .bind(managed_database_id)
+    .fetch_optional(&storage.pool)
     .await
     .map_err(map_database_error)?;
 
-    row.try_into()
+    row.ok_or(StorageError::NotFound)?.try_into()
 }
 
 pub(crate) async fn get_agent_conversation(
@@ -289,7 +301,17 @@ pub(crate) async fn create_agent_turn(
     request: CreateAgentTurnRequest,
 ) -> Result<AgentTurn, StorageError> {
     let message = required_string("message", &request.message)?;
-    ensure_conversation(storage, owner_user_id, conversation_id).await?;
+    let conversation = ensure_conversation(storage, owner_user_id, conversation_id).await?;
+    let requested_managed_database_id =
+        optional_string("managed_database_id", request.managed_database_id)?;
+    let managed_database_id = resolve_conversation_managed_database_id(
+        storage,
+        owner_user_id,
+        conversation_id,
+        conversation.managed_database_id,
+        requested_managed_database_id,
+    )
+    .await?;
     let dashboard_context = request
         .dashboard_context
         .map(serde_json::to_value)
@@ -333,7 +355,7 @@ pub(crate) async fn create_agent_turn(
         "client_request_id",
         request.client_request_id,
     )?)
-    .bind(request.managed_database_id)
+    .bind(managed_database_id)
     .bind(dashboard_context)
     .fetch_one(&mut *transaction)
     .await
@@ -674,10 +696,71 @@ async fn ensure_conversation(
     storage: &Storage,
     owner_user_id: &str,
     conversation_id: &str,
+) -> Result<AgentConversation, StorageError> {
+    get_agent_conversation(storage, owner_user_id, conversation_id).await
+}
+
+async fn resolve_conversation_managed_database_id(
+    storage: &Storage,
+    owner_user_id: &str,
+    conversation_id: &str,
+    conversation_managed_database_id: Option<String>,
+    requested_managed_database_id: Option<String>,
+) -> Result<Option<String>, StorageError> {
+    match (
+        conversation_managed_database_id,
+        requested_managed_database_id,
+    ) {
+        (Some(conversation_id), Some(requested_id)) if conversation_id != requested_id => {
+            Err(StorageError::Validation(
+                "conversation belongs to a different managed database".to_owned(),
+            ))
+        }
+        (Some(conversation_id), _) => Ok(Some(conversation_id)),
+        (None, Some(requested_id)) => {
+            bind_conversation_to_managed_database(
+                storage,
+                owner_user_id,
+                conversation_id,
+                &requested_id,
+            )
+            .await?;
+            Ok(Some(requested_id))
+        }
+        (None, None) => Ok(None),
+    }
+}
+
+async fn bind_conversation_to_managed_database(
+    storage: &Storage,
+    owner_user_id: &str,
+    conversation_id: &str,
+    managed_database_id: &str,
 ) -> Result<(), StorageError> {
-    get_agent_conversation(storage, owner_user_id, conversation_id)
-        .await
-        .map(|_| ())
+    let result = sqlx::query(
+        r#"
+        update agent_conversations
+        set managed_database_id = managed_databases.id,
+            updated_at = now()
+        from managed_databases
+        where agent_conversations.id = $1::uuid
+          and agent_conversations.owner_user_id = $2::uuid
+          and managed_databases.id = $3::uuid
+          and managed_databases.owner_user_id = $2::uuid
+        "#,
+    )
+    .bind(conversation_id)
+    .bind(owner_user_id)
+    .bind(managed_database_id)
+    .execute(&storage.pool)
+    .await
+    .map_err(map_database_error)?;
+
+    if result.rows_affected() == 0 {
+        return Err(StorageError::NotFound);
+    }
+
+    Ok(())
 }
 
 async fn touch_conversation(
@@ -751,6 +834,7 @@ struct AgentConversationRow {
     id: String,
     owner_user_id: String,
     title: String,
+    managed_database_id: Option<String>,
     created_at: OffsetDateTime,
     updated_at: OffsetDateTime,
 }
@@ -816,6 +900,7 @@ impl<'r> sqlx::FromRow<'r, sqlx::postgres::PgRow> for AgentConversationRow {
             id: row.try_get("id")?,
             owner_user_id: row.try_get("owner_user_id")?,
             title: row.try_get("title")?,
+            managed_database_id: row.try_get("managed_database_id")?,
             created_at: row.try_get("created_at")?,
             updated_at: row.try_get("updated_at")?,
         })
@@ -903,6 +988,7 @@ impl TryFrom<AgentConversationRow> for AgentConversation {
             id: row.id,
             owner_user_id: row.owner_user_id,
             title: row.title,
+            managed_database_id: row.managed_database_id,
             created_at: row.created_at,
             updated_at: row.updated_at,
         })
