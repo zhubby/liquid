@@ -4,6 +4,8 @@ import { ThemeProvider } from "@/components/theme-provider";
 import { Toaster } from "@/components/ui/sonner";
 import { I18nProvider } from "@/lib/i18n";
 
+import "react-grid-layout/css/styles.css";
+import "react-resizable/css/styles.css";
 import "./globals.css";
 
 export const metadata: Metadata = {

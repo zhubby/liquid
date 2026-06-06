@@ -1,5 +1,6 @@
 mod agent_workbench;
 mod auth;
+mod bi_panels;
 mod crypto;
 mod database_backups;
 mod error;

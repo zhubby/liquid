@@ -1,0 +1,559 @@
+use liquid_core::{
+    BiCardKind, BiCardLayout, BiCardLayoutUpdate, BiChartConfig, BiPanel, BiPanelCard,
+    BiPanelExport, BiQueryResult, CreateBiPanelCardRequest, UpdateBiPanelCardRequest,
+    UpdateBiPanelRequest,
+};
+use serde_json::Value;
+use time::OffsetDateTime;
+
+use crate::{
+    error::{StorageError, map_database_error},
+    store::Storage,
+    validation::required_string,
+};
+
+const BI_PANEL_COLUMNS: &str = r#"
+id::text,
+conversation_id::text,
+title,
+description,
+created_at,
+updated_at
+"#;
+
+const BI_PANEL_CARD_COLUMNS: &str = r#"
+id::text,
+panel_id::text,
+managed_database_id::text,
+source_action_id::text,
+title,
+description,
+kind,
+sql,
+chart,
+layout,
+result,
+created_at,
+updated_at
+"#;
+
+pub(crate) async fn get_or_create_bi_panel(
+    storage: &Storage,
+    owner_user_id: &str,
+    conversation_id: &str,
+) -> Result<BiPanel, StorageError> {
+    let row = sqlx::query_as::<_, BiPanelRow>(&format!(
+        r#"
+        insert into bi_panels (conversation_id, owner_user_id, title)
+        select id, owner_user_id, title || ' BI Panel'
+        from agent_conversations
+        where id = $2::uuid
+          and owner_user_id = $1::uuid
+        on conflict (conversation_id) do update
+        set updated_at = bi_panels.updated_at
+        returning {BI_PANEL_COLUMNS}
+        "#
+    ))
+    .bind(owner_user_id)
+    .bind(conversation_id)
+    .fetch_optional(&storage.pool)
+    .await
+    .map_err(map_database_error)?;
+
+    let panel = row.ok_or(StorageError::NotFound)?.try_into()?;
+    panel_with_cards(storage, owner_user_id, panel).await
+}
+
+pub(crate) async fn update_bi_panel(
+    storage: &Storage,
+    owner_user_id: &str,
+    panel_id: &str,
+    request: UpdateBiPanelRequest,
+) -> Result<BiPanel, StorageError> {
+    let title = request
+        .title
+        .map(|value| required_string("title", &value))
+        .transpose()?;
+    let description_present = request.description.is_some();
+    let description = blank_to_none(request.description);
+    let row = sqlx::query_as::<_, BiPanelRow>(&format!(
+        r#"
+        update bi_panels
+        set title = coalesce($3, title),
+            description = case when $4 then $5 else description end,
+            updated_at = now()
+        where id = $1::uuid
+          and owner_user_id = $2::uuid
+        returning {BI_PANEL_COLUMNS}
+        "#
+    ))
+    .bind(panel_id)
+    .bind(owner_user_id)
+    .bind(title)
+    .bind(description_present)
+    .bind(description)
+    .fetch_optional(&storage.pool)
+    .await
+    .map_err(map_database_error)?;
+
+    let panel = row.ok_or(StorageError::NotFound)?.try_into()?;
+    panel_with_cards(storage, owner_user_id, panel).await
+}
+
+pub(crate) async fn create_bi_panel_card(
+    storage: &Storage,
+    owner_user_id: &str,
+    panel_id: &str,
+    request: CreateBiPanelCardRequest,
+) -> Result<BiPanelCard, StorageError> {
+    validate_card_request(&request)?;
+    let title = required_string("title", &request.title)?;
+    let description = blank_to_none(request.description);
+    let layout = checked_json("layout", &request.layout)?;
+    let chart = checked_optional_json("chart", &request.chart)?;
+    let result = checked_json("result", &request.result)?;
+    let row = sqlx::query_as::<_, BiPanelCardRow>(&format!(
+        r#"
+        insert into bi_panel_cards (
+            panel_id,
+            owner_user_id,
+            managed_database_id,
+            source_action_id,
+            title,
+            description,
+            kind,
+            sql,
+            chart,
+            layout,
+            result
+        )
+        select
+            p.id,
+            p.owner_user_id,
+            $3::uuid,
+            $4::uuid,
+            $5,
+            $6,
+            $7,
+            $8,
+            $9,
+            $10,
+            $11
+        from bi_panels p
+        join managed_databases d
+          on d.id = $3::uuid
+         and d.owner_user_id = p.owner_user_id
+        where p.id = $2::uuid
+          and p.owner_user_id = $1::uuid
+        returning {BI_PANEL_CARD_COLUMNS}
+        "#
+    ))
+    .bind(owner_user_id)
+    .bind(panel_id)
+    .bind(request.managed_database_id)
+    .bind(request.source_action_id)
+    .bind(title)
+    .bind(description)
+    .bind(request.kind.as_str())
+    .bind(required_string("sql", &request.sql)?)
+    .bind(chart)
+    .bind(layout)
+    .bind(result)
+    .fetch_optional(&storage.pool)
+    .await
+    .map_err(map_database_error)?;
+
+    row.ok_or(StorageError::NotFound)?.try_into()
+}
+
+pub(crate) async fn get_bi_panel_card(
+    storage: &Storage,
+    owner_user_id: &str,
+    panel_id: &str,
+    card_id: &str,
+) -> Result<BiPanelCard, StorageError> {
+    fetch_card(storage, owner_user_id, panel_id, card_id).await
+}
+
+pub(crate) async fn update_bi_panel_card(
+    storage: &Storage,
+    owner_user_id: &str,
+    panel_id: &str,
+    card_id: &str,
+    request: UpdateBiPanelCardRequest,
+) -> Result<BiPanelCard, StorageError> {
+    let title = request
+        .title
+        .map(|value| required_string("title", &value))
+        .transpose()?;
+    let description_present = request.description.is_some();
+    let description = blank_to_none(request.description);
+    let row = sqlx::query_as::<_, BiPanelCardRow>(&format!(
+        r#"
+        update bi_panel_cards
+        set title = coalesce($4, title),
+            description = case when $5 then $6 else description end,
+            updated_at = now()
+        where id = $3::uuid
+          and panel_id = $2::uuid
+          and owner_user_id = $1::uuid
+        returning {BI_PANEL_CARD_COLUMNS}
+        "#
+    ))
+    .bind(owner_user_id)
+    .bind(panel_id)
+    .bind(card_id)
+    .bind(title)
+    .bind(description_present)
+    .bind(description)
+    .fetch_optional(&storage.pool)
+    .await
+    .map_err(map_database_error)?;
+
+    row.ok_or(StorageError::NotFound)?.try_into()
+}
+
+pub(crate) async fn update_bi_panel_layout(
+    storage: &Storage,
+    owner_user_id: &str,
+    panel_id: &str,
+    layouts: Vec<BiCardLayoutUpdate>,
+) -> Result<BiPanel, StorageError> {
+    let mut transaction = storage.pool.begin().await.map_err(map_database_error)?;
+
+    for update in layouts {
+        validate_layout(&update.layout)?;
+        let layout = checked_json("layout", &update.layout)?;
+        let result = sqlx::query(
+            r#"
+            update bi_panel_cards
+            set layout = $4,
+                updated_at = now()
+            where owner_user_id = $1::uuid
+              and panel_id = $2::uuid
+              and id = $3::uuid
+            "#,
+        )
+        .bind(owner_user_id)
+        .bind(panel_id)
+        .bind(update.card_id)
+        .bind(layout)
+        .execute(&mut *transaction)
+        .await
+        .map_err(map_database_error)?;
+
+        if result.rows_affected() == 0 {
+            return Err(StorageError::NotFound);
+        }
+    }
+
+    sqlx::query(
+        r#"
+        update bi_panels
+        set updated_at = now()
+        where id = $2::uuid
+          and owner_user_id = $1::uuid
+        "#,
+    )
+    .bind(owner_user_id)
+    .bind(panel_id)
+    .execute(&mut *transaction)
+    .await
+    .map_err(map_database_error)?;
+
+    transaction.commit().await.map_err(map_database_error)?;
+    fetch_panel(storage, owner_user_id, panel_id).await
+}
+
+pub(crate) async fn update_bi_panel_card_result(
+    storage: &Storage,
+    owner_user_id: &str,
+    panel_id: &str,
+    card_id: &str,
+    result: BiQueryResult,
+) -> Result<BiPanelCard, StorageError> {
+    let result = checked_json("result", &result)?;
+    let row = sqlx::query_as::<_, BiPanelCardRow>(&format!(
+        r#"
+        update bi_panel_cards
+        set result = $4,
+            updated_at = now()
+        where id = $3::uuid
+          and panel_id = $2::uuid
+          and owner_user_id = $1::uuid
+        returning {BI_PANEL_CARD_COLUMNS}
+        "#
+    ))
+    .bind(owner_user_id)
+    .bind(panel_id)
+    .bind(card_id)
+    .bind(result)
+    .fetch_optional(&storage.pool)
+    .await
+    .map_err(map_database_error)?;
+
+    row.ok_or(StorageError::NotFound)?.try_into()
+}
+
+pub(crate) async fn delete_bi_panel_card(
+    storage: &Storage,
+    owner_user_id: &str,
+    panel_id: &str,
+    card_id: &str,
+) -> Result<(), StorageError> {
+    let result = sqlx::query(
+        r#"
+        delete from bi_panel_cards
+        where id = $3::uuid
+          and panel_id = $2::uuid
+          and owner_user_id = $1::uuid
+        "#,
+    )
+    .bind(owner_user_id)
+    .bind(panel_id)
+    .bind(card_id)
+    .execute(&storage.pool)
+    .await
+    .map_err(map_database_error)?;
+
+    if result.rows_affected() == 0 {
+        return Err(StorageError::NotFound);
+    }
+
+    Ok(())
+}
+
+pub(crate) async fn export_bi_panel(
+    storage: &Storage,
+    owner_user_id: &str,
+    panel_id: &str,
+) -> Result<BiPanelExport, StorageError> {
+    Ok(BiPanelExport {
+        exported_at: OffsetDateTime::now_utc(),
+        panel: fetch_panel(storage, owner_user_id, panel_id).await?,
+    })
+}
+
+async fn fetch_panel(
+    storage: &Storage,
+    owner_user_id: &str,
+    panel_id: &str,
+) -> Result<BiPanel, StorageError> {
+    let row = sqlx::query_as::<_, BiPanelRow>(&format!(
+        r#"
+        select {BI_PANEL_COLUMNS}
+        from bi_panels
+        where id = $2::uuid
+          and owner_user_id = $1::uuid
+        "#
+    ))
+    .bind(owner_user_id)
+    .bind(panel_id)
+    .fetch_optional(&storage.pool)
+    .await
+    .map_err(map_database_error)?;
+
+    let panel = row.ok_or(StorageError::NotFound)?.try_into()?;
+    panel_with_cards(storage, owner_user_id, panel).await
+}
+
+async fn panel_with_cards(
+    storage: &Storage,
+    owner_user_id: &str,
+    mut panel: BiPanel,
+) -> Result<BiPanel, StorageError> {
+    panel.cards = list_cards(storage, owner_user_id, &panel.id).await?;
+    Ok(panel)
+}
+
+async fn list_cards(
+    storage: &Storage,
+    owner_user_id: &str,
+    panel_id: &str,
+) -> Result<Vec<BiPanelCard>, StorageError> {
+    let rows = sqlx::query_as::<_, BiPanelCardRow>(&format!(
+        r#"
+        select {BI_PANEL_CARD_COLUMNS}
+        from bi_panel_cards
+        where owner_user_id = $1::uuid
+          and panel_id = $2::uuid
+        order by (layout->>'y')::int, (layout->>'x')::int, created_at
+        "#
+    ))
+    .bind(owner_user_id)
+    .bind(panel_id)
+    .fetch_all(&storage.pool)
+    .await
+    .map_err(map_database_error)?;
+
+    rows.into_iter().map(BiPanelCard::try_from).collect()
+}
+
+async fn fetch_card(
+    storage: &Storage,
+    owner_user_id: &str,
+    panel_id: &str,
+    card_id: &str,
+) -> Result<BiPanelCard, StorageError> {
+    let row = sqlx::query_as::<_, BiPanelCardRow>(&format!(
+        r#"
+        select {BI_PANEL_CARD_COLUMNS}
+        from bi_panel_cards
+        where owner_user_id = $1::uuid
+          and panel_id = $2::uuid
+          and id = $3::uuid
+        "#
+    ))
+    .bind(owner_user_id)
+    .bind(panel_id)
+    .bind(card_id)
+    .fetch_optional(&storage.pool)
+    .await
+    .map_err(map_database_error)?;
+
+    row.ok_or(StorageError::NotFound)?.try_into()
+}
+
+fn validate_card_request(request: &CreateBiPanelCardRequest) -> Result<(), StorageError> {
+    required_string("sql", &request.sql)?;
+    validate_layout(&request.layout)?;
+
+    if request.kind == BiCardKind::Chart {
+        let chart = request.chart.as_ref().ok_or_else(|| {
+            StorageError::Validation("chart cards require chart configuration".to_owned())
+        })?;
+        validate_chart(chart)?;
+    }
+
+    Ok(())
+}
+
+fn validate_layout(layout: &BiCardLayout) -> Result<(), StorageError> {
+    if layout.x < 0 || layout.y < 0 || layout.w <= 0 || layout.h <= 0 || layout.w > 12 {
+        return Err(StorageError::Validation(
+            "invalid BI card layout".to_owned(),
+        ));
+    }
+
+    Ok(())
+}
+
+fn validate_chart(chart: &BiChartConfig) -> Result<(), StorageError> {
+    required_string("x_key", &chart.x_key)?;
+
+    if chart.y_keys.is_empty() {
+        return Err(StorageError::Validation(
+            "chart cards require at least one y key".to_owned(),
+        ));
+    }
+
+    for key in &chart.y_keys {
+        required_string("y_key", key)?;
+    }
+
+    Ok(())
+}
+
+fn checked_json<T: serde::Serialize>(field: &str, value: &T) -> Result<Value, StorageError> {
+    serde_json::to_value(value)
+        .map_err(|error| StorageError::Validation(format!("{field} is invalid: {error}")))
+}
+
+fn checked_optional_json<T: serde::Serialize>(
+    field: &str,
+    value: &Option<T>,
+) -> Result<Option<Value>, StorageError> {
+    value
+        .as_ref()
+        .map(|value| checked_json(field, value))
+        .transpose()
+}
+
+fn blank_to_none(value: Option<String>) -> Option<String> {
+    value
+        .map(|value| value.trim().to_owned())
+        .filter(|value| !value.is_empty())
+}
+
+#[derive(sqlx::FromRow)]
+struct BiPanelRow {
+    id: String,
+    conversation_id: String,
+    title: String,
+    description: Option<String>,
+    created_at: OffsetDateTime,
+    updated_at: OffsetDateTime,
+}
+
+#[derive(sqlx::FromRow)]
+struct BiPanelCardRow {
+    id: String,
+    panel_id: String,
+    managed_database_id: String,
+    source_action_id: Option<String>,
+    title: String,
+    description: Option<String>,
+    kind: String,
+    sql: String,
+    chart: Option<Value>,
+    layout: Value,
+    result: Value,
+    created_at: OffsetDateTime,
+    updated_at: OffsetDateTime,
+}
+
+impl TryFrom<BiPanelRow> for BiPanel {
+    type Error = StorageError;
+
+    fn try_from(row: BiPanelRow) -> Result<Self, Self::Error> {
+        Ok(Self {
+            id: row.id,
+            conversation_id: row.conversation_id,
+            title: row.title,
+            description: row.description,
+            cards: Vec::new(),
+            created_at: row.created_at,
+            updated_at: row.updated_at,
+        })
+    }
+}
+
+impl TryFrom<BiPanelCardRow> for BiPanelCard {
+    type Error = StorageError;
+
+    fn try_from(row: BiPanelCardRow) -> Result<Self, Self::Error> {
+        Ok(Self {
+            id: row.id,
+            panel_id: row.panel_id,
+            managed_database_id: row.managed_database_id,
+            source_action_id: row.source_action_id,
+            title: row.title,
+            description: row.description,
+            kind: parse_card_kind(&row.kind)?,
+            sql: row.sql,
+            chart: row
+                .chart
+                .map(serde_json::from_value)
+                .transpose()
+                .map_err(json_error)?,
+            layout: serde_json::from_value(row.layout).map_err(json_error)?,
+            result: serde_json::from_value(row.result).map_err(json_error)?,
+            created_at: row.created_at,
+            updated_at: row.updated_at,
+        })
+    }
+}
+
+fn parse_card_kind(value: &str) -> Result<BiCardKind, StorageError> {
+    match value {
+        "table" => Ok(BiCardKind::Table),
+        "chart" => Ok(BiCardKind::Chart),
+        other => Err(StorageError::Validation(format!(
+            "unsupported BI card kind: {other}"
+        ))),
+    }
+}
+
+fn json_error(error: serde_json::Error) -> StorageError {
+    StorageError::Validation(error.to_string())
+}

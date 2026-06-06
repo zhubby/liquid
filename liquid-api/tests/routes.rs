@@ -25,17 +25,19 @@ use liquid_api::{
     ManagedDatabaseConnectionTester, router, router_with_cors,
 };
 use liquid_core::{
-    AgentAction, AgentActionStatus, AgentConversation, AgentEventRecord, AgentEventType,
-    AgentMessage, AgentMessageRole, AgentResourceKind, AgentTurn, AgentTurnStatus,
-    ApproveSqlAuditRequest, AuditSummary, AuthResponse, CreateAgentActionRequest,
-    CreateAgentConversationRequest, CreateAgentTurnRequest, CreateManagedDatabaseRequest,
+    AgentAction, AgentActionKind, AgentActionStatus, AgentConversation, AgentEventRecord,
+    AgentEventType, AgentMessage, AgentMessageRole, AgentResourceKind, AgentTurn, AgentTurnStatus,
+    ApproveSqlAuditRequest, AuditSummary, AuthResponse, BiCardLayoutUpdate, BiPanel, BiPanelCard,
+    BiPanelExport, BiQueryResult, CreateAgentActionRequest, CreateAgentConversationRequest,
+    CreateAgentTurnRequest, CreateBiPanelCardRequest, CreateManagedDatabaseRequest,
     LlmProviderSettings, LoginRequest, ManagedDatabase, ManagedDatabaseConnectionLoader,
     ManagedDatabaseConnectionLoaderError, ManagedDatabaseConnectionSpec, ManagedDatabaseEngine,
     ManagedDatabasePoolKey, ManagedDatabasePoolPolicy, ManagedDatabaseSslMode, PublicUser,
     RegisterRequest, RejectSqlAuditRequest, ResolvedLlmProviderSettings, SqlAuditExecutionResult,
     SqlAuditRecord, SqlAuditReport, SqlAuditRequest, SqlAuditStatus,
-    UpdateAgentConversationRequest, UpdateCurrentUserRequest, UpdateLlmProviderSettingsRequest,
-    UpdateManagedDatabaseRequest, UpdatePasswordRequest,
+    UpdateAgentConversationRequest, UpdateBiPanelCardRequest, UpdateBiPanelRequest,
+    UpdateCurrentUserRequest, UpdateLlmProviderSettingsRequest, UpdateManagedDatabaseRequest,
+    UpdatePasswordRequest,
 };
 use liquid_sql::{PgSqlAnalysisRequest, PgSqlStatementKind, analyze_postgres_sql};
 use liquid_storage::{
@@ -65,6 +67,8 @@ struct TestStore {
     turns: Mutex<Vec<AgentTurn>>,
     events: Mutex<Vec<AgentEventRecord>>,
     actions: Mutex<Vec<AgentAction>>,
+    panels: Mutex<Vec<BiPanel>>,
+    panel_cards: Mutex<Vec<BiPanelCard>>,
     user: Mutex<PublicUser>,
     llm_settings: Mutex<Option<ResolvedLlmProviderSettings>>,
 }
@@ -81,6 +85,8 @@ impl Default for TestStore {
             turns: Mutex::new(Vec::new()),
             events: Mutex::new(Vec::new()),
             actions: Mutex::new(Vec::new()),
+            panels: Mutex::new(Vec::new()),
+            panel_cards: Mutex::new(Vec::new()),
             user: Mutex::new(test_user()),
             llm_settings: Mutex::new(None),
         }
@@ -944,9 +950,273 @@ impl LiquidStore for TestStore {
         Ok(action.clone())
     }
 
+    async fn get_or_create_bi_panel(
+        &self,
+        owner_user_id: &str,
+        conversation_id: &str,
+    ) -> Result<BiPanel, StorageError> {
+        let conversation = self
+            .get_agent_conversation(owner_user_id, conversation_id)
+            .await?;
+        let mut panels = self.panels.lock().unwrap();
+
+        if let Some(panel) = panels
+            .iter()
+            .find(|panel| panel.conversation_id == conversation_id)
+            .cloned()
+        {
+            let cards = self.panel_cards.lock().unwrap();
+            return Ok(attach_panel_cards(panel, &cards));
+        }
+
+        let panel = BiPanel {
+            id: format!("panel-{}", panels.len() + 1),
+            conversation_id: conversation_id.to_owned(),
+            title: format!("{} BI Panel", conversation.title),
+            description: None,
+            cards: Vec::new(),
+            created_at: time::OffsetDateTime::UNIX_EPOCH,
+            updated_at: time::OffsetDateTime::UNIX_EPOCH,
+        };
+        panels.push(panel.clone());
+        Ok(panel)
+    }
+
+    async fn update_bi_panel(
+        &self,
+        owner_user_id: &str,
+        panel_id: &str,
+        request: UpdateBiPanelRequest,
+    ) -> Result<BiPanel, StorageError> {
+        let conversation_id = self
+            .panels
+            .lock()
+            .unwrap()
+            .iter()
+            .find(|panel| panel.id == panel_id)
+            .map(|panel| panel.conversation_id.clone())
+            .ok_or(StorageError::NotFound)?;
+        self.get_agent_conversation(owner_user_id, &conversation_id)
+            .await?;
+
+        let mut panels = self.panels.lock().unwrap();
+        let Some(panel) = panels.iter_mut().find(|panel| panel.id == panel_id) else {
+            return Err(StorageError::NotFound);
+        };
+
+        if let Some(title) = request.title {
+            panel.title = title;
+        }
+
+        if request.description.is_some() {
+            panel.description = request
+                .description
+                .map(|value| value.trim().to_owned())
+                .filter(|value| !value.is_empty());
+        }
+
+        let cards = self.panel_cards.lock().unwrap();
+        Ok(attach_panel_cards(panel.clone(), &cards))
+    }
+
+    async fn create_bi_panel_card(
+        &self,
+        owner_user_id: &str,
+        panel_id: &str,
+        request: CreateBiPanelCardRequest,
+    ) -> Result<BiPanelCard, StorageError> {
+        let conversation_id = self
+            .panels
+            .lock()
+            .unwrap()
+            .iter()
+            .find(|panel| panel.id == panel_id)
+            .map(|panel| panel.conversation_id.clone())
+            .ok_or(StorageError::NotFound)?;
+        self.get_agent_conversation(owner_user_id, &conversation_id)
+            .await?;
+        if !self
+            .databases
+            .lock()
+            .unwrap()
+            .iter()
+            .any(|database| database.id == request.managed_database_id)
+        {
+            return Err(StorageError::NotFound);
+        }
+
+        let mut cards = self.panel_cards.lock().unwrap();
+        let card = BiPanelCard {
+            id: format!("card-{}", cards.len() + 1),
+            panel_id: panel_id.to_owned(),
+            managed_database_id: request.managed_database_id,
+            source_action_id: request.source_action_id,
+            title: request.title,
+            description: request.description,
+            kind: request.kind,
+            sql: request.sql,
+            chart: request.chart,
+            layout: request.layout,
+            result: request.result,
+            created_at: time::OffsetDateTime::UNIX_EPOCH,
+            updated_at: time::OffsetDateTime::UNIX_EPOCH,
+        };
+        cards.push(card.clone());
+        Ok(card)
+    }
+
+    async fn get_bi_panel_card(
+        &self,
+        owner_user_id: &str,
+        panel_id: &str,
+        card_id: &str,
+    ) -> Result<BiPanelCard, StorageError> {
+        self.get_panel_for_owner(owner_user_id, panel_id).await?;
+        self.panel_cards
+            .lock()
+            .unwrap()
+            .iter()
+            .find(|card| card.id == card_id && card.panel_id == panel_id)
+            .cloned()
+            .ok_or(StorageError::NotFound)
+    }
+
+    async fn update_bi_panel_card(
+        &self,
+        owner_user_id: &str,
+        panel_id: &str,
+        card_id: &str,
+        request: UpdateBiPanelCardRequest,
+    ) -> Result<BiPanelCard, StorageError> {
+        self.get_panel_for_owner(owner_user_id, panel_id).await?;
+        let mut cards = self.panel_cards.lock().unwrap();
+        let Some(card) = cards
+            .iter_mut()
+            .find(|card| card.id == card_id && card.panel_id == panel_id)
+        else {
+            return Err(StorageError::NotFound);
+        };
+
+        if let Some(title) = request.title {
+            card.title = title;
+        }
+
+        if request.description.is_some() {
+            card.description = request
+                .description
+                .map(|value| value.trim().to_owned())
+                .filter(|value| !value.is_empty());
+        }
+
+        Ok(card.clone())
+    }
+
+    async fn update_bi_panel_layout(
+        &self,
+        owner_user_id: &str,
+        panel_id: &str,
+        layouts: Vec<BiCardLayoutUpdate>,
+    ) -> Result<BiPanel, StorageError> {
+        let panel = self.get_panel_for_owner(owner_user_id, panel_id).await?;
+        let mut cards = self.panel_cards.lock().unwrap();
+
+        for update in layouts {
+            let Some(card) = cards
+                .iter_mut()
+                .find(|card| card.id == update.card_id && card.panel_id == panel_id)
+            else {
+                return Err(StorageError::NotFound);
+            };
+
+            card.layout = update.layout;
+        }
+
+        Ok(attach_panel_cards(panel, &cards))
+    }
+
+    async fn update_bi_panel_card_result(
+        &self,
+        owner_user_id: &str,
+        panel_id: &str,
+        card_id: &str,
+        result: BiQueryResult,
+    ) -> Result<BiPanelCard, StorageError> {
+        self.get_panel_for_owner(owner_user_id, panel_id).await?;
+        let mut cards = self.panel_cards.lock().unwrap();
+        let Some(card) = cards
+            .iter_mut()
+            .find(|card| card.id == card_id && card.panel_id == panel_id)
+        else {
+            return Err(StorageError::NotFound);
+        };
+        card.result = result;
+        Ok(card.clone())
+    }
+
+    async fn delete_bi_panel_card(
+        &self,
+        owner_user_id: &str,
+        panel_id: &str,
+        card_id: &str,
+    ) -> Result<(), StorageError> {
+        self.get_panel_for_owner(owner_user_id, panel_id).await?;
+        let mut cards = self.panel_cards.lock().unwrap();
+        let before = cards.len();
+        cards.retain(|card| !(card.id == card_id && card.panel_id == panel_id));
+
+        if cards.len() == before {
+            return Err(StorageError::NotFound);
+        }
+
+        Ok(())
+    }
+
+    async fn export_bi_panel(
+        &self,
+        owner_user_id: &str,
+        panel_id: &str,
+    ) -> Result<BiPanelExport, StorageError> {
+        let panel = self.get_panel_for_owner(owner_user_id, panel_id).await?;
+        let cards = self.panel_cards.lock().unwrap();
+
+        Ok(BiPanelExport {
+            exported_at: time::OffsetDateTime::UNIX_EPOCH,
+            panel: attach_panel_cards(panel, &cards),
+        })
+    }
+
     async fn fail_stale_agent_turns(&self, _stale_after_seconds: i64) -> Result<u64, StorageError> {
         Ok(0)
     }
+}
+
+impl TestStore {
+    async fn get_panel_for_owner(
+        &self,
+        owner_user_id: &str,
+        panel_id: &str,
+    ) -> Result<BiPanel, StorageError> {
+        let panel = self
+            .panels
+            .lock()
+            .unwrap()
+            .iter()
+            .find(|panel| panel.id == panel_id)
+            .cloned()
+            .ok_or(StorageError::NotFound)?;
+        self.get_agent_conversation(owner_user_id, &panel.conversation_id)
+            .await?;
+        Ok(panel)
+    }
+}
+
+fn attach_panel_cards(mut panel: BiPanel, cards: &[BiPanelCard]) -> BiPanel {
+    panel.cards = cards
+        .iter()
+        .filter(|card| card.panel_id == panel.id)
+        .cloned()
+        .collect();
+    panel
 }
 
 #[async_trait]
@@ -1104,10 +1374,10 @@ async fn spawn_delayed_openai_compatible_mock_with_content(
                 return;
             };
             let request = String::from_utf8_lossy(&buffer[..read]);
-            if let Some((_, body)) = request.split_once("\r\n\r\n") {
-                if let Ok(json) = serde_json::from_str::<Value>(body) {
-                    *captured_for_task.lock().unwrap() = Some(json);
-                }
+            if let Some((_, body)) = request.split_once("\r\n\r\n")
+                && let Ok(json) = serde_json::from_str::<Value>(body)
+            {
+                *captured_for_task.lock().unwrap() = Some(json);
             }
 
             let _ = (&mut wait_for_release).await;
@@ -1162,10 +1432,10 @@ where
                 return;
             };
             let request = String::from_utf8_lossy(&buffer[..read]);
-            if let Some((_, body)) = request.split_once("\r\n\r\n") {
-                if let Ok(json) = serde_json::from_str::<Value>(body) {
-                    *captured_for_task.lock().unwrap() = Some(json);
-                }
+            if let Some((_, body)) = request.split_once("\r\n\r\n")
+                && let Ok(json) = serde_json::from_str::<Value>(body)
+            {
+                *captured_for_task.lock().unwrap() = Some(json);
             }
             let content = contents
                 .pop_front()
@@ -1275,6 +1545,15 @@ fn test_app_with_agent_execution_and_executor(
     executor: Arc<dyn ApprovedSqlExecutor>,
 ) -> Router {
     let store = Arc::new(TestStore::default());
+    test_app_with_agent_store_execution_and_executor(agent, store, sql_execution, executor)
+}
+
+fn test_app_with_agent_store_execution_and_executor(
+    agent: Arc<dyn SqlAuditAgent>,
+    store: Arc<TestStore>,
+    sql_execution: PostgresToolExecutionMode,
+    executor: Arc<dyn ApprovedSqlExecutor>,
+) -> Router {
     let loader: Arc<dyn ManagedDatabaseConnectionLoader> = store.clone();
     let pool_manager = Arc::new(ManagedDatabasePoolManager::with_connector(
         loader,
@@ -2420,6 +2699,33 @@ async fn applying_chat_sql_audit_action_uses_existing_audit_flow() {
     assert_eq!(action["resource_kind"], "sql_audit");
     assert_eq!(action["resource_id"], "audit-1");
 
+    let messages_response = app
+        .clone()
+        .oneshot(auth_request(
+            "/api/v1/chat/conversations/conversation-1/messages",
+        ))
+        .await
+        .unwrap();
+    assert_eq!(messages_response.status(), StatusCode::OK);
+    let messages = response_json(messages_response).await;
+    assert_eq!(messages.as_array().unwrap().len(), 3);
+    assert_eq!(messages[2]["role"], "tool");
+    assert!(messages[2]["content"].as_str().unwrap().contains("audit-1"));
+
+    let stream_response = app
+        .clone()
+        .oneshot(auth_request("/api/v1/chat/turns/turn-1/stream?after_seq=0"))
+        .await
+        .unwrap();
+    assert_eq!(stream_response.status(), StatusCode::OK);
+    let stream_body = axum::body::to_bytes(stream_response.into_body(), usize::MAX)
+        .await
+        .unwrap();
+    let stream_body = String::from_utf8(stream_body.to_vec()).unwrap();
+    assert!(stream_body.contains(r#""type":"message_created""#));
+    assert!(stream_body.contains(r#""role":"tool""#));
+    assert!(stream_body.contains(r#""type":"action_updated""#));
+
     let audit_response = app
         .oneshot(auth_request("/api/v1/sql-audits/audit-1"))
         .await
@@ -2428,6 +2734,197 @@ async fn applying_chat_sql_audit_action_uses_existing_audit_flow() {
     let audit = response_json(audit_response).await;
     assert_eq!(audit["sql"], "select * from users");
     assert_eq!(audit["status"], "audited");
+}
+
+#[tokio::test]
+async fn applying_chat_bi_card_action_imports_card_into_workspace_panel() {
+    let store = Arc::new(TestStore::default());
+    let app = test_app_with_agent_store_execution_and_executor(
+        Arc::new(MockSqlAuditAgent),
+        store.clone(),
+        PostgresToolExecutionMode::Readonly,
+        Arc::new(FakeApprovedSqlExecutor::default()),
+    );
+    let database = store
+        .create_managed_database(
+            "user-1",
+            CreateManagedDatabaseRequest {
+                name: "Warehouse".to_owned(),
+                engine: ManagedDatabaseEngine::Postgres,
+                host: "localhost".to_owned(),
+                port: 5432,
+                database: "warehouse".to_owned(),
+                username: "readonly".to_owned(),
+                password: "password123".to_owned(),
+                ssl_mode: ManagedDatabaseSslMode::Disable,
+            },
+        )
+        .await
+        .unwrap();
+    let conversation = store
+        .create_agent_conversation(
+            "user-1",
+            CreateAgentConversationRequest {
+                title: Some("BI workspace".to_owned()),
+            },
+        )
+        .await
+        .unwrap();
+    let turn = store
+        .create_agent_turn(
+            "user-1",
+            &conversation.id,
+            CreateAgentTurnRequest {
+                message: "show revenue".to_owned(),
+                managed_database_id: Some(database.id.clone()),
+                dashboard_context: None,
+                client_request_id: None,
+            },
+        )
+        .await
+        .unwrap();
+    let action = store
+        .create_agent_action(
+            "user-1",
+            &turn.id,
+            CreateAgentActionRequest {
+                kind: AgentActionKind::CreateBiCard,
+                title: "Create BI card".to_owned(),
+                description: "Import revenue table".to_owned(),
+                payload: json!({
+                    "managed_database_id": database.id,
+                    "title": "Daily revenue",
+                    "description": "Revenue by day",
+                    "kind": "table",
+                    "sql": "select '2026-06-06' as day, 42 as revenue",
+                    "layout": { "x": 0, "y": 0, "w": 12, "h": 5 },
+                    "result": {
+                        "columns": ["day", "revenue"],
+                        "rows": [{ "day": "2026-06-06", "revenue": 42 }],
+                        "row_count": 1,
+                        "truncated": false,
+                        "elapsed_ms": 2,
+                        "refreshed_at": "1970-01-01T00:00:00Z"
+                    }
+                }),
+                resource_kind: Some(AgentResourceKind::BiPanelCard),
+                resource_id: None,
+                requires_confirmation: true,
+            },
+        )
+        .await
+        .unwrap();
+
+    let apply_response = app
+        .clone()
+        .oneshot(auth_json_request(
+            "POST",
+            &format!("/api/v1/chat/actions/{}/apply", action.id),
+            json!({}),
+        ))
+        .await
+        .unwrap();
+    assert_eq!(apply_response.status(), StatusCode::OK);
+    let action = response_json(apply_response).await;
+    assert_eq!(action["status"], "applied");
+    assert_eq!(action["resource_kind"], "bi_panel_card");
+    assert_eq!(action["preview"]["kind"], "bi_card");
+    assert_eq!(action["preview"]["title"], "Daily revenue");
+
+    let panel_response = app
+        .oneshot(auth_request(&format!(
+            "/api/v1/chat/conversations/{}/bi-panel",
+            conversation.id
+        )))
+        .await
+        .unwrap();
+    assert_eq!(panel_response.status(), StatusCode::OK);
+    let panel = response_json(panel_response).await;
+    assert_eq!(panel["cards"].as_array().unwrap().len(), 1);
+    assert_eq!(panel["cards"][0]["title"], "Daily revenue");
+}
+
+#[tokio::test]
+async fn refreshing_bi_card_rejects_non_select_sql_before_pool_use() {
+    let store = Arc::new(TestStore::default());
+    let app = test_app_with_agent_store_execution_and_executor(
+        Arc::new(MockSqlAuditAgent),
+        store.clone(),
+        PostgresToolExecutionMode::Readonly,
+        Arc::new(FakeApprovedSqlExecutor::default()),
+    );
+    let database = store
+        .create_managed_database(
+            "user-1",
+            CreateManagedDatabaseRequest {
+                name: "Warehouse".to_owned(),
+                engine: ManagedDatabaseEngine::Postgres,
+                host: "localhost".to_owned(),
+                port: 5432,
+                database: "warehouse".to_owned(),
+                username: "readonly".to_owned(),
+                password: "password123".to_owned(),
+                ssl_mode: ManagedDatabaseSslMode::Disable,
+            },
+        )
+        .await
+        .unwrap();
+    let conversation = store
+        .create_agent_conversation(
+            "user-1",
+            CreateAgentConversationRequest {
+                title: Some("BI workspace".to_owned()),
+            },
+        )
+        .await
+        .unwrap();
+    let panel = store
+        .get_or_create_bi_panel("user-1", &conversation.id)
+        .await
+        .unwrap();
+    let card = store
+        .create_bi_panel_card(
+            "user-1",
+            &panel.id,
+            CreateBiPanelCardRequest {
+                managed_database_id: database.id,
+                source_action_id: None,
+                title: "Bad card".to_owned(),
+                description: None,
+                kind: liquid_core::BiCardKind::Table,
+                sql: "delete from users".to_owned(),
+                chart: None,
+                layout: liquid_core::BiCardLayout {
+                    x: 0,
+                    y: 0,
+                    w: 12,
+                    h: 5,
+                },
+                result: BiQueryResult {
+                    columns: vec![],
+                    rows: vec![],
+                    row_count: 0,
+                    truncated: false,
+                    elapsed_ms: 0,
+                    refreshed_at: time::OffsetDateTime::UNIX_EPOCH,
+                },
+            },
+        )
+        .await
+        .unwrap();
+
+    let response = app
+        .oneshot(auth_json_request(
+            "POST",
+            &format!("/api/v1/bi-panels/{}/cards/{}/refresh", panel.id, card.id),
+            json!({}),
+        ))
+        .await
+        .unwrap();
+
+    assert_eq!(response.status(), StatusCode::BAD_REQUEST);
+    let payload = response_json(response).await;
+    assert!(payload["error"].as_str().unwrap().contains("SELECT"));
 }
 
 #[tokio::test]

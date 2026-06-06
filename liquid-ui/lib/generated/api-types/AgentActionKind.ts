@@ -2,6 +2,7 @@
 
 export type AgentActionKind =
   | "create_sql_audit"
+  | "create_bi_card"
   | "approve_sql_audit"
   | "reject_sql_audit"
   | "execute_sql_audit"

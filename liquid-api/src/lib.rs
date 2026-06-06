@@ -3,6 +3,7 @@ use axum::Router;
 mod agent_workbench;
 mod audit;
 mod auth;
+mod bi_panels;
 mod chat;
 mod cors;
 mod error;
@@ -24,6 +25,7 @@ pub fn router(state: ApiState) -> Router {
     Router::new()
         .merge(health::routes())
         .merge(chat::routes())
+        .merge(bi_panels::routes())
         .merge(auth::routes())
         .merge(audit::routes())
         .merge(managed_databases::routes())

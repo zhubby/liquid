@@ -2,21 +2,23 @@ use async_trait::async_trait;
 use liquid_core::{
     AgentAction, AgentActionStatus, AgentConversation, AgentEventRecord, AgentEventType,
     AgentMessage, AgentMessageRole, AgentResourceKind, AgentTurn, AgentTurnStatus,
-    ApproveSqlAuditRequest, AuthResponse, CompleteDatabaseBackup, CreateAgentActionRequest,
-    CreateAgentConversationRequest, CreateAgentTurnRequest, CreateManagedDatabaseRequest,
-    DatabaseBackupMetadataStore, DatabaseBackupMetadataStoreError, DatabaseBackupRecord,
-    DatabaseBackupStatus, DatabaseRestoreRecord, LlmProviderSettings, LoginRequest,
-    ManagedDatabase, ManagedDatabaseConnectionLoader, ManagedDatabaseConnectionLoaderError,
-    ManagedDatabaseConnectionSpec, ManagedDatabasePoolKey, PublicUser, RegisterRequest,
-    RejectSqlAuditRequest, ResolvedLlmProviderSettings, SqlAuditExecutionResult, SqlAuditRecord,
-    SqlAuditStatus, UpdateAgentConversationRequest, UpdateCurrentUserRequest,
+    ApproveSqlAuditRequest, AuthResponse, BiCardLayoutUpdate, BiPanel, BiPanelCard, BiPanelExport,
+    BiQueryResult, CompleteDatabaseBackup, CreateAgentActionRequest,
+    CreateAgentConversationRequest, CreateAgentTurnRequest, CreateBiPanelCardRequest,
+    CreateManagedDatabaseRequest, DatabaseBackupMetadataStore, DatabaseBackupMetadataStoreError,
+    DatabaseBackupRecord, DatabaseBackupStatus, DatabaseRestoreRecord, LlmProviderSettings,
+    LoginRequest, ManagedDatabase, ManagedDatabaseConnectionLoader,
+    ManagedDatabaseConnectionLoaderError, ManagedDatabaseConnectionSpec, ManagedDatabasePoolKey,
+    PublicUser, RegisterRequest, RejectSqlAuditRequest, ResolvedLlmProviderSettings,
+    SqlAuditExecutionResult, SqlAuditRecord, SqlAuditStatus, UpdateAgentConversationRequest,
+    UpdateBiPanelCardRequest, UpdateBiPanelRequest, UpdateCurrentUserRequest,
     UpdateLlmProviderSettingsRequest, UpdateManagedDatabaseRequest, UpdatePasswordRequest,
 };
 use serde_json::Value;
 use sqlx::{PgPool, postgres::PgPoolOptions};
 
 use crate::{
-    agent_workbench, auth,
+    agent_workbench, auth, bi_panels,
     crypto::PasswordCipher,
     database_backups,
     error::StorageError,
@@ -638,6 +640,87 @@ impl LiquidStore for Storage {
             resource_id,
         )
         .await
+    }
+
+    async fn get_or_create_bi_panel(
+        &self,
+        owner_user_id: &str,
+        conversation_id: &str,
+    ) -> Result<BiPanel, StorageError> {
+        bi_panels::get_or_create_bi_panel(self, owner_user_id, conversation_id).await
+    }
+
+    async fn update_bi_panel(
+        &self,
+        owner_user_id: &str,
+        panel_id: &str,
+        request: UpdateBiPanelRequest,
+    ) -> Result<BiPanel, StorageError> {
+        bi_panels::update_bi_panel(self, owner_user_id, panel_id, request).await
+    }
+
+    async fn create_bi_panel_card(
+        &self,
+        owner_user_id: &str,
+        panel_id: &str,
+        request: CreateBiPanelCardRequest,
+    ) -> Result<BiPanelCard, StorageError> {
+        bi_panels::create_bi_panel_card(self, owner_user_id, panel_id, request).await
+    }
+
+    async fn get_bi_panel_card(
+        &self,
+        owner_user_id: &str,
+        panel_id: &str,
+        card_id: &str,
+    ) -> Result<BiPanelCard, StorageError> {
+        bi_panels::get_bi_panel_card(self, owner_user_id, panel_id, card_id).await
+    }
+
+    async fn update_bi_panel_card(
+        &self,
+        owner_user_id: &str,
+        panel_id: &str,
+        card_id: &str,
+        request: UpdateBiPanelCardRequest,
+    ) -> Result<BiPanelCard, StorageError> {
+        bi_panels::update_bi_panel_card(self, owner_user_id, panel_id, card_id, request).await
+    }
+
+    async fn update_bi_panel_layout(
+        &self,
+        owner_user_id: &str,
+        panel_id: &str,
+        layouts: Vec<BiCardLayoutUpdate>,
+    ) -> Result<BiPanel, StorageError> {
+        bi_panels::update_bi_panel_layout(self, owner_user_id, panel_id, layouts).await
+    }
+
+    async fn update_bi_panel_card_result(
+        &self,
+        owner_user_id: &str,
+        panel_id: &str,
+        card_id: &str,
+        result: BiQueryResult,
+    ) -> Result<BiPanelCard, StorageError> {
+        bi_panels::update_bi_panel_card_result(self, owner_user_id, panel_id, card_id, result).await
+    }
+
+    async fn delete_bi_panel_card(
+        &self,
+        owner_user_id: &str,
+        panel_id: &str,
+        card_id: &str,
+    ) -> Result<(), StorageError> {
+        bi_panels::delete_bi_panel_card(self, owner_user_id, panel_id, card_id).await
+    }
+
+    async fn export_bi_panel(
+        &self,
+        owner_user_id: &str,
+        panel_id: &str,
+    ) -> Result<BiPanelExport, StorageError> {
+        bi_panels::export_bi_panel(self, owner_user_id, panel_id).await
     }
 
     async fn fail_stale_agent_turns(&self, stale_after_seconds: i64) -> Result<u64, StorageError> {

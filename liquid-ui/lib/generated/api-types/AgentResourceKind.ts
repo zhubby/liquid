@@ -2,6 +2,7 @@
 
 export type AgentResourceKind =
   | "sql_audit"
+  | "bi_panel_card"
   | "managed_database"
   | "database_backup"
   | "database_restore";

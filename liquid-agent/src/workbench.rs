@@ -2,8 +2,8 @@ use std::sync::Arc;
 
 use anyhow::{Context, Result, bail};
 use liquid_core::{
-    AgentAction, AgentActionKind, AgentMessage, AgentResourceKind, AuditSummary, ManagedDatabase,
-    SqlAuditRecord,
+    AgentAction, AgentActionKind, AgentMessage, AgentResourceKind, AuditSummary, BiCardKind,
+    BiChartConfig, BiChartType, ManagedDatabase, SqlAuditRecord,
 };
 use liquid_llm::{LlmClient, LlmMessage, LlmProtocol, LlmRequest};
 use serde::Deserialize;
@@ -14,6 +14,7 @@ Answer the user's current message using the provided conversation, managed datab
 You may propose actions only when the user intent is clear.
 Allowed actions:
 - create_sql_audit: propose a SQL audit for SQL supplied by the user.
+- create_bi_card: propose a BI table or chart card backed by one read-only SELECT statement.
 - approve_sql_audit: propose approving one of the provided SQL audit IDs.
 - reject_sql_audit: propose rejecting one of the provided SQL audit IDs.
 - execute_sql_audit: propose executing one of the provided SQL audit IDs.
@@ -30,6 +31,17 @@ Return JSON only with this shape:
       "context": "optional",
       "schema": "optional",
       "execution_purpose": "optional"
+    },
+    {
+      "kind": "create_bi_card",
+      "title": "Risk trend",
+      "description": "Optional short card description",
+      "display": "table|chart",
+      "sql": "select day, risk_count from ...",
+      "chart_type": "line|bar|area|pie",
+      "x_key": "day",
+      "y_keys": ["risk_count"],
+      "limit": 100
     },
     {
       "kind": "approve_sql_audit|reject_sql_audit|execute_sql_audit",
@@ -322,6 +334,21 @@ enum LlmWorkbenchAction {
         #[serde(default)]
         execution_purpose: Option<String>,
     },
+    CreateBiCard {
+        title: String,
+        #[serde(default)]
+        description: Option<String>,
+        display: BiCardKind,
+        sql: String,
+        #[serde(default)]
+        chart_type: Option<BiChartType>,
+        #[serde(default)]
+        x_key: Option<String>,
+        #[serde(default)]
+        y_keys: Vec<String>,
+        #[serde(default)]
+        limit: Option<usize>,
+    },
     ApproveSqlAudit {
         title: String,
         description: String,
@@ -381,6 +408,59 @@ impl LlmWorkbenchAction {
                         "request": request,
                     }),
                     resource_kind: Some(AgentResourceKind::SqlAudit),
+                    resource_id: None,
+                    requires_confirmation: true,
+                })
+            }
+            Self::CreateBiCard {
+                title,
+                description,
+                display,
+                sql,
+                chart_type,
+                x_key,
+                y_keys,
+                limit,
+            } => {
+                let Some(database_id) = context
+                    .managed_database
+                    .as_ref()
+                    .map(|database| &database.id)
+                else {
+                    bail!("create_bi_card requires a selected managed database");
+                };
+                let sql = required_trimmed("sql", sql)?;
+                let title = required_trimmed("title", title)?;
+                let description = optional_trimmed(description);
+                let chart = match display {
+                    BiCardKind::Table => None,
+                    BiCardKind::Chart => Some(BiChartConfig {
+                        chart_type: chart_type
+                            .ok_or_else(|| anyhow::anyhow!("chart_type is required"))?,
+                        x_key: required_trimmed(
+                            "x_key",
+                            x_key.ok_or_else(|| anyhow::anyhow!("x_key is required"))?,
+                        )?,
+                        y_keys: required_y_keys(y_keys)?,
+                    }),
+                };
+
+                Ok(WorkbenchActionSuggestion {
+                    kind: AgentActionKind::CreateBiCard,
+                    title: title.clone(),
+                    description: description.clone().unwrap_or_else(|| {
+                        "Create a BI panel card from a read-only query.".to_owned()
+                    }),
+                    payload: json!({
+                        "managed_database_id": database_id,
+                        "title": title,
+                        "description": description,
+                        "kind": display,
+                        "sql": sql,
+                        "chart": chart,
+                        "limit": limit,
+                    }),
+                    resource_kind: Some(AgentResourceKind::BiPanelCard),
                     resource_id: None,
                     requires_confirmation: true,
                 })
@@ -469,6 +549,19 @@ fn optional_trimmed(value: Option<String>) -> Option<String> {
     value
         .map(|value| value.trim().to_owned())
         .filter(|value| !value.is_empty())
+}
+
+fn required_y_keys(values: Vec<String>) -> Result<Vec<String>> {
+    let keys = values
+        .into_iter()
+        .map(|value| required_trimmed("y_key", value))
+        .collect::<Result<Vec<_>>>()?;
+
+    if keys.is_empty() {
+        bail!("y_keys is required");
+    }
+
+    Ok(keys)
 }
 
 fn fenced_json(content: &str) -> Option<&str> {
@@ -711,6 +804,91 @@ mod tests {
         assert_eq!(
             response.actions[0].payload["request"]["context"],
             "from chat"
+        );
+    }
+
+    #[test]
+    fn parses_llm_bi_card_action() {
+        let response = parse_llm_workbench_response(
+            r#"{
+                "message": "I prepared a chart card.",
+                "actions": [{
+                    "kind": "create_bi_card",
+                    "title": "Risk trend",
+                    "description": "Risk count by day",
+                    "display": "chart",
+                    "sql": "select day, risk_count from risk_daily",
+                    "chart_type": "line",
+                    "x_key": "day",
+                    "y_keys": ["risk_count"],
+                    "limit": 50
+                }]
+            }"#,
+            &llm_context(),
+        )
+        .unwrap();
+
+        assert_eq!(response.actions.len(), 1);
+        assert_eq!(response.actions[0].kind, AgentActionKind::CreateBiCard);
+        assert_eq!(
+            response.actions[0].resource_kind,
+            Some(AgentResourceKind::BiPanelCard)
+        );
+        assert_eq!(response.actions[0].payload["managed_database_id"], "db-1");
+        assert_eq!(response.actions[0].payload["kind"], "chart");
+        assert_eq!(response.actions[0].payload["chart"]["chart_type"], "line");
+        assert_eq!(response.actions[0].payload["chart"]["x_key"], "day");
+        assert_eq!(
+            response.actions[0].payload["chart"]["y_keys"][0],
+            "risk_count"
+        );
+        assert_eq!(response.actions[0].payload["limit"], 50);
+    }
+
+    #[test]
+    fn rejects_bi_chart_without_y_keys() {
+        let error = parse_llm_workbench_response(
+            r#"{
+                "message": "I prepared a chart card.",
+                "actions": [{
+                    "kind": "create_bi_card",
+                    "title": "Risk trend",
+                    "display": "chart",
+                    "sql": "select day, risk_count from risk_daily",
+                    "chart_type": "line",
+                    "x_key": "day"
+                }]
+            }"#,
+            &llm_context(),
+        )
+        .unwrap_err();
+
+        assert_eq!(error.to_string(), "y_keys is required");
+    }
+
+    #[test]
+    fn rejects_unknown_bi_chart_type() {
+        let error = parse_llm_workbench_response(
+            r#"{
+                "message": "I prepared a chart card.",
+                "actions": [{
+                    "kind": "create_bi_card",
+                    "title": "Risk trend",
+                    "display": "chart",
+                    "sql": "select day, risk_count from risk_daily",
+                    "chart_type": "scatter",
+                    "x_key": "day",
+                    "y_keys": ["risk_count"]
+                }]
+            }"#,
+            &llm_context(),
+        )
+        .unwrap_err();
+
+        assert!(
+            error
+                .to_string()
+                .contains("LLM workbench response was not valid JSON")
         );
     }
 

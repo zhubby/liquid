@@ -23,6 +23,7 @@ use serde_json::Value;
 use tokio::time::sleep;
 
 use crate::{
+    agent_workbench::CreateBiCardActionPayload,
     agent_workbench::{append_event, apply_agent_action, run_agent_turn},
     auth::authenticated_user,
     error::ApiError,
@@ -352,7 +353,7 @@ async fn apply_action(
                     &action.id,
                     AgentActionStatus::Applied,
                     Some(resource_kind),
-                    Some(resource_id),
+                    Some(resource_id.clone()),
                 )
                 .await?;
             append_event(&state, &user.id, &action.turn_id, event_type, payload).await?;
@@ -364,6 +365,14 @@ async fn apply_action(
                 serde_json::json!({ "action": updated }),
             )
             .await?;
+            append_action_result_message(
+                &state,
+                &user.id,
+                &updated,
+                Some(resource_kind),
+                Some(resource_id),
+            )
+            .await;
             updated
         }
         Err(error) => {
@@ -409,8 +418,98 @@ async fn reject_action(
         serde_json::json!({ "action": action }),
     )
     .await?;
+    append_action_result_message(&state, &user.id, &action, None, None).await;
 
     Ok(Json(chat_action(action)))
+}
+
+async fn append_action_result_message(
+    state: &ApiState,
+    owner_user_id: &str,
+    action: &AgentAction,
+    resource_kind: Option<liquid_core::AgentResourceKind>,
+    resource_id: Option<String>,
+) {
+    let content = action_result_message(action, resource_kind, resource_id.as_deref());
+    let metadata = serde_json::json!({
+        "kind": "action_result",
+        "action_id": action.id,
+        "action_kind": action.kind,
+        "action_status": action.status,
+        "resource_kind": resource_kind,
+        "resource_id": resource_id,
+    });
+
+    let message = state
+        .store
+        .append_agent_message(
+            owner_user_id,
+            &action.conversation_id,
+            Some(&action.turn_id),
+            AgentMessageRole::Tool,
+            &content,
+            Some(metadata),
+        )
+        .await;
+
+    match message {
+        Ok(message) => {
+            if let Err(error) = append_event(
+                state,
+                owner_user_id,
+                &action.turn_id,
+                AgentEventType::MessageCreated,
+                serde_json::json!({
+                    "message_id": message.id,
+                    "role": "tool",
+                }),
+            )
+            .await
+            {
+                tracing::warn!(
+                    action_id = %action.id,
+                    error = %error,
+                    "failed to append action result message event"
+                );
+            }
+        }
+        Err(error) => {
+            tracing::warn!(
+                action_id = %action.id,
+                error = %error,
+                "failed to append action result message"
+            );
+        }
+    }
+}
+
+fn action_result_message(
+    action: &AgentAction,
+    resource_kind: Option<liquid_core::AgentResourceKind>,
+    resource_id: Option<&str>,
+) -> String {
+    match action.status {
+        AgentActionStatus::Applied => match resource_kind {
+            Some(liquid_core::AgentResourceKind::SqlAudit) => format!(
+                "SQL audit created and reviewed. Audit ID: {}.",
+                resource_id.unwrap_or("unknown")
+            ),
+            Some(liquid_core::AgentResourceKind::BiPanelCard) => format!(
+                "BI panel card created. Card ID: {}.",
+                resource_id.unwrap_or("unknown")
+            ),
+            Some(kind) => format!(
+                "Action applied. Resource {kind:?}: {}.",
+                resource_id.unwrap_or("unknown")
+            ),
+            None => "Action applied.".to_owned(),
+        },
+        AgentActionStatus::Rejected => "Action rejected.".to_owned(),
+        AgentActionStatus::Failed => "Action failed.".to_owned(),
+        AgentActionStatus::Proposed | AgentActionStatus::Superseded => {
+            "Action status updated.".to_owned()
+        }
+    }
 }
 
 async fn chat_stream_event(
@@ -622,10 +721,14 @@ fn chat_action(action: AgentAction) -> ChatAction {
 }
 
 fn chat_action_preview(action: &AgentAction) -> Option<ChatActionPreview> {
-    if action.kind != liquid_core::AgentActionKind::CreateSqlAudit {
-        return None;
+    match action.kind {
+        liquid_core::AgentActionKind::CreateSqlAudit => chat_sql_audit_preview(action),
+        liquid_core::AgentActionKind::CreateBiCard => chat_bi_card_preview(action),
+        _ => None,
     }
+}
 
+fn chat_sql_audit_preview(action: &AgentAction) -> Option<ChatActionPreview> {
     let request = action.payload.get("request")?;
     let sql = request.get("sql")?.as_str()?.to_owned();
     let context = request
@@ -642,6 +745,21 @@ fn chat_action_preview(action: &AgentAction) -> Option<ChatActionPreview> {
         sql,
         database_name,
         context,
+    })
+}
+
+fn chat_bi_card_preview(action: &AgentAction) -> Option<ChatActionPreview> {
+    let payload =
+        serde_json::from_value::<CreateBiCardActionPayload>(action.payload.clone()).ok()?;
+    let result = payload.result?;
+
+    Some(ChatActionPreview::BiCard {
+        title: payload.title,
+        description: payload.description,
+        card_kind: payload.kind,
+        sql: payload.sql,
+        chart: payload.chart,
+        result,
     })
 }
 

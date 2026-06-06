@@ -121,3 +121,13 @@
     font-family: Arial, Helvetica, sans-serif;
   }
 }
+
+@layer components {
+  .react-grid-item.react-grid-placeholder {
+    @apply rounded-lg border border-primary/30 bg-primary/10 opacity-100;
+  }
+
+  .react-grid-item > .react-resizable-handle::after {
+    @apply border-foreground/40;
+  }
+}

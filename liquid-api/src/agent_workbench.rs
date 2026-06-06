@@ -1,14 +1,16 @@
 use liquid_agent::{LlmWorkbenchAgent, LlmWorkbenchContext, WorkbenchResponse};
 use liquid_core::{
     AgentAction, AgentActionKind, AgentEventRecord, AgentEventType, AgentMessageRole,
-    AgentResourceKind, AgentTurn, AgentTurnStatus, ApproveSqlAuditRequest,
-    CreateAgentActionRequest, CreateSqlAuditRequest, PublicUser, RejectSqlAuditRequest,
+    AgentResourceKind, AgentTurn, AgentTurnStatus, ApproveSqlAuditRequest, BiCardKind,
+    BiCardLayout, BiChartConfig, BiPanel, BiPanelCard, BiQueryResult, CreateAgentActionRequest,
+    CreateBiPanelCardRequest, CreateSqlAuditRequest, PublicUser, RejectSqlAuditRequest,
     SqlAuditRecord,
 };
-use serde::Deserialize;
+use serde::{Deserialize, Serialize};
 use serde_json::{Value, json};
 
 use crate::{
+    bi_panels::materialize_bi_query,
     error::ApiError,
     llm_provider::user_llm_provider_for_user,
     sql_audits::{create_sql_audit_for_user, execute_sql_audit_for_user},
@@ -26,6 +28,24 @@ struct CreateSqlAuditActionPayload {
 #[derive(Debug, Deserialize)]
 struct SqlAuditActionPayload {
     sql_audit_id: String,
+}
+
+#[derive(Debug, Clone, Deserialize, Serialize)]
+pub(crate) struct CreateBiCardActionPayload {
+    pub(crate) managed_database_id: String,
+    pub(crate) title: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub(crate) description: Option<String>,
+    pub(crate) kind: BiCardKind,
+    pub(crate) sql: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub(crate) chart: Option<BiChartConfig>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub(crate) limit: Option<usize>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub(crate) layout: Option<BiCardLayout>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub(crate) result: Option<BiQueryResult>,
 }
 
 pub(crate) async fn run_agent_turn(
@@ -184,6 +204,7 @@ async fn persist_workbench_response(
     response: WorkbenchResponse,
 ) -> anyhow::Result<()> {
     for suggestion in response.actions {
+        let suggestion = prepare_workbench_action(state, owner_user_id, suggestion).await?;
         let action = state
             .store
             .create_agent_action(
@@ -260,6 +281,36 @@ async fn persist_workbench_response(
     Ok(())
 }
 
+async fn prepare_workbench_action(
+    state: &ApiState,
+    owner_user_id: &str,
+    mut suggestion: liquid_agent::WorkbenchActionSuggestion,
+) -> anyhow::Result<liquid_agent::WorkbenchActionSuggestion> {
+    if suggestion.kind != AgentActionKind::CreateBiCard {
+        return Ok(suggestion);
+    }
+
+    let mut payload: CreateBiCardActionPayload = serde_json::from_value(suggestion.payload.clone())
+        .map_err(|error| anyhow::anyhow!("invalid BI card action payload: {error}"))?;
+    let result = materialize_bi_query(
+        state,
+        owner_user_id,
+        &payload.managed_database_id,
+        &payload.sql,
+        payload.limit.unwrap_or(100),
+    )
+    .await
+    .map_err(|error| anyhow::anyhow!("{error}"))?;
+
+    ensure_chart_keys_available(payload.chart.as_ref(), &result)?;
+    payload.layout = Some(default_card_layout(payload.kind));
+    payload.result = Some(result);
+    suggestion.payload = serde_json::to_value(payload)
+        .map_err(|error| anyhow::anyhow!("failed to serialize BI card payload: {error}"))?;
+
+    Ok(suggestion)
+}
+
 pub(crate) async fn apply_agent_action(
     state: &ApiState,
     owner_user_id: &str,
@@ -279,6 +330,37 @@ pub(crate) async fn apply_agent_action(
             .await?;
 
             Ok(sql_audit_result(record, AgentEventType::ResourceCreated))
+        }
+        AgentActionKind::CreateBiCard => {
+            let payload: CreateBiCardActionPayload = serde_json::from_value(action.payload.clone())
+                .map_err(|error| ApiError::bad_request(error.to_string()))?;
+            let result = payload.result.ok_or_else(|| {
+                ApiError::bad_request("BI card action does not include a materialized result")
+            })?;
+            let panel = state
+                .store
+                .get_or_create_bi_panel(owner_user_id, &action.conversation_id)
+                .await?;
+            let card = state
+                .store
+                .create_bi_panel_card(
+                    owner_user_id,
+                    &panel.id,
+                    CreateBiPanelCardRequest {
+                        managed_database_id: payload.managed_database_id,
+                        source_action_id: Some(action.id.clone()),
+                        title: payload.title,
+                        description: payload.description,
+                        kind: payload.kind,
+                        sql: payload.sql,
+                        chart: payload.chart,
+                        layout: next_card_layout(&panel, payload.kind),
+                        result,
+                    },
+                )
+                .await?;
+
+            Ok(bi_card_result(card, AgentEventType::ResourceCreated))
         }
         AgentActionKind::ApproveSqlAudit => {
             let payload = sql_audit_payload(action)?;
@@ -327,6 +409,55 @@ pub(crate) async fn apply_agent_action(
     }
 }
 
+fn ensure_chart_keys_available(
+    chart: Option<&BiChartConfig>,
+    result: &BiQueryResult,
+) -> anyhow::Result<()> {
+    let Some(chart) = chart else {
+        return Ok(());
+    };
+
+    if !result.columns.iter().any(|column| column == &chart.x_key) {
+        anyhow::bail!("BI chart x_key is not present in query results");
+    }
+
+    for key in &chart.y_keys {
+        if !result.columns.iter().any(|column| column == key) {
+            anyhow::bail!("BI chart y_key is not present in query results: {key}");
+        }
+    }
+
+    Ok(())
+}
+
+fn default_card_layout(kind: BiCardKind) -> BiCardLayout {
+    match kind {
+        BiCardKind::Table => BiCardLayout {
+            x: 0,
+            y: 0,
+            w: 12,
+            h: 5,
+        },
+        BiCardKind::Chart => BiCardLayout {
+            x: 0,
+            y: 0,
+            w: 6,
+            h: 5,
+        },
+    }
+}
+
+fn next_card_layout(panel: &BiPanel, kind: BiCardKind) -> BiCardLayout {
+    let mut layout = default_card_layout(kind);
+    layout.y = panel
+        .cards
+        .iter()
+        .map(|card| card.layout.y + card.layout.h)
+        .max()
+        .unwrap_or(0);
+    layout
+}
+
 fn sql_audit_payload(action: &AgentAction) -> Result<SqlAuditActionPayload, ApiError> {
     serde_json::from_value(action.payload.clone())
         .map_err(|error| ApiError::bad_request(error.to_string()))
@@ -344,6 +475,22 @@ fn sql_audit_result(
             "resource_kind": "sql_audit",
             "resource_id": record.id,
             "record": record,
+        }),
+    )
+}
+
+fn bi_card_result(
+    card: BiPanelCard,
+    event_type: AgentEventType,
+) -> (AgentResourceKind, String, AgentEventType, Value) {
+    (
+        AgentResourceKind::BiPanelCard,
+        card.id.clone(),
+        event_type,
+        json!({
+            "resource_kind": "bi_panel_card",
+            "resource_id": card.id,
+            "record": card,
         }),
     )
 }

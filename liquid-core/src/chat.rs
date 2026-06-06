@@ -4,7 +4,8 @@ use ts_rs::TS;
 
 use crate::{
     AgentActionKind, AgentActionStatus, AgentActiveView, AgentDateRange, AgentMessageRole,
-    AgentResourceKind, AgentTurnStatus, ManagedDatabaseEngine, ManagedDatabaseSslMode,
+    AgentResourceKind, AgentTurnStatus, BiCardKind, BiChartConfig, BiQueryResult,
+    ManagedDatabaseEngine, ManagedDatabaseSslMode,
 };
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, TS)]
@@ -257,5 +258,13 @@ pub enum ChatActionPreview {
         sql: String,
         database_name: Option<String>,
         context: Option<String>,
+    },
+    BiCard {
+        title: String,
+        description: Option<String>,
+        card_kind: BiCardKind,
+        sql: String,
+        chart: Option<BiChartConfig>,
+        result: BiQueryResult,
     },
 }
