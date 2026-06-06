@@ -47,6 +47,7 @@ import {
   type UpdateManagedDatabaseRequest,
   apiRequest,
 } from "@/lib/api";
+import { useI18n } from "@/lib/i18n";
 import { cn } from "@/lib/utils";
 
 type ManagedDatabasePickerProps = {
@@ -89,6 +90,7 @@ export function ManagedDatabasePicker({
   onLogout,
   onUserUpdated,
 }: ManagedDatabasePickerProps) {
+  const { t } = useI18n();
   const [databases, setDatabases] = useState<ManagedDatabase[]>([]);
   const [query, setQuery] = useState("");
   const [form, setForm] = useState<ManagedDatabaseForm>(
@@ -119,11 +121,13 @@ export function ManagedDatabasePicker({
       );
       setDatabases(response);
     } catch (error) {
-      toast.error(error instanceof Error ? error.message : "加载托管数据库失败");
+      toast.error(
+        error instanceof Error ? error.message : t.databasePicker.loadFailed,
+      );
     } finally {
       setIsLoading(false);
     }
-  }, [token]);
+  }, [t.databasePicker.loadFailed, token]);
 
   useEffect(() => {
     void loadDatabases();
@@ -220,7 +224,7 @@ export function ManagedDatabasePicker({
     const port = Number.parseInt(form.port, 10);
 
     if (!Number.isInteger(port) || port < 1 || port > 65_535) {
-      setFormError("端口必须是 1-65535 的数字");
+      setFormError(t.databasePicker.portRangeError);
       setIsSubmitting(false);
       return;
     }
@@ -254,7 +258,7 @@ export function ManagedDatabasePicker({
             database.id === updated.id ? updated : database,
           ),
         );
-        toast.success("连接记录已更新");
+        toast.success(t.databasePicker.updated);
       } else {
         const body: CreateManagedDatabaseRequest = {
           name: form.name,
@@ -276,12 +280,14 @@ export function ManagedDatabasePicker({
         );
 
         setDatabases((current) => [...current, created]);
-        toast.success("连接记录已创建");
+        toast.success(t.databasePicker.created);
       }
 
       closeForm();
     } catch (error) {
-      toast.error(error instanceof Error ? error.message : "保存数据库失败");
+      toast.error(
+        error instanceof Error ? error.message : t.databasePicker.saveFailed,
+      );
     } finally {
       setIsSubmitting(false);
     }
@@ -303,7 +309,9 @@ export function ManagedDatabasePicker({
   };
 
   const handleDelete = async (database: ManagedDatabase) => {
-    const confirmed = window.confirm(`删除连接「${database.name}」？`);
+    const confirmed = window.confirm(
+      t.databasePicker.deleteConfirm(database.name),
+    );
 
     if (!confirmed) {
       return;
@@ -329,9 +337,11 @@ export function ManagedDatabasePicker({
         closeForm();
       }
 
-      toast.success("连接记录已删除");
+      toast.success(t.databasePicker.deleted);
     } catch (error) {
-      toast.error(error instanceof Error ? error.message : "删除数据库失败");
+      toast.error(
+        error instanceof Error ? error.message : t.databasePicker.deleteFailed,
+      );
     } finally {
       setDeletingId(null);
     }
@@ -361,7 +371,8 @@ export function ManagedDatabasePicker({
         ...current,
         [database.id]: {
           tone: "error",
-          message: error instanceof Error ? error.message : "连接测试失败",
+          message:
+            error instanceof Error ? error.message : t.databasePicker.testFailed,
         },
       }));
     } finally {
@@ -386,7 +397,9 @@ export function ManagedDatabasePicker({
       );
       onDatabaseSelected(response.database ?? database);
     } catch (error) {
-      toast.error(error instanceof Error ? error.message : "进入工作区失败");
+      toast.error(
+        error instanceof Error ? error.message : t.databasePicker.enterFailed,
+      );
     } finally {
       setEnteringId(null);
     }
@@ -404,13 +417,13 @@ export function ManagedDatabasePicker({
               <div className="min-w-0">
                 <div className="flex min-w-0 items-center gap-2">
                   <h1 className="truncate text-lg font-semibold">
-                    工作区概览
+                    {t.databasePicker.title}
                   </h1>
                   <Badge
                     variant="secondary"
                     className="hidden rounded-md px-2 py-0.5 sm:inline-flex"
                   >
-                    当前账户
+                    {t.databasePicker.currentAccount}
                   </Badge>
                 </div>
                 <p className="mt-1 truncate text-xs text-muted-foreground">
@@ -427,7 +440,7 @@ export function ManagedDatabasePicker({
                 )}
                 aria-haspopup="menu"
                 aria-expanded={isAccountMenuOpen}
-                aria-label={`${user.display_name} 账户菜单`}
+                aria-label={t.databasePicker.accountMenuLabel(user.display_name)}
                 onClick={() => setIsAccountMenuOpen((isOpen) => !isOpen)}
               >
                 <span className="max-w-36 truncate text-sm font-medium text-foreground">
@@ -470,7 +483,7 @@ export function ManagedDatabasePicker({
                     onClick={openSettings}
                   >
                     <Settings className="size-4" aria-hidden />
-                    设置
+                    {t.databasePicker.settings}
                   </button>
                   <button
                     type="button"
@@ -479,7 +492,7 @@ export function ManagedDatabasePicker({
                     onClick={handleLogout}
                   >
                     <LogOut className="size-4" aria-hidden />
-                    注销
+                    {t.databasePicker.logout}
                   </button>
                 </div>
               ) : null}
@@ -490,9 +503,11 @@ export function ManagedDatabasePicker({
         <Card className="min-h-[420px] flex-1 rounded-lg py-4 shadow-xs">
           <CardHeader className="flex flex-row items-center justify-between gap-3 px-4">
             <div>
-              <CardTitle className="text-sm">数据库工作区</CardTitle>
+              <CardTitle className="text-sm">
+                {t.databasePicker.workspaceTitle}
+              </CardTitle>
               <p className="mt-1 text-xs text-muted-foreground">
-                {databases.length} 个连接记录
+                {t.databasePicker.connectionCount(databases.length)}
               </p>
             </div>
             <div className="flex flex-wrap items-center justify-end gap-2">
@@ -503,7 +518,7 @@ export function ManagedDatabasePicker({
                 onClick={openCreateForm}
               >
                 <Plus className="size-4" aria-hidden />
-                新增连接
+                {t.databasePicker.addConnection}
               </Button>
               <Badge variant="outline" className="rounded-md">
                 Postgres
@@ -516,7 +531,7 @@ export function ManagedDatabasePicker({
               <input
                 value={query}
                 onChange={(event) => setQuery(event.target.value)}
-                placeholder="搜索名称、主机、数据库"
+                placeholder={t.databasePicker.searchPlaceholder}
                 className="h-9 w-full rounded-md border bg-background pl-9 pr-3 text-sm outline-none transition-shadow placeholder:text-muted-foreground focus-visible:ring-[3px] focus-visible:ring-ring/50"
               />
             </div>
@@ -525,13 +540,13 @@ export function ManagedDatabasePicker({
               {isLoading ? (
                 <div className="flex items-center gap-2 rounded-lg border bg-background p-3 text-sm text-muted-foreground">
                   <Loader2 className="size-4 animate-spin" aria-hidden />
-                  正在加载连接记录
+                  {t.databasePicker.loadingConnections}
                 </div>
               ) : databases.length === 0 ? (
                 <EmptyDatabaseState />
               ) : filteredDatabases.length === 0 ? (
                 <div className="rounded-lg border bg-background p-4 text-sm text-muted-foreground">
-                  没有匹配的数据库
+                  {t.databasePicker.noMatches}
                 </div>
               ) : (
                 filteredDatabases.map((database) => (
@@ -597,6 +612,7 @@ function DatabaseListItem({
   onEnter: () => void;
   onDelete: () => void;
 }) {
+  const { t } = useI18n();
   const isBusy = isTesting || isEntering || isDeleting;
 
   return (
@@ -618,14 +634,18 @@ function DatabaseListItem({
               SSL {database.ssl_mode}
             </Badge>
             <Badge variant="secondary" className="rounded-md">
-              {database.has_password ? "密码已保存" : "无密码"}
+              {database.has_password
+                ? t.databasePicker.passwordSaved
+                : t.databasePicker.noPassword}
             </Badge>
             {testState ? (
               <Badge
                 variant={testState.tone === "success" ? "secondary" : "destructive"}
                 className="rounded-md"
               >
-                {testState.tone === "success" ? "连接可用" : "连接异常"}
+                {testState.tone === "success"
+                  ? t.databasePicker.connectionAvailable
+                  : t.databasePicker.connectionIssue}
               </Badge>
             ) : null}
           </div>
@@ -643,15 +663,15 @@ function DatabaseListItem({
             ) : (
               <LogIn className="size-4" aria-hidden />
             )}
-            进入
+            {t.databasePicker.enter}
           </Button>
           <Button
             type="button"
             variant="outline"
             size="icon"
             className="size-9"
-            title="测试连接"
-            aria-label={`测试 ${database.name}`}
+            title={t.databasePicker.testConnection}
+            aria-label={t.databasePicker.testDatabaseLabel(database.name)}
             disabled={isBusy}
             onClick={onTest}
           >
@@ -666,8 +686,8 @@ function DatabaseListItem({
             variant="outline"
             size="icon"
             className="size-9"
-            title="编辑连接"
-            aria-label={`编辑 ${database.name}`}
+            title={t.databasePicker.editConnection}
+            aria-label={t.databasePicker.editDatabaseLabel(database.name)}
             disabled={isDeleting}
             onClick={onEdit}
           >
@@ -678,8 +698,8 @@ function DatabaseListItem({
             variant="outline"
             size="icon"
             className="size-9 border-destructive/20 text-destructive hover:bg-destructive/10 hover:text-destructive"
-            title="删除连接"
-            aria-label={`删除 ${database.name}`}
+            title={t.databasePicker.deleteConnection}
+            aria-label={t.databasePicker.deleteDatabaseLabel(database.name)}
             disabled={isBusy}
             onClick={onDelete}
           >
@@ -734,12 +754,14 @@ function ManagedDatabaseFormDialog({
     updater: (current: ManagedDatabaseForm) => ManagedDatabaseForm,
   ) => void;
 }) {
+  const { t } = useI18n();
+
   return (
     <div className="fixed inset-0 z-50 flex items-start justify-center overflow-y-auto bg-background/80 p-3 sm:items-center">
       <button
         type="button"
         className="absolute inset-0 cursor-default"
-        aria-label="关闭弹窗"
+        aria-label={t.databasePicker.closeDialog}
         disabled={isSubmitting}
         onClick={onClose}
       />
@@ -755,18 +777,20 @@ function ManagedDatabaseFormDialog({
               id="managed-database-dialog-title"
               className="text-sm"
             >
-              {editingId ? "编辑数据库连接" : "新增数据库连接"}
+              {editingId
+                ? t.databasePicker.editDialogTitle
+                : t.databasePicker.createDialogTitle}
             </CardTitle>
             <p className="mt-1 text-xs text-muted-foreground">
-              连接信息会加密保存
+              {t.databasePicker.encryptedDescription}
             </p>
           </div>
           <Button
             type="button"
             variant="ghost"
             size="icon"
-            aria-label="关闭"
-            title="关闭"
+            aria-label={t.common.close}
+            title={t.common.close}
             disabled={isSubmitting}
             onClick={onClose}
           >
@@ -778,7 +802,7 @@ function ManagedDatabaseFormDialog({
             <DatabaseField
               className="sm:col-span-4"
               id="managed-name"
-              label="名称"
+              label={t.databasePicker.fields.name}
               value={form.name}
               onChange={(name) =>
                 onFormChange((current) => ({ ...current, name }))
@@ -788,7 +812,7 @@ function ManagedDatabaseFormDialog({
             <DatabaseField
               className="sm:col-span-5"
               id="managed-host"
-              label="主机"
+              label={t.databasePicker.fields.host}
               value={form.host}
               onChange={(host) =>
                 onFormChange((current) => ({ ...current, host }))
@@ -798,7 +822,7 @@ function ManagedDatabaseFormDialog({
             <DatabaseField
               className="sm:col-span-3"
               id="managed-port"
-              label="端口"
+              label={t.databasePicker.fields.port}
               value={form.port}
               onChange={(port) =>
                 onFormChange((current) => ({ ...current, port }))
@@ -809,7 +833,7 @@ function ManagedDatabaseFormDialog({
             <DatabaseField
               className="sm:col-span-5"
               id="managed-database"
-              label="数据库"
+              label={t.databasePicker.fields.database}
               value={form.database}
               onChange={(database) =>
                 onFormChange((current) => ({ ...current, database }))
@@ -819,7 +843,7 @@ function ManagedDatabaseFormDialog({
             <DatabaseField
               className="sm:col-span-4"
               id="managed-username"
-              label="用户名"
+              label={t.databasePicker.fields.username}
               value={form.username}
               onChange={(username) =>
                 onFormChange((current) => ({ ...current, username }))
@@ -852,13 +876,19 @@ function ManagedDatabaseFormDialog({
             <DatabaseField
               className="sm:col-span-7"
               id="managed-password"
-              label={editingId ? "新密码" : "密码"}
+              label={
+                editingId
+                  ? t.databasePicker.fields.newPassword
+                  : t.databasePicker.fields.password
+              }
               type="password"
               value={form.password}
               onChange={(password) =>
                 onFormChange((current) => ({ ...current, password }))
               }
-              placeholder={editingId ? "留空则保持原密码" : ""}
+              placeholder={
+                editingId ? t.databasePicker.fields.keepPasswordPlaceholder : ""
+              }
               required={!editingId}
             />
             <div className="flex items-end justify-end gap-2 sm:col-span-5">
@@ -868,7 +898,7 @@ function ManagedDatabaseFormDialog({
                 disabled={isSubmitting}
                 onClick={onClose}
               >
-                取消
+                {t.common.cancel}
               </Button>
               <Button type="submit" disabled={isSubmitting}>
                 {isSubmitting ? (
@@ -878,7 +908,9 @@ function ManagedDatabaseFormDialog({
                 ) : (
                   <Plus className="size-4" aria-hidden />
                 )}
-                {editingId ? "保存修改" : "保存连接"}
+                {editingId
+                  ? t.databasePicker.saveChanges
+                  : t.databasePicker.saveConnection}
               </Button>
             </div>
           </form>
@@ -894,14 +926,16 @@ function ManagedDatabaseFormDialog({
 }
 
 function EmptyDatabaseState() {
+  const { t } = useI18n();
+
   return (
     <div className="rounded-lg border bg-background p-4 text-sm">
       <div className="flex items-center gap-2 font-medium">
         <Database className="size-4 text-muted-foreground" aria-hidden />
-        暂无托管数据库
+        {t.databasePicker.emptyTitle}
       </div>
       <p className="mt-2 text-xs leading-5 text-muted-foreground">
-        使用顶部新增连接创建记录后才能进入 SQL 风险工作区。
+        {t.databasePicker.emptyDescription}
       </p>
     </div>
   );

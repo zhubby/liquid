@@ -2,6 +2,7 @@ import type { Metadata } from "next";
 
 import { ThemeProvider } from "@/components/theme-provider";
 import { Toaster } from "@/components/ui/sonner";
+import { I18nProvider } from "@/lib/i18n";
 
 import "./globals.css";
 
@@ -19,8 +20,10 @@ export default function RootLayout({
     <html lang="zh-CN" suppressHydrationWarning>
       <body>
         <ThemeProvider attribute="class" defaultTheme="system" enableSystem>
-          {children}
-          <Toaster richColors position="top-center" />
+          <I18nProvider>
+            {children}
+            <Toaster richColors position="top-center" />
+          </I18nProvider>
         </ThemeProvider>
       </body>
     </html>

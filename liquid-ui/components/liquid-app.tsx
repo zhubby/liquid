@@ -21,6 +21,7 @@ import {
   type PublicUser,
   apiRequest,
 } from "@/lib/api";
+import { useI18n } from "@/lib/i18n";
 import { cn } from "@/lib/utils";
 
 const TOKEN_STORAGE_KEY = "liquid.auth.token";
@@ -144,6 +145,8 @@ async function loadCurrentDatabase(token: string): Promise<ManagedDatabase | nul
 }
 
 function SessionLoading() {
+  const { t } = useI18n();
+
   return (
     <main className="flex min-h-screen items-center justify-center bg-muted/30 p-4 text-foreground">
       <Card className="w-full max-w-sm rounded-lg py-5 shadow-xs">
@@ -152,9 +155,9 @@ function SessionLoading() {
             <Loader2 className="size-4 animate-spin text-muted-foreground" />
           </div>
           <div>
-            <div className="text-sm font-medium">正在恢复会话</div>
+            <div className="text-sm font-medium">{t.auth.loadingTitle}</div>
             <div className="mt-1 text-xs text-muted-foreground">
-              Liquid 正在校验本地令牌
+              {t.auth.loadingDescription}
             </div>
           </div>
         </CardContent>
@@ -168,6 +171,7 @@ function AuthScreen({
 }: {
   onAuthenticated: (response: AuthResponse) => void | Promise<void>;
 }) {
+  const { t } = useI18n();
   const [mode, setMode] = useState<AuthMode>("login");
   const [email, setEmail] = useState("");
   const [displayName, setDisplayName] = useState("");
@@ -200,7 +204,7 @@ function AuthScreen({
 
       await onAuthenticated(response);
     } catch (error) {
-      toast.error(error instanceof Error ? error.message : "认证失败");
+      toast.error(error instanceof Error ? error.message : t.auth.errors.failed);
     } finally {
       setIsSubmitting(false);
     }
@@ -218,25 +222,27 @@ function AuthScreen({
               <div>
                 <h1 className="text-lg font-semibold">Liquid SQL Audit</h1>
                 <p className="mt-1 text-xs text-muted-foreground">
-                  登录后管理托管数据库与 SQL 风险看板
+                  {t.auth.subtitle}
                 </p>
               </div>
             </div>
             <div className="mt-6 grid gap-3 sm:grid-cols-3">
-              <StatusItem label="会话" value="Bearer token" />
-              <StatusItem label="凭据" value="加密存储" />
-              <StatusItem label="数据库" value="Postgres" />
+              <StatusItem label={t.auth.status.session} value="Bearer token" />
+              <StatusItem
+                label={t.auth.status.credential}
+                value={t.auth.status.encryptedStorage}
+              />
+              <StatusItem label={t.auth.status.database} value="Postgres" />
             </div>
           </div>
 
           <div className="mt-6 rounded-lg border bg-background p-4">
             <div className="flex items-center gap-2 text-sm font-medium">
               <Database className="size-4 text-muted-foreground" aria-hidden />
-              托管数据库由 Liquid 管理
+              {t.auth.managedByLiquid}
             </div>
             <p className="mt-2 max-w-2xl text-sm leading-6 text-muted-foreground">
-              连接信息保存在 Liquid 应用库中。第一版只管理连接记录，不自动同步 schema
-              元数据。
+              {t.auth.managedDescription}
             </p>
           </div>
         </section>
@@ -245,21 +251,21 @@ function AuthScreen({
           <CardHeader className="gap-3 px-5">
             <div className="flex items-center justify-between gap-3">
               <CardTitle className="text-base">
-                {isRegister ? "注册账户" : "登录账户"}
+                {isRegister ? t.auth.registerTitle : t.auth.loginTitle}
               </CardTitle>
               <Badge variant="secondary" className="rounded-md">
-                {isRegister ? "开放注册" : "安全会话"}
+                {isRegister ? t.auth.registerBadge : t.auth.loginBadge}
               </Badge>
             </div>
             <div className="grid grid-cols-2 rounded-md border bg-muted/40 p-1">
               <ModeButton
                 active={mode === "login"}
-                label="登录"
+                label={t.auth.loginTab}
                 onClick={() => setMode("login")}
               />
               <ModeButton
                 active={mode === "register"}
-                label="注册"
+                label={t.auth.registerTab}
                 onClick={() => setMode("register")}
               />
             </div>
@@ -268,7 +274,7 @@ function AuthScreen({
             <form className="space-y-3" onSubmit={handleSubmit}>
               <Field
                 id="email"
-                label="邮箱"
+                label={t.auth.email}
                 type="email"
                 value={email}
                 onChange={setEmail}
@@ -278,7 +284,7 @@ function AuthScreen({
               {isRegister ? (
                 <Field
                   id="display-name"
-                  label="显示名称"
+                  label={t.auth.displayName}
                   value={displayName}
                   onChange={setDisplayName}
                   autoComplete="name"
@@ -287,7 +293,7 @@ function AuthScreen({
               ) : null}
               <Field
                 id="password"
-                label="密码"
+                label={t.auth.password}
                 type="password"
                 value={password}
                 onChange={setPassword}
@@ -301,7 +307,7 @@ function AuthScreen({
                 ) : (
                   <LockKeyhole className="size-4" aria-hidden />
                 )}
-                {isRegister ? "创建账户" : "登录"}
+                {isRegister ? t.auth.createAccount : t.auth.login}
               </Button>
             </form>
           </CardContent>

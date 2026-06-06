@@ -69,12 +69,39 @@ import {
   apiRequest,
   apiStream,
 } from "@/lib/api";
+import { type Locale, useI18n } from "@/lib/i18n";
 import { cn } from "@/lib/utils";
 
 type MessageRole = "assistant" | "user";
-type RiskLevel = "低" | "中" | "高" | "严重";
-type DatasetStatus = "正常" | "观察" | "需处理";
+type RiskLevel = "low" | "medium" | "high" | "critical";
+type DatasetStatus = "normal" | "watch" | "needsAction";
 type MetricTone = "primary" | "success" | "warning" | "danger";
+type WeekdayKey =
+  | "monday"
+  | "tuesday"
+  | "wednesday"
+  | "thursday"
+  | "friday"
+  | "saturday"
+  | "sunday";
+type CategoryKey =
+  | "customerProfile"
+  | "orderFacts"
+  | "accessAudit"
+  | "marketing"
+  | "inventory";
+type DatasetOwnerKey =
+  | "dataGovernance"
+  | "transactionPlatform"
+  | "securityPlatform"
+  | "growthAnalytics"
+  | "supplyChain";
+type UpdatedAtKey =
+  | "tenMinutes"
+  | "eighteenMinutes"
+  | "twentyFourMinutes"
+  | "fortyTwoMinutes"
+  | "oneHour";
 
 type ChatMessage = {
   id: string;
@@ -94,25 +121,25 @@ type WorkspaceMetric = {
 };
 
 type TrendPoint = {
-  day: string;
-  查询量: number;
-  风险量: number;
-  通过率: number;
+  day: WeekdayKey;
+  queries: number;
+  risks: number;
+  passRate: number;
 };
 
 type CategoryPoint = {
-  name: string;
+  key: CategoryKey;
   count: number;
   risk: RiskLevel;
 };
 
 type DatasetRow = {
   dataset: string;
-  owner: string;
+  owner: DatasetOwnerKey;
   queries: number;
   risk: RiskLevel;
   status: DatasetStatus;
-  updatedAt: string;
+  updatedAt: UpdatedAtKey;
 };
 
 type AuditDashboardProps = {
@@ -125,104 +152,65 @@ type AuditDashboardProps = {
 const MIN_AI_WIDTH = 320;
 const MIN_BI_WIDTH = 520;
 const DEFAULT_AI_PERCENT = 38;
-const WORKSPACE_TITLE_PREFIX = "AI工作区";
-
-const quickPrompts = [
-  "解释风险上升原因",
-  "生成周报摘要",
-  "找出异常数据集",
-  "给出治理建议",
-];
-
-const metrics: WorkspaceMetric[] = [
-  {
-    label: "查询总量",
-    value: "12,846",
-    change: "+8.2%",
-    tone: "primary",
-    icon: <Database className="size-4" aria-hidden />,
-  },
-  {
-    label: "通过率",
-    value: "96.8%",
-    change: "+1.1%",
-    tone: "success",
-    icon: <CheckCircle2 className="size-4" aria-hidden />,
-  },
-  {
-    label: "风险事件",
-    value: "438",
-    change: "-4.5%",
-    tone: "warning",
-    icon: <ShieldCheck className="size-4" aria-hidden />,
-  },
-  {
-    label: "待复核",
-    value: "37",
-    change: "高风险",
-    tone: "danger",
-    icon: <Activity className="size-4" aria-hidden />,
-  },
-];
 
 const trendData: TrendPoint[] = [
-  { day: "周一", 查询量: 1840, 风险量: 68, 通过率: 96.3 },
-  { day: "周二", 查询量: 1935, 风险量: 71, 通过率: 96.5 },
-  { day: "周三", 查询量: 2018, 风险量: 82, 通过率: 95.9 },
-  { day: "周四", 查询量: 1762, 风险量: 49, 通过率: 97.2 },
-  { day: "周五", 查询量: 2114, 风险量: 76, 通过率: 96.4 },
-  { day: "周六", 查询量: 1588, 风险量: 44, 通过率: 97.1 },
-  { day: "周日", 查询量: 1589, 风险量: 48, 通过率: 97.0 },
+  { day: "monday", queries: 1840, risks: 68, passRate: 96.3 },
+  { day: "tuesday", queries: 1935, risks: 71, passRate: 96.5 },
+  { day: "wednesday", queries: 2018, risks: 82, passRate: 95.9 },
+  { day: "thursday", queries: 1762, risks: 49, passRate: 97.2 },
+  { day: "friday", queries: 2114, risks: 76, passRate: 96.4 },
+  { day: "saturday", queries: 1588, risks: 44, passRate: 97.1 },
+  { day: "sunday", queries: 1589, risks: 48, passRate: 97.0 },
 ];
 
 const categoryData: CategoryPoint[] = [
-  { name: "客户画像", count: 144, risk: "高" },
-  { name: "订单流水", count: 96, risk: "中" },
-  { name: "权限审计", count: 31, risk: "严重" },
-  { name: "营销分析", count: 87, risk: "中" },
-  { name: "库存同步", count: 80, risk: "低" },
+  { key: "customerProfile", count: 144, risk: "high" },
+  { key: "orderFacts", count: 96, risk: "medium" },
+  { key: "accessAudit", count: 31, risk: "critical" },
+  { key: "marketing", count: 87, risk: "medium" },
+  { key: "inventory", count: 80, risk: "low" },
 ];
 
 const datasetRows: DatasetRow[] = [
   {
     dataset: "customer_profile",
-    owner: "数据治理组",
+    owner: "dataGovernance",
     queries: 2846,
-    risk: "高",
-    status: "需处理",
-    updatedAt: "10 分钟前",
+    risk: "high",
+    status: "needsAction",
+    updatedAt: "tenMinutes",
   },
   {
     dataset: "order_fact_daily",
-    owner: "交易平台",
+    owner: "transactionPlatform",
     queries: 2318,
-    risk: "中",
-    status: "观察",
-    updatedAt: "18 分钟前",
+    risk: "medium",
+    status: "watch",
+    updatedAt: "eighteenMinutes",
   },
   {
     dataset: "access_audit_log",
-    owner: "安全平台",
+    owner: "securityPlatform",
     queries: 1460,
-    risk: "严重",
-    status: "需处理",
-    updatedAt: "24 分钟前",
+    risk: "critical",
+    status: "needsAction",
+    updatedAt: "twentyFourMinutes",
   },
   {
     dataset: "marketing_funnel",
-    owner: "增长分析",
+    owner: "growthAnalytics",
     queries: 1952,
-    risk: "中",
-    status: "观察",
-    updatedAt: "42 分钟前",
+    risk: "medium",
+    status: "watch",
+    updatedAt: "fortyTwoMinutes",
   },
   {
     dataset: "inventory_snapshot",
-    owner: "供应链",
+    owner: "supplyChain",
     queries: 1264,
-    risk: "低",
-    status: "正常",
-    updatedAt: "1 小时前",
+    risk: "low",
+    status: "normal",
+    updatedAt: "oneHour",
   },
 ];
 
@@ -239,19 +227,19 @@ const chartColors = {
 };
 
 const riskColors: Record<RiskLevel, string> = {
-  低: "var(--chart-2)",
-  中: "var(--chart-4)",
-  高: "var(--chart-5)",
-  严重: "var(--destructive)",
+  low: "var(--chart-2)",
+  medium: "var(--chart-4)",
+  high: "var(--chart-5)",
+  critical: "var(--destructive)",
 };
 
-function newWorkspaceTitle() {
+function newWorkspaceTitle(prefix: string) {
   const alphabet = "ABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789";
   const suffix = Array.from({ length: 5 }, () =>
     alphabet[Math.floor(Math.random() * alphabet.length)],
   ).join("");
 
-  return `${WORKSPACE_TITLE_PREFIX}-${suffix}`;
+  return `${prefix}-${suffix}`;
 }
 
 export function AuditDashboard({
@@ -260,6 +248,7 @@ export function AuditDashboard({
   selectedDatabase,
   onDatabaseExit,
 }: AuditDashboardProps) {
+  const { t } = useI18n();
   const workspaceRef = useRef<HTMLDivElement>(null);
   const [aiWidth, setAiWidth] = useState(DEFAULT_AI_PERCENT);
   const [isDragging, setIsDragging] = useState(false);
@@ -294,7 +283,7 @@ export function AuditDashboard({
           (await apiRequest<AgentConversation>("/api/v1/agent/conversations", {
             method: "POST",
             token,
-            body: { title: newWorkspaceTitle() },
+            body: { title: newWorkspaceTitle(t.workspace.defaultTitlePrefix) },
           }));
 
         if (cancelled) {
@@ -310,7 +299,7 @@ export function AuditDashboard({
       } catch (error) {
         if (!cancelled) {
           toast.error(
-            error instanceof Error ? error.message : "加载工作区失败",
+            error instanceof Error ? error.message : t.workspace.loadFailed,
           );
         }
       } finally {
@@ -325,7 +314,7 @@ export function AuditDashboard({
     return () => {
       cancelled = true;
     };
-  }, [token]);
+  }, [t.workspace.defaultTitlePrefix, t.workspace.loadFailed, token]);
 
   const handleCreateWorkspace = useCallback(async () => {
     if (isCreatingWorkspace) {
@@ -340,7 +329,7 @@ export function AuditDashboard({
         {
           method: "POST",
           token,
-          body: { title: newWorkspaceTitle() },
+          body: { title: newWorkspaceTitle(t.workspace.defaultTitlePrefix) },
         },
       );
 
@@ -353,12 +342,17 @@ export function AuditDashboard({
       setActiveConversation(nextConversation);
     } catch (error) {
       toast.error(
-        error instanceof Error ? error.message : "新建工作区失败",
+        error instanceof Error ? error.message : t.workspace.createFailed,
       );
     } finally {
       setIsCreatingWorkspace(false);
     }
-  }, [isCreatingWorkspace, token]);
+  }, [
+    isCreatingWorkspace,
+    t.workspace.createFailed,
+    t.workspace.defaultTitlePrefix,
+    token,
+  ]);
 
   const handleSelectWorkspace = useCallback(
     (conversation: AgentConversation) => {
@@ -415,7 +409,7 @@ export function AuditDashboard({
             {
               method: "POST",
               token,
-              body: { title: newWorkspaceTitle() },
+              body: { title: newWorkspaceTitle(t.workspace.defaultTitlePrefix) },
             },
           );
 
@@ -427,13 +421,20 @@ export function AuditDashboard({
         setActiveConversation(nextActiveConversation);
       } catch (error) {
         toast.error(
-          error instanceof Error ? error.message : "删除工作区失败",
+          error instanceof Error ? error.message : t.workspace.deleteFailed,
         );
       } finally {
         setIsDeletingWorkspace(false);
       }
     },
-    [activeConversation, conversations, isDeletingWorkspace, token],
+    [
+      activeConversation,
+      conversations,
+      isDeletingWorkspace,
+      t.workspace.defaultTitlePrefix,
+      t.workspace.deleteFailed,
+      token,
+    ],
   );
 
   const updatePaneWidth = useCallback((clientX: number) => {
@@ -545,11 +546,13 @@ export function AuditDashboard({
 }
 
 function WorkspaceLoadingPanel() {
+  const { t } = useI18n();
+
   return (
     <section className="col-span-full flex min-h-[calc(100vh-1.5rem)] min-w-0 items-center justify-center rounded-lg border bg-card text-card-foreground shadow-sm lg:h-[calc(100vh-1.5rem)]">
       <div className="flex items-center gap-3 text-sm text-muted-foreground">
         <Loader2 className="size-4 animate-spin" aria-hidden />
-        正在加载工作区
+        {t.workspace.loadingWorkspace}
       </div>
     </section>
   );
@@ -574,6 +577,7 @@ function IconSidebar({
   onSelectWorkspace: (conversation: AgentConversation) => void;
   onDatabaseExit: () => void;
 }) {
+  const { t } = useI18n();
   const initials = user.display_name
     .split(/\s+/)
     .filter(Boolean)
@@ -611,7 +615,7 @@ function IconSidebar({
               <Plus className="size-5" aria-hidden />
             )
           }
-          label="新建工作区"
+          label={t.workspace.newWorkspace}
           active={isCreatingWorkspace}
           disabled={isWorkspaceLoading || isCreatingWorkspace}
           onClick={onCreateWorkspace}
@@ -630,8 +634,8 @@ function IconSidebar({
           variant="ghost"
           size="icon"
           className="size-10 rounded-md text-sidebar-foreground/70 hover:bg-sidebar-accent hover:text-sidebar-accent-foreground"
-          aria-label="返回数据库选择"
-          title="返回数据库选择"
+          aria-label={t.workspace.returnToDatabases}
+          title={t.workspace.returnToDatabases}
           onClick={onDatabaseExit}
         >
           <LogOut className="size-5" aria-hidden />
@@ -689,6 +693,7 @@ function AiPanel({
   onConversationUpdated: (conversation: AgentConversation) => void;
   onDeleteConversation: (conversationId: string) => void | Promise<void>;
 }) {
+  const { locale, t } = useI18n();
   const [messages, setMessages] = useState<ChatMessage[]>([]);
   const [actions, setActions] = useState<AgentAction[]>([]);
   const [titleInput, setTitleInput] = useState(conversation.title);
@@ -717,10 +722,12 @@ function AiPanel({
 
       return {
         actions: nextActions,
-        messages: nextMessages.map(chatMessageFromAgentMessage),
+        messages: nextMessages.map((message) =>
+          chatMessageFromAgentMessage(message, locale),
+        ),
       };
     },
-    [token],
+    [locale, token],
   );
 
   useEffect(() => {
@@ -755,7 +762,7 @@ function AiPanel({
       } catch (error) {
         if (!cancelled && loadVersionRef.current === loadVersion) {
           toast.error(
-            error instanceof Error ? error.message : "加载 agent 工作台失败",
+            error instanceof Error ? error.message : t.workspace.agentLoadFailed,
           );
         }
       } finally {
@@ -773,7 +780,7 @@ function AiPanel({
       activeStreamRef.current?.abort();
       activeStreamRef.current = null;
     };
-  }, [conversation.id, loadMessagesAndActions, token]);
+  }, [conversation.id, loadMessagesAndActions, t.workspace.agentLoadFailed]);
 
   const mergeAction = useCallback((action: AgentAction) => {
     setActions((current) => {
@@ -814,7 +821,9 @@ function AiPanel({
       onConversationUpdated(updatedConversation);
     } catch (error) {
       setTitleInput(conversation.title);
-      toast.error(error instanceof Error ? error.message : "工作区重命名失败");
+      toast.error(
+        error instanceof Error ? error.message : t.workspace.renameFailed,
+      );
     } finally {
       setIsSavingTitle(false);
     }
@@ -823,6 +832,7 @@ function AiPanel({
     conversation.title,
     isSavingTitle,
     onConversationUpdated,
+    t.workspace.renameFailed,
     titleInput,
     token,
   ]);
@@ -844,7 +854,7 @@ function AiPanel({
         id: `local-user-${Date.now()}`,
         role: "user",
         content,
-        time: nowTimeLabel(),
+        time: nowTimeLabel(locale),
         pending: true,
       };
       const sendKey = `${conversationId}:${localUserMessage.id}`;
@@ -894,6 +904,7 @@ function AiPanel({
                       current,
                       turn.id,
                       assistantContent,
+                      locale,
                     ),
                   );
                 }
@@ -924,7 +935,7 @@ function AiPanel({
           !(error instanceof DOMException && error.name === "AbortError") &&
           activeConversationIdRef.current === conversationId
         ) {
-          toast.error(error instanceof Error ? error.message : "发送失败");
+          toast.error(error instanceof Error ? error.message : t.workspace.sendFailed);
         }
       } finally {
         if (activeSendRef.current === sendKey) {
@@ -939,8 +950,10 @@ function AiPanel({
       input,
       isSending,
       loadMessagesAndActions,
+      locale,
       mergeAction,
       selectedDatabase.id,
+      t.workspace.sendFailed,
       token,
     ],
   );
@@ -965,7 +978,7 @@ function AiPanel({
       );
       mergeAction(updated);
     } catch (error) {
-      toast.error(error instanceof Error ? error.message : "动作处理失败");
+      toast.error(error instanceof Error ? error.message : t.workspace.actionFailed);
     }
   };
 
@@ -976,9 +989,8 @@ function AiPanel({
           {
             id: "intro",
             role: "assistant" as const,
-            content:
-              `当前绑定 ${selectedDatabase.name}，可以直接发送 SQL 或治理问题。敏感操作会先变成待确认动作。`,
-            time: nowTimeLabel(),
+            content: t.workspace.introMessage(selectedDatabase.name),
+            time: nowTimeLabel(locale),
           },
         ];
   const proposedActions = actions.filter((action) => action.status === "proposed");
@@ -992,7 +1004,7 @@ function AiPanel({
               className="sr-only"
               htmlFor={`workspace-title-${conversation.id}`}
             >
-              工作区名称
+              {t.workspace.workspaceName}
             </label>
             <input
               id={`workspace-title-${conversation.id}`}
@@ -1026,8 +1038,8 @@ function AiPanel({
           variant="outline"
           size="icon"
           className="size-9 shrink-0 rounded-md text-destructive hover:bg-destructive/10 hover:text-destructive"
-          aria-label={`删除工作区 ${conversation.title}`}
-          title="删除工作区"
+          aria-label={t.workspace.deleteWorkspaceLabel(conversation.title)}
+          title={t.workspace.deleteWorkspaceTitle}
           disabled={isDeletingWorkspace}
           onClick={() => setIsDeleteDialogOpen(true)}
         >
@@ -1055,7 +1067,7 @@ function AiPanel({
           {isLoading ? (
             <div className="flex items-center gap-2 text-sm text-muted-foreground">
               <Loader2 className="size-4 animate-spin" aria-hidden />
-              正在加载会话
+              {t.workspace.loadingConversation}
             </div>
           ) : null}
           {visibleMessages.map((message) => (
@@ -1077,7 +1089,7 @@ function AiPanel({
 
         <div className="border-t bg-card px-4 py-3">
           <div className="mb-3 flex flex-wrap gap-2">
-            {quickPrompts.map((prompt) => (
+            {t.workspace.quickPrompts.map((prompt) => (
               <Button
                 key={prompt}
                 type="button"
@@ -1096,12 +1108,12 @@ function AiPanel({
             onSubmit={handleSubmit}
           >
             <label className="sr-only" htmlFor="ai-message">
-              输入问题
+              {t.workspace.inputLabel}
             </label>
             <textarea
               id="ai-message"
               className="max-h-32 min-h-16 flex-1 resize-none bg-transparent px-2 py-1.5 text-sm outline-none placeholder:text-muted-foreground"
-              placeholder="输入问题，例如：列出本周风险最高的数据集"
+              placeholder={t.workspace.inputPlaceholder}
               value={input}
               onChange={(event) => setInput(event.target.value)}
               disabled={isSending || isLoading}
@@ -1109,8 +1121,8 @@ function AiPanel({
             <Button
               type="submit"
               size="icon"
-              aria-label="发送问题"
-              title="发送"
+              aria-label={t.workspace.sendQuestion}
+              title={t.workspace.send}
               disabled={isSending || isLoading || !input.trim()}
             >
               {isSending ? (
@@ -1137,6 +1149,8 @@ function ConfirmDeleteWorkspaceDialog({
   onCancel: () => void;
   onConfirm: () => void;
 }) {
+  const { t } = useI18n();
+
   return (
     <div
       className="fixed inset-0 z-50 flex items-center justify-center bg-background/70 p-4"
@@ -1151,10 +1165,10 @@ function ConfirmDeleteWorkspaceDialog({
           </div>
           <div className="min-w-0">
             <h2 id="delete-workspace-title" className="text-sm font-semibold">
-              删除工作区
+              {t.workspace.deleteWorkspaceTitle}
             </h2>
             <p className="mt-1 text-sm leading-6 text-muted-foreground">
-              确认删除「{conversationTitle}」？该工作区的会话内容会一并移除。
+              {t.workspace.deleteConfirm(conversationTitle)}
             </p>
           </div>
         </div>
@@ -1166,7 +1180,7 @@ function ConfirmDeleteWorkspaceDialog({
             disabled={isDeleting}
             onClick={onCancel}
           >
-            取消
+            {t.common.cancel}
           </Button>
           <Button
             type="button"
@@ -1180,7 +1194,7 @@ function ConfirmDeleteWorkspaceDialog({
             ) : (
               <Trash2 className="size-4" aria-hidden />
             )}
-            删除
+            {t.common.delete}
           </Button>
         </div>
       </div>
@@ -1189,6 +1203,7 @@ function ConfirmDeleteWorkspaceDialog({
 }
 
 function ChatBubble({ message }: { message: ChatMessage }) {
+  const { t } = useI18n();
   const isUser = message.role === "user";
 
   return (
@@ -1232,7 +1247,7 @@ function ChatBubble({ message }: { message: ChatMessage }) {
               {message.metric}
             </span>
           ) : null}
-          {message.pending ? <span>发送中</span> : null}
+          {message.pending ? <span>{t.workspace.pending}</span> : null}
         </div>
       </div>
     </article>
@@ -1248,6 +1263,8 @@ function AgentActionCard({
   onApply: () => void;
   onReject: () => void;
 }) {
+  const { t } = useI18n();
+
   return (
     <article className="rounded-lg border bg-background p-3 shadow-xs">
       <div className="flex items-start justify-between gap-3">
@@ -1255,7 +1272,7 @@ function AgentActionCard({
           <div className="flex flex-wrap items-center gap-2">
             <h3 className="text-sm font-medium">{action.title}</h3>
             <Badge variant="outline" className="h-6 rounded-md">
-              {actionLabel(action.kind)}
+              {t.workspace.actionLabels[action.kind]}
             </Badge>
           </div>
           <p className="mt-1 text-xs leading-5 text-muted-foreground">
@@ -1263,29 +1280,32 @@ function AgentActionCard({
           </p>
         </div>
         <Badge variant="secondary" className="rounded-md">
-          {action.status}
+          {t.workspace.actionStatuses[action.status]}
         </Badge>
       </div>
       <div className="mt-3 flex flex-wrap gap-2">
         <Button type="button" size="sm" onClick={onApply}>
           <CheckCircle2 className="size-4" aria-hidden />
-          确认
+          {t.workspace.confirm}
         </Button>
         <Button type="button" variant="outline" size="sm" onClick={onReject}>
           <X className="size-4" aria-hidden />
-          拒绝
+          {t.workspace.reject}
         </Button>
       </div>
     </article>
   );
 }
 
-function chatMessageFromAgentMessage(message: AgentMessage): ChatMessage {
+function chatMessageFromAgentMessage(
+  message: AgentMessage,
+  locale: Locale,
+): ChatMessage {
   return {
     id: message.id,
     role: message.role === "user" ? "user" : "assistant",
     content: message.content,
-    time: timeLabel(message.created_at),
+    time: timeLabel(message.created_at, locale),
   };
 }
 
@@ -1293,6 +1313,7 @@ function upsertStreamingAssistantMessage(
   messages: ChatMessage[],
   turnId: string,
   content: string,
+  locale: Locale,
 ): ChatMessage[] {
   const id = `stream-${turnId}`;
 
@@ -1313,7 +1334,7 @@ function upsertStreamingAssistantMessage(
       id,
       role: "assistant",
       content,
-      time: nowTimeLabel(),
+      time: nowTimeLabel(locale),
       pending: true,
     },
   ];
@@ -1343,29 +1364,15 @@ function eventPayloadAction(payload: unknown): AgentAction | null {
   return value as AgentAction;
 }
 
-function timeLabel(value: string): string {
-  return new Date(value).toLocaleTimeString("zh-CN", {
+function timeLabel(value: string, locale: Locale): string {
+  return new Date(value).toLocaleTimeString(locale, {
     hour: "2-digit",
     minute: "2-digit",
   });
 }
 
-function nowTimeLabel(): string {
-  return timeLabel(new Date().toISOString());
-}
-
-function actionLabel(kind: AgentAction["kind"]): string {
-  return {
-    create_sql_audit: "创建审计",
-    approve_sql_audit: "批准审计",
-    reject_sql_audit: "拒绝审计",
-    execute_sql_audit: "执行审计",
-    create_managed_database: "新增数据库",
-    update_managed_database: "更新数据库",
-    delete_managed_database: "删除数据库",
-    start_database_backup: "备份",
-    start_database_restore: "恢复",
-  }[kind];
+function nowTimeLabel(locale: Locale): string {
+  return timeLabel(new Date().toISOString(), locale);
 }
 
 function SplitHandle({
@@ -1377,6 +1384,8 @@ function SplitHandle({
   onPointerDown: (event: PointerEvent<HTMLButtonElement>) => void;
   onDoubleClick: (event: MouseEvent<HTMLButtonElement>) => void;
 }) {
+  const { t } = useI18n();
+
   return (
     <div className="hidden items-stretch justify-center px-1 lg:flex">
       <button
@@ -1387,8 +1396,8 @@ function SplitHandle({
         )}
         onPointerDown={onPointerDown}
         onDoubleClick={onDoubleClick}
-        aria-label="拖拽调整 AI 与 BI 区域宽度"
-        title="拖拽调整宽度，双击恢复默认"
+        aria-label={t.workspace.splitHandleLabel}
+        title={t.workspace.splitHandleTitle}
       >
         <span className="h-16 w-1 rounded-full bg-border transition-colors group-hover:bg-foreground/40" />
       </button>
@@ -1397,12 +1406,49 @@ function SplitHandle({
 }
 
 function BiPanel({ selectedDatabase }: { selectedDatabase: ManagedDatabase }) {
+  const { t } = useI18n();
+  const metrics = useMemo<WorkspaceMetric[]>(
+    () => [
+      {
+        label: t.dashboard.metrics.totalQueries,
+        value: "12,846",
+        change: "+8.2%",
+        tone: "primary",
+        icon: <Database className="size-4" aria-hidden />,
+      },
+      {
+        label: t.dashboard.metrics.passRate,
+        value: "96.8%",
+        change: "+1.1%",
+        tone: "success",
+        icon: <CheckCircle2 className="size-4" aria-hidden />,
+      },
+      {
+        label: t.dashboard.metrics.riskEvents,
+        value: "438",
+        change: "-4.5%",
+        tone: "warning",
+        icon: <ShieldCheck className="size-4" aria-hidden />,
+      },
+      {
+        label: t.dashboard.metrics.pendingReview,
+        value: "37",
+        change: t.dashboard.metrics.highRisk,
+        tone: "danger",
+        icon: <Activity className="size-4" aria-hidden />,
+      },
+    ],
+    [t],
+  );
+
   return (
     <section className="mt-3 flex min-h-[calc(100vh-1.5rem)] min-w-0 flex-col overflow-hidden rounded-lg border bg-card text-card-foreground shadow-sm lg:mt-0 lg:h-[calc(100vh-1.5rem)]">
       <header className="flex shrink-0 flex-col gap-3 border-b px-4 py-3 xl:flex-row xl:items-center xl:justify-between">
         <div className="min-w-0">
           <div className="flex items-center gap-2">
-            <h2 className="truncate text-base font-semibold">BI 数据看板</h2>
+            <h2 className="truncate text-base font-semibold">
+              {t.dashboard.title}
+            </h2>
             <Badge variant="outline" className="h-6 rounded-md">
               {selectedDatabase.name}
             </Badge>
@@ -1415,15 +1461,15 @@ function BiPanel({ selectedDatabase }: { selectedDatabase: ManagedDatabase }) {
         <div className="flex flex-wrap items-center gap-2">
           <Button type="button" variant="outline" size="sm">
             <Search className="size-4" aria-hidden />
-            搜索
+            {t.common.search}
           </Button>
           <Button type="button" variant="outline" size="sm">
             <FileText className="size-4" aria-hidden />
-            导出
+            {t.dashboard.export}
           </Button>
           <Button type="button" variant="secondary" size="sm">
             <ChevronDown className="size-4" aria-hidden />
-            全部数据集
+            {t.dashboard.allDatasets}
           </Button>
         </div>
       </header>
@@ -1480,13 +1526,23 @@ function MetricCard({ metric }: { metric: WorkspaceMetric }) {
 }
 
 function TrendChart() {
+  const { t } = useI18n();
+  const localizedTrendData = useMemo(
+    () =>
+      trendData.map((point) => ({
+        ...point,
+        dayLabel: t.dashboard.weekdays[point.day],
+      })),
+    [t],
+  );
+
   return (
     <Card className="rounded-lg py-4 shadow-xs">
       <CardHeader className="flex flex-row items-center justify-between px-4">
         <div>
-          <CardTitle className="text-sm">查询趋势</CardTitle>
+          <CardTitle className="text-sm">{t.dashboard.trendTitle}</CardTitle>
           <p className="mt-1 text-xs text-muted-foreground">
-            查询量、风险量和通过率变化
+            {t.dashboard.trendDescription}
           </p>
         </div>
         <PanelsLeftRight className="size-4 text-muted-foreground" aria-hidden />
@@ -1494,10 +1550,10 @@ function TrendChart() {
       <CardContent className="px-2 pt-2 sm:px-4">
         <div className="h-72">
           <ResponsiveContainer width="100%" height="100%">
-            <LineChart data={trendData}>
+            <LineChart data={localizedTrendData}>
               <CartesianGrid stroke={chartColors.grid} vertical={false} />
               <XAxis
-                dataKey="day"
+                dataKey="dayLabel"
                 tickLine={false}
                 axisLine={false}
                 tick={{ fill: chartColors.text, fontSize: 12 }}
@@ -1522,7 +1578,8 @@ function TrendChart() {
               <Line
                 yAxisId="volume"
                 type="monotone"
-                dataKey="查询量"
+                dataKey="queries"
+                name={t.dashboard.chartKeys.queries}
                 stroke={chartColors.primary}
                 strokeWidth={2.5}
                 dot={false}
@@ -1530,7 +1587,8 @@ function TrendChart() {
               <Line
                 yAxisId="volume"
                 type="monotone"
-                dataKey="风险量"
+                dataKey="risks"
+                name={t.dashboard.chartKeys.risks}
                 stroke={chartColors.danger}
                 strokeWidth={2.5}
                 dot={false}
@@ -1538,7 +1596,8 @@ function TrendChart() {
               <Line
                 yAxisId="rate"
                 type="monotone"
-                dataKey="通过率"
+                dataKey="passRate"
+                name={t.dashboard.chartKeys.passRate}
                 stroke={chartColors.warning}
                 strokeWidth={2}
                 dot={false}
@@ -1552,13 +1611,25 @@ function TrendChart() {
 }
 
 function CategoryChart() {
+  const { t } = useI18n();
+  const localizedCategoryData = useMemo(
+    () =>
+      categoryData.map((entry) => ({
+        ...entry,
+        name: t.dashboard.categories[entry.key],
+      })),
+    [t],
+  );
+
   return (
     <Card className="rounded-lg py-4 shadow-xs">
       <CardHeader className="flex flex-row items-center justify-between px-4">
         <div>
-          <CardTitle className="text-sm">风险分布</CardTitle>
+          <CardTitle className="text-sm">
+            {t.dashboard.riskDistributionTitle}
+          </CardTitle>
           <p className="mt-1 text-xs text-muted-foreground">
-            按数据域聚合的风险事件
+            {t.dashboard.riskDistributionDescription}
           </p>
         </div>
         <TrendingUp className="size-4 text-muted-foreground" aria-hidden />
@@ -1566,7 +1637,7 @@ function CategoryChart() {
       <CardContent className="px-2 pt-2 sm:px-4">
         <div className="h-72">
           <ResponsiveContainer width="100%" height="100%">
-            <BarChart data={categoryData} layout="vertical">
+            <BarChart data={localizedCategoryData} layout="vertical">
               <CartesianGrid stroke={chartColors.grid} horizontal={false} />
               <XAxis
                 type="number"
@@ -1583,9 +1654,13 @@ function CategoryChart() {
                 tick={{ fill: chartColors.text, fontSize: 12 }}
               />
               <Tooltip content={<ChartTooltip />} />
-              <Bar dataKey="count" radius={[0, 6, 6, 0]}>
-                {categoryData.map((entry) => (
-                  <Cell key={entry.name} fill={riskColors[entry.risk]} />
+              <Bar
+                dataKey="count"
+                name={t.dashboard.chartKeys.count}
+                radius={[0, 6, 6, 0]}
+              >
+                {localizedCategoryData.map((entry) => (
+                  <Cell key={entry.key} fill={riskColors[entry.risk]} />
                 ))}
               </Bar>
             </BarChart>
@@ -1597,13 +1672,26 @@ function CategoryChart() {
 }
 
 function DatasetTable() {
+  const { locale, t } = useI18n();
+  const localizedRows = useMemo(
+    () =>
+      datasetRows.map((row) => ({
+        ...row,
+        ownerLabel: t.dashboard.owners[row.owner],
+        updatedAtLabel: t.dashboard.updatedAt[row.updatedAt],
+      })),
+    [t],
+  );
+
   return (
     <Card className="mt-4 rounded-lg py-4 shadow-xs">
       <CardHeader className="flex flex-row items-center justify-between gap-3 px-4">
         <div>
-          <CardTitle className="text-sm">数据集明细</CardTitle>
+          <CardTitle className="text-sm">
+            {t.dashboard.datasetTableTitle}
+          </CardTitle>
           <p className="mt-1 text-xs text-muted-foreground">
-            模拟数据，按风险优先级展示
+            {t.dashboard.datasetTableDescription}
           </p>
         </div>
         <Table2 className="size-4 shrink-0 text-muted-foreground" aria-hidden />
@@ -1613,26 +1701,38 @@ function DatasetTable() {
           <table className="w-full min-w-[720px] border-collapse text-sm">
             <thead>
               <tr className="border-y bg-muted/60 text-left text-xs text-muted-foreground">
-                <th className="px-4 py-2.5 font-medium">数据集</th>
-                <th className="px-4 py-2.5 font-medium">负责人</th>
-                <th className="px-4 py-2.5 text-right font-medium">查询量</th>
-                <th className="px-4 py-2.5 font-medium">风险级别</th>
-                <th className="px-4 py-2.5 font-medium">状态</th>
-                <th className="px-4 py-2.5 font-medium">更新时间</th>
+                <th className="px-4 py-2.5 font-medium">
+                  {t.dashboard.tableHeaders.dataset}
+                </th>
+                <th className="px-4 py-2.5 font-medium">
+                  {t.dashboard.tableHeaders.owner}
+                </th>
+                <th className="px-4 py-2.5 text-right font-medium">
+                  {t.dashboard.tableHeaders.queries}
+                </th>
+                <th className="px-4 py-2.5 font-medium">
+                  {t.dashboard.tableHeaders.risk}
+                </th>
+                <th className="px-4 py-2.5 font-medium">
+                  {t.dashboard.tableHeaders.status}
+                </th>
+                <th className="px-4 py-2.5 font-medium">
+                  {t.dashboard.tableHeaders.updatedAt}
+                </th>
               </tr>
             </thead>
             <tbody>
-              {datasetRows.map((row) => (
+              {localizedRows.map((row) => (
                 <tr
                   key={row.dataset}
                   className="border-b transition-colors hover:bg-muted/40"
                 >
                   <td className="px-4 py-3 font-medium">{row.dataset}</td>
                   <td className="px-4 py-3 text-muted-foreground">
-                    {row.owner}
+                    {row.ownerLabel}
                   </td>
                   <td className="px-4 py-3 text-right tabular-nums">
-                    {row.queries.toLocaleString()}
+                    {row.queries.toLocaleString(locale)}
                   </td>
                   <td className="px-4 py-3">
                     <RiskBadge risk={row.risk} />
@@ -1641,7 +1741,7 @@ function DatasetTable() {
                     <StatusBadge status={row.status} />
                   </td>
                   <td className="px-4 py-3 text-muted-foreground">
-                    {row.updatedAt}
+                    {row.updatedAtLabel}
                   </td>
                 </tr>
               ))}
@@ -1654,20 +1754,22 @@ function DatasetTable() {
 }
 
 function RiskBadge({ risk }: { risk: RiskLevel }) {
-  const variant = risk === "严重" || risk === "高" ? "destructive" : "outline";
+  const { t } = useI18n();
+  const variant = risk === "critical" || risk === "high" ? "destructive" : "outline";
 
   return (
     <Badge variant={variant} className="rounded-md">
-      {risk}
+      {t.dashboard.riskLevels[risk]}
     </Badge>
   );
 }
 
 function StatusBadge({ status }: { status: DatasetStatus }) {
+  const { t } = useI18n();
   const statusClasses = {
-    正常: "border-chart-2/30 bg-chart-2/10 text-foreground",
-    观察: "border-chart-4/30 bg-chart-4/15 text-foreground",
-    需处理: "border-destructive/25 bg-destructive/10 text-destructive",
+    normal: "border-chart-2/30 bg-chart-2/10 text-foreground",
+    watch: "border-chart-4/30 bg-chart-4/15 text-foreground",
+    needsAction: "border-destructive/25 bg-destructive/10 text-destructive",
   }[status];
 
   return (
@@ -1677,7 +1779,7 @@ function StatusBadge({ status }: { status: DatasetStatus }) {
         statusClasses,
       )}
     >
-      {status}
+      {t.dashboard.datasetStatuses[status]}
     </span>
   );
 }

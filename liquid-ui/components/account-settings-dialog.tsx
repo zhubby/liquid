@@ -41,10 +41,10 @@ import {
   type UpdatePasswordRequest,
   apiRequest,
 } from "@/lib/api";
+import { getMessages, type Locale, localeOptions, useI18n } from "@/lib/i18n";
 import { cn } from "@/lib/utils";
 
 type SettingsTab = "account" | "preferences" | "model";
-type LanguagePreference = "zh-CN" | "en-US";
 type ThemePreference = "system" | "light" | "dark";
 
 type AccountSettingsDialogProps = {
@@ -54,17 +54,13 @@ type AccountSettingsDialogProps = {
   onUserUpdated: (user: PublicUser) => void;
 };
 
-const LANGUAGE_STORAGE_KEY = "liquid.preferences.language";
-
 const tabs: Array<{
   value: SettingsTab;
-  label: string;
-  description: string;
   icon: LucideIcon;
 }> = [
-  { value: "account", label: "账户", description: "资料与密码", icon: User },
-  { value: "preferences", label: "偏好", description: "语言与主题", icon: Monitor },
-  { value: "model", label: "模型", description: "LLM Provider", icon: KeyRound },
+  { value: "account", icon: User },
+  { value: "preferences", icon: Monitor },
+  { value: "model", icon: KeyRound },
 ];
 
 export function AccountSettingsDialog({
@@ -73,12 +69,12 @@ export function AccountSettingsDialog({
   onClose,
   onUserUpdated,
 }: AccountSettingsDialogProps) {
+  const { locale, setLocale, t } = useI18n();
   const [activeTab, setActiveTab] = useState<SettingsTab>("account");
   const [displayName, setDisplayName] = useState(user.display_name);
   const [currentPassword, setCurrentPassword] = useState("");
   const [newPassword, setNewPassword] = useState("");
   const [confirmPassword, setConfirmPassword] = useState("");
-  const [language, setLanguage] = useState<LanguagePreference>("zh-CN");
   const [baseUrl, setBaseUrl] = useState(
     "https://api.openai.com/v1/chat/completions",
   );
@@ -98,13 +94,6 @@ export function AccountSettingsDialog({
   }, [user.display_name]);
 
   useEffect(() => {
-    const stored = window.localStorage.getItem(LANGUAGE_STORAGE_KEY);
-    if (stored === "zh-CN" || stored === "en-US") {
-      setLanguage(stored);
-    }
-  }, []);
-
-  useEffect(() => {
     let isMounted = true;
 
     apiRequest<LlmProviderSettingsResponse>("/api/v1/settings/llm-provider", {
@@ -120,7 +109,9 @@ export function AccountSettingsDialog({
         setHasApiKey(response.settings.has_api_key);
       })
       .catch((error) => {
-        toast.error(error instanceof Error ? error.message : "加载模型配置失败");
+        toast.error(
+          error instanceof Error ? error.message : t.settings.toasts.loadModelFailed,
+        );
       })
       .finally(() => {
         if (isMounted) {
@@ -131,7 +122,7 @@ export function AccountSettingsDialog({
     return () => {
       isMounted = false;
     };
-  }, [token]);
+  }, [t.settings.toasts.loadModelFailed, token]);
 
   const selectedTheme = useMemo<ThemePreference>(() => {
     if (theme === "light" || theme === "dark" || theme === "system") {
@@ -155,9 +146,13 @@ export function AccountSettingsDialog({
         body,
       });
       onUserUpdated(response.user);
-      toast.success("显示名称已更新");
+      toast.success(t.settings.toasts.displayNameUpdated);
     } catch (error) {
-      toast.error(error instanceof Error ? error.message : "更新显示名称失败");
+      toast.error(
+        error instanceof Error
+          ? error.message
+          : t.settings.toasts.displayNameUpdateFailed,
+      );
     } finally {
       setSavingDisplayName(false);
     }
@@ -167,7 +162,7 @@ export function AccountSettingsDialog({
     event.preventDefault();
 
     if (newPassword !== confirmPassword) {
-      toast.error("两次输入的新密码不一致");
+      toast.error(t.settings.toasts.passwordMismatch);
       return;
     }
 
@@ -186,18 +181,19 @@ export function AccountSettingsDialog({
       setCurrentPassword("");
       setNewPassword("");
       setConfirmPassword("");
-      toast.success("密码已更新");
+      toast.success(t.settings.toasts.passwordUpdated);
     } catch (error) {
-      toast.error(error instanceof Error ? error.message : "更新密码失败");
+      toast.error(
+        error instanceof Error ? error.message : t.settings.toasts.passwordUpdateFailed,
+      );
     } finally {
       setSavingPassword(false);
     }
   };
 
-  const handleLanguageChange = (nextLanguage: LanguagePreference) => {
-    setLanguage(nextLanguage);
-    window.localStorage.setItem(LANGUAGE_STORAGE_KEY, nextLanguage);
-    toast.success("语言偏好已保存");
+  const handleLanguageChange = (nextLanguage: Locale) => {
+    setLocale(nextLanguage);
+    toast.success(getMessages(nextLanguage).settings.toasts.languageSaved);
   };
 
   const handleModelSubmit = async (event: FormEvent<HTMLFormElement>) => {
@@ -226,9 +222,11 @@ export function AccountSettingsDialog({
       );
       setHasApiKey(Boolean(response.settings?.has_api_key));
       setApiKey("");
-      toast.success("模型配置已保存");
+      toast.success(t.settings.toasts.modelSaved);
     } catch (error) {
-      toast.error(error instanceof Error ? error.message : "保存模型配置失败");
+      toast.error(
+        error instanceof Error ? error.message : t.settings.toasts.modelSaveFailed,
+      );
     } finally {
       setSavingModel(false);
     }
@@ -248,7 +246,7 @@ export function AccountSettingsDialog({
       <button
         type="button"
         className="absolute inset-0 cursor-default"
-        aria-label="关闭设置弹窗"
+        aria-label={t.settings.dialog.closeDialog}
         onClick={onClose}
       />
       <Card
@@ -267,7 +265,7 @@ export function AccountSettingsDialog({
                 id="account-settings-title"
                 className="text-base font-semibold"
               >
-                设置
+                {t.settings.dialog.title}
               </CardTitle>
               <div className="mt-1 flex min-w-0 items-center gap-2 text-xs text-muted-foreground">
                 <span className="flex size-5 shrink-0 items-center justify-center rounded-full bg-primary text-[10px] font-semibold text-primary-foreground">
@@ -285,8 +283,8 @@ export function AccountSettingsDialog({
             type="button"
             variant="ghost"
             size="icon"
-            aria-label="关闭"
-            title="关闭"
+            aria-label={t.common.close}
+            title={t.common.close}
             onClick={onClose}
           >
             <X className="size-4" aria-hidden />
@@ -296,10 +294,11 @@ export function AccountSettingsDialog({
           <div
             className="flex gap-2 overflow-x-auto border-b bg-muted/30 p-3 sm:flex-col sm:border-b-0 sm:border-r sm:bg-muted/20 sm:p-4"
             role="tablist"
-            aria-label="设置分类"
+            aria-label={t.settings.dialog.categoriesLabel}
           >
             {tabs.map((tab) => {
               const Icon = tab.icon;
+              const tabLabel = t.settings.tabs[tab.value];
 
               return (
                 <button
@@ -329,10 +328,10 @@ export function AccountSettingsDialog({
                   </span>
                   <span className="min-w-0">
                     <span className="block text-sm font-medium leading-none">
-                      {tab.label}
+                      {tabLabel.label}
                     </span>
                     <span className="mt-1 hidden truncate text-xs text-muted-foreground sm:block">
-                      {tab.description}
+                      {tabLabel.description}
                     </span>
                   </span>
                 </button>
@@ -367,7 +366,7 @@ export function AccountSettingsDialog({
                 labelledBy="preferences-settings-tab"
               >
                 <PreferencesTab
-                  language={language}
+                  language={locale}
                   onLanguageChange={handleLanguageChange}
                   theme={selectedTheme}
                   onThemeChange={(nextTheme) => setTheme(nextTheme)}
@@ -445,20 +444,25 @@ function AccountTab({
   onDisplayNameSubmit: (event: FormEvent<HTMLFormElement>) => void;
   onPasswordSubmit: (event: FormEvent<HTMLFormElement>) => void;
 }) {
+  const { t } = useI18n();
+
   return (
     <div className="space-y-4">
       <SectionHeader
         icon={<User className="size-4" aria-hidden />}
-        title="账户"
-        description="更新个人资料和登录凭据。"
-        badge="本地账户"
+        title={t.settings.account.title}
+        description={t.settings.account.description}
+        badge={t.settings.account.badge}
       />
 
-      <SettingsBlock title="个人资料" description="显示名称会同步到账户区。">
+      <SettingsBlock
+        title={t.settings.account.profileTitle}
+        description={t.settings.account.profileDescription}
+      >
         <form className="space-y-3" onSubmit={onDisplayNameSubmit}>
           <SettingsField
             id="settings-display-name"
-            label="显示名称"
+            label={t.settings.account.displayName}
             value={displayName}
             onChange={setDisplayName}
             autoComplete="name"
@@ -471,17 +475,20 @@ function AccountTab({
               ) : (
                 <Save className="size-4" aria-hidden />
               )}
-              保存名称
+              {t.settings.account.saveName}
             </Button>
           </div>
         </form>
       </SettingsBlock>
 
-      <SettingsBlock title="登录密码" description="修改后下次登录使用新密码。">
+      <SettingsBlock
+        title={t.settings.account.passwordTitle}
+        description={t.settings.account.passwordDescription}
+      >
         <form className="space-y-3" onSubmit={onPasswordSubmit}>
           <SettingsField
             id="settings-current-password"
-            label="当前密码"
+            label={t.settings.account.currentPassword}
             type="password"
             value={currentPassword}
             onChange={setCurrentPassword}
@@ -491,7 +498,7 @@ function AccountTab({
           <div className="grid gap-3 sm:grid-cols-2">
             <SettingsField
               id="settings-new-password"
-              label="新密码"
+              label={t.settings.account.newPassword}
               type="password"
               value={newPassword}
               onChange={setNewPassword}
@@ -500,7 +507,7 @@ function AccountTab({
             />
             <SettingsField
               id="settings-confirm-password"
-              label="确认新密码"
+              label={t.settings.account.confirmPassword}
               type="password"
               value={confirmPassword}
               onChange={setConfirmPassword}
@@ -515,7 +522,7 @@ function AccountTab({
               ) : (
                 <KeyRound className="size-4" aria-hidden />
               )}
-              更新密码
+              {t.settings.account.updatePassword}
             </Button>
           </div>
         </form>
@@ -530,58 +537,64 @@ function PreferencesTab({
   theme,
   onThemeChange,
 }: {
-  language: LanguagePreference;
-  onLanguageChange: (language: LanguagePreference) => void;
+  language: Locale;
+  onLanguageChange: (language: Locale) => void;
   theme: ThemePreference;
   onThemeChange: (theme: ThemePreference) => void;
 }) {
+  const { t } = useI18n();
+  const themeBadge = t.settings.preferences.themeBadges[theme];
+
   return (
     <div className="space-y-4">
       <SectionHeader
         icon={<Monitor className="size-4" aria-hidden />}
-        title="偏好"
-        description="语言先保存偏好，主题会立即切换界面。"
-        badge={theme === "system" ? "跟随系统" : theme === "dark" ? "深色" : "浅色"}
+        title={t.settings.preferences.title}
+        description={t.settings.preferences.description}
+        badge={themeBadge}
       />
 
-      <SettingsBlock title="语言" description="当前仅保存偏好，不改变全站文案。">
+      <SettingsBlock
+        title={t.settings.preferences.languageTitle}
+        description={t.settings.preferences.languageDescription}
+      >
         <PreferenceGroup>
-          <SegmentedOption
-            active={language === "zh-CN"}
-            label="中文"
-            description="zh-CN"
-            onClick={() => onLanguageChange("zh-CN")}
-          />
-          <SegmentedOption
-            active={language === "en-US"}
-            label="English"
-            description="en-US"
-            onClick={() => onLanguageChange("en-US")}
-          />
+          {localeOptions.map((option) => (
+            <SegmentedOption
+              key={option.value}
+              active={language === option.value}
+              label={option.label}
+              description={option.description}
+              onClick={() => onLanguageChange(option.value)}
+            />
+          ))}
         </PreferenceGroup>
       </SettingsBlock>
 
-      <SettingsBlock title="主题" description="立即切换当前浏览器中的界面主题。">
+      <SettingsBlock
+        title={t.settings.preferences.themeTitle}
+        description={t.settings.preferences.themeDescription}
+      >
         <PreferenceGroup>
           <IconOption
             active={theme === "system"}
             icon={<Monitor className="size-4" aria-hidden />}
-            label="跟随系统"
-            description="使用系统外观"
+            label={t.settings.preferences.themeOptions.system.label}
+            description={t.settings.preferences.themeOptions.system.description}
             onClick={() => onThemeChange("system")}
           />
           <IconOption
             active={theme === "light"}
             icon={<Sun className="size-4" aria-hidden />}
-            label="浅色"
-            description="明亮工作区"
+            label={t.settings.preferences.themeOptions.light.label}
+            description={t.settings.preferences.themeOptions.light.description}
             onClick={() => onThemeChange("light")}
           />
           <IconOption
             active={theme === "dark"}
             icon={<Moon className="size-4" aria-hidden />}
-            label="深色"
-            description="低亮界面"
+            label={t.settings.preferences.themeOptions.dark.label}
+            description={t.settings.preferences.themeOptions.dark.description}
             onClick={() => onThemeChange("dark")}
           />
         </PreferenceGroup>
@@ -617,18 +630,24 @@ function ModelTab({
   isSaving: boolean;
   onSubmit: (event: FormEvent<HTMLFormElement>) => void;
 }) {
+  const { t } = useI18n();
+
   return (
     <div className="space-y-4">
       <SectionHeader
         icon={<KeyRound className="size-4" aria-hidden />}
-        title="模型"
-        description="配置 OpenAI-compatible provider，用于 SQL 审计。"
-        badge={hasApiKey ? "API Key 已配置" : "待配置"}
+        title={t.settings.model.title}
+        description={t.settings.model.description}
+        badge={
+          hasApiKey
+            ? t.settings.model.configuredBadge
+            : t.settings.model.pendingBadge
+        }
       />
       {isLoading ? (
         <div className="flex items-center gap-2 rounded-lg border bg-muted/30 p-4 text-sm text-muted-foreground shadow-xs">
           <Loader2 className="size-4 animate-spin" aria-hidden />
-          正在加载模型配置
+          {t.settings.model.loading}
         </div>
       ) : (
         <form className="space-y-4" onSubmit={onSubmit}>
@@ -641,7 +660,7 @@ function ModelTab({
                 <div>
                   <div className="text-sm font-medium">OpenAI-compatible</div>
                   <div className="mt-0.5 text-xs text-muted-foreground">
-                    SQL 审计会优先使用当前账户的模型配置。
+                    {t.settings.model.providerDescription}
                   </div>
                 </div>
               </div>
@@ -652,25 +671,30 @@ function ModelTab({
                 {hasApiKey ? (
                   <CheckCircle2 className="size-3" aria-hidden />
                 ) : null}
-                {hasApiKey ? "API Key 已配置" : "API Key 未配置"}
+                {hasApiKey
+                  ? t.settings.model.apiKeyConfigured
+                  : t.settings.model.apiKeyMissing}
               </Badge>
             </div>
           </div>
 
-          <SettingsBlock title="接口" description="填写完整 endpoint URL，并选择匹配的 API Mode。">
+          <SettingsBlock
+            title={t.settings.model.endpointTitle}
+            description={t.settings.model.endpointDescription}
+          >
             <SettingsField
               id="settings-model-base-url"
-              label="完整 URL"
+              label={t.settings.model.fullUrl}
               value={baseUrl}
               onChange={setBaseUrl}
               placeholder="https://api.openai.com/v1/chat/completions"
-              helpText="例如 /v1/chat/completions 或 /v1/responses。"
+              helpText={t.settings.model.urlHelp}
               required
             />
             <div className="grid gap-3 sm:grid-cols-[1fr_180px]">
               <SettingsField
                 id="settings-model-name"
-                label="模型"
+                label={t.settings.model.modelLabel}
                 value={model}
                 onChange={setModel}
                 placeholder="gpt-4.1"
@@ -699,9 +723,11 @@ function ModelTab({
           </SettingsBlock>
 
           <SettingsBlock
-            title="密钥"
+            title={t.settings.model.secretTitle}
             description={
-              hasApiKey ? "留空保存时会继续使用已保存密钥。" : "API Key 只会加密保存，不会回显。"
+              hasApiKey
+                ? t.settings.model.secretDescriptionConfigured
+                : t.settings.model.secretDescriptionMissing
             }
           >
             <SettingsField
@@ -710,7 +736,7 @@ function ModelTab({
               type="password"
               value={apiKey}
               onChange={setApiKey}
-              placeholder={hasApiKey ? "留空则保持当前密钥" : ""}
+              placeholder={hasApiKey ? t.settings.model.keepSecretPlaceholder : ""}
               autoComplete="off"
             />
           </SettingsBlock>
@@ -722,7 +748,7 @@ function ModelTab({
               ) : (
                 <Save className="size-4" aria-hidden />
               )}
-              保存模型配置
+              {t.settings.model.save}
             </Button>
           </div>
         </form>
