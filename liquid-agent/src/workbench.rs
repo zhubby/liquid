@@ -4,7 +4,8 @@ use anyhow::{Context, Result, bail};
 use async_trait::async_trait;
 use liquid_core::{
     AgentAction, AgentActionKind, AgentMessage, AgentResourceKind, AuditSummary, DatapanelCardKind,
-    DatapanelChartConfig, DatapanelChartType, ManagedDatabase, SqlAuditRecord,
+    DatapanelChartConfig, DatapanelChartSeries, DatapanelChartType, ManagedDatabase,
+    SqlAuditRecord,
 };
 use liquid_llm::{LlmClient, LlmMessage, LlmProtocol, LlmRequest, ToolCall, ToolDefinition};
 use serde::Deserialize;
@@ -439,12 +440,57 @@ impl AgentTool for ProposeDatapanelCardActionTool {
                     },
                     "chart_type": {
                         "type": "string",
-                        "enum": ["line", "bar", "area", "pie"]
+                        "enum": [
+                            "line",
+                            "bar",
+                            "area",
+                            "pie",
+                            "scatter",
+                            "radar",
+                            "radial_bar",
+                            "composed",
+                            "treemap",
+                            "funnel",
+                            "sunburst"
+                        ]
                     },
-                    "x_key": { "type": "string" },
+                    "x_key": {
+                        "type": "string",
+                        "description": "Category or x-axis column. Required for line, bar, area, pie, scatter, radar, radial_bar, composed, and funnel charts."
+                    },
                     "y_keys": {
                         "type": "array",
-                        "items": { "type": "string" }
+                        "items": { "type": "string" },
+                        "description": "Metric columns. Required for line, bar, area, pie, scatter, radar, radial_bar, and funnel charts."
+                    },
+                    "z_key": {
+                        "type": "string",
+                        "description": "Optional point-size column for scatter charts."
+                    },
+                    "series": {
+                        "type": "array",
+                        "description": "Required for composed charts. Each series maps one query result column to line, bar, or area.",
+                        "items": {
+                            "type": "object",
+                            "properties": {
+                                "key": { "type": "string" },
+                                "kind": {
+                                    "type": "string",
+                                    "enum": ["line", "bar", "area"]
+                                }
+                            },
+                            "required": ["key", "kind"],
+                            "additionalProperties": false
+                        }
+                    },
+                    "group_keys": {
+                        "type": "array",
+                        "items": { "type": "string" },
+                        "description": "Required for treemap and sunburst charts. Ordered columns that form the hierarchy path."
+                    },
+                    "value_key": {
+                        "type": "string",
+                        "description": "Required for treemap and sunburst charts. Numeric metric column used for area or arc size."
                     },
                     "limit": { "type": "integer" }
                 },
@@ -539,6 +585,14 @@ struct ProposeDatapanelCardActionArgs {
     #[serde(default)]
     y_keys: Vec<String>,
     #[serde(default)]
+    z_key: Option<String>,
+    #[serde(default)]
+    series: Vec<DatapanelChartSeries>,
+    #[serde(default)]
+    group_keys: Vec<String>,
+    #[serde(default)]
+    value_key: Option<String>,
+    #[serde(default)]
     limit: Option<usize>,
 }
 
@@ -599,6 +653,10 @@ fn proposal_tool_call_to_suggestion(
                 args.chart_type,
                 args.x_key,
                 args.y_keys,
+                args.z_key,
+                args.series,
+                args.group_keys,
+                args.value_key,
                 args.limit,
             )
         }
@@ -892,6 +950,14 @@ enum LlmWorkbenchAction {
         #[serde(default)]
         y_keys: Vec<String>,
         #[serde(default)]
+        z_key: Option<String>,
+        #[serde(default)]
+        series: Vec<DatapanelChartSeries>,
+        #[serde(default)]
+        group_keys: Vec<String>,
+        #[serde(default)]
+        value_key: Option<String>,
+        #[serde(default)]
         limit: Option<usize>,
     },
     ApproveSqlAudit {
@@ -938,6 +1004,10 @@ impl LlmWorkbenchAction {
                 chart_type,
                 x_key,
                 y_keys,
+                z_key,
+                series,
+                group_keys,
+                value_key,
                 limit,
             } => datapanel_card_suggestion(
                 context,
@@ -948,6 +1018,10 @@ impl LlmWorkbenchAction {
                 chart_type,
                 x_key,
                 y_keys,
+                z_key,
+                series,
+                group_keys,
+                value_key,
                 limit,
             ),
             Self::ApproveSqlAudit {
@@ -1041,6 +1115,10 @@ fn datapanel_card_suggestion(
     chart_type: Option<DatapanelChartType>,
     x_key: Option<String>,
     y_keys: Vec<String>,
+    z_key: Option<String>,
+    series: Vec<DatapanelChartSeries>,
+    group_keys: Vec<String>,
+    value_key: Option<String>,
     limit: Option<usize>,
 ) -> Result<WorkbenchActionSuggestion> {
     let Some(database_id) = context
@@ -1055,14 +1133,9 @@ fn datapanel_card_suggestion(
     let description = optional_trimmed(description);
     let chart = match display {
         DatapanelCardKind::Table => None,
-        DatapanelCardKind::Chart => Some(DatapanelChartConfig {
-            chart_type: chart_type.ok_or_else(|| anyhow::anyhow!("chart_type is required"))?,
-            x_key: required_trimmed(
-                "x_key",
-                x_key.ok_or_else(|| anyhow::anyhow!("x_key is required"))?,
-            )?,
-            y_keys: required_y_keys(y_keys)?,
-        }),
+        DatapanelCardKind::Chart => Some(datapanel_chart_config(
+            chart_type, x_key, y_keys, z_key, series, group_keys, value_key,
+        )?),
     };
 
     Ok(WorkbenchActionSuggestion {
@@ -1083,6 +1156,70 @@ fn datapanel_card_suggestion(
         resource_kind: Some(AgentResourceKind::DatapanelCard),
         resource_id: None,
         requires_confirmation: true,
+    })
+}
+
+fn datapanel_chart_config(
+    chart_type: Option<DatapanelChartType>,
+    x_key: Option<String>,
+    y_keys: Vec<String>,
+    z_key: Option<String>,
+    series: Vec<DatapanelChartSeries>,
+    group_keys: Vec<String>,
+    value_key: Option<String>,
+) -> Result<DatapanelChartConfig> {
+    let chart_type = chart_type.ok_or_else(|| anyhow::anyhow!("chart_type is required"))?;
+    let x_key = optional_trimmed(x_key);
+    let mut y_keys = trimmed_keys("y_key", y_keys)?;
+    let z_key = optional_trimmed(z_key);
+    let mut series = trimmed_series(series)?;
+    let group_keys = trimmed_keys("group_key", group_keys)?;
+    let value_key = optional_trimmed(value_key);
+
+    match chart_type {
+        DatapanelChartType::Line
+        | DatapanelChartType::Bar
+        | DatapanelChartType::Area
+        | DatapanelChartType::Pie
+        | DatapanelChartType::Radar
+        | DatapanelChartType::RadialBar
+        | DatapanelChartType::Funnel => {
+            require_config_key("x_key", x_key.as_deref())?;
+            require_config_keys("y_keys", &y_keys)?;
+            series.clear();
+        }
+        DatapanelChartType::Scatter => {
+            require_config_key("x_key", x_key.as_deref())?;
+            require_config_keys("y_keys", &y_keys)?;
+            series.clear();
+        }
+        DatapanelChartType::Composed => {
+            require_config_key("x_key", x_key.as_deref())?;
+
+            if series.is_empty() {
+                bail!("series is required");
+            }
+
+            if y_keys.is_empty() {
+                y_keys = series.iter().map(|item| item.key.clone()).collect();
+            }
+        }
+        DatapanelChartType::Treemap | DatapanelChartType::Sunburst => {
+            require_config_keys("group_keys", &group_keys)?;
+            require_config_key("value_key", value_key.as_deref())?;
+            y_keys.clear();
+            series.clear();
+        }
+    }
+
+    Ok(DatapanelChartConfig {
+        chart_type,
+        x_key,
+        y_keys: non_empty_vec(y_keys),
+        z_key,
+        series: non_empty_vec(series),
+        group_keys: non_empty_vec(group_keys),
+        value_key,
     })
 }
 
@@ -1135,17 +1272,47 @@ fn optional_trimmed(value: Option<String>) -> Option<String> {
         .filter(|value| !value.is_empty())
 }
 
-fn required_y_keys(values: Vec<String>) -> Result<Vec<String>> {
-    let keys = values
-        .into_iter()
-        .map(|value| required_trimmed("y_key", value))
-        .collect::<Result<Vec<_>>>()?;
+fn non_empty_vec<T>(values: Vec<T>) -> Option<Vec<T>> {
+    if values.is_empty() {
+        None
+    } else {
+        Some(values)
+    }
+}
 
-    if keys.is_empty() {
-        bail!("y_keys is required");
+fn trimmed_keys(field: &str, values: Vec<String>) -> Result<Vec<String>> {
+    values
+        .into_iter()
+        .map(|value| required_trimmed(field, value))
+        .collect::<Result<Vec<_>>>()
+}
+
+fn trimmed_series(values: Vec<DatapanelChartSeries>) -> Result<Vec<DatapanelChartSeries>> {
+    values
+        .into_iter()
+        .map(|value| {
+            Ok(DatapanelChartSeries {
+                key: required_trimmed("series.key", value.key)?,
+                kind: value.kind,
+            })
+        })
+        .collect::<Result<Vec<_>>>()
+}
+
+fn require_config_key(field: &str, value: Option<&str>) -> Result<()> {
+    if value.is_none() {
+        bail!("{field} is required");
     }
 
-    Ok(keys)
+    Ok(())
+}
+
+fn require_config_keys(field: &str, keys: &[String]) -> Result<()> {
+    if keys.is_empty() {
+        bail!("{field} is required");
+    }
+
+    Ok(())
 }
 
 fn fenced_json(content: &str) -> Option<&str> {
@@ -1580,6 +1747,109 @@ mod tests {
     }
 
     #[test]
+    fn parses_llm_composed_datapanel_card_action() {
+        let response = parse_llm_workbench_response(
+            r#"{
+                "message": "I prepared a composed chart card.",
+                "actions": [{
+                    "kind": "create_datapanel_card",
+                    "title": "Revenue mix",
+                    "display": "chart",
+                    "sql": "select day, revenue, cost from revenue_daily",
+                    "chart_type": "composed",
+                    "x_key": "day",
+                    "series": [
+                        { "key": "revenue", "kind": "bar" },
+                        { "key": "cost", "kind": "line" }
+                    ]
+                }]
+            }"#,
+            &llm_context(),
+        )
+        .unwrap();
+
+        let chart = &response.actions[0].payload["chart"];
+        assert_eq!(chart["chart_type"], "composed");
+        assert_eq!(chart["x_key"], "day");
+        assert_eq!(chart["series"][0]["key"], "revenue");
+        assert_eq!(chart["series"][0]["kind"], "bar");
+        assert_eq!(chart["series"][1]["key"], "cost");
+        assert_eq!(chart["series"][1]["kind"], "line");
+        assert_eq!(chart["y_keys"][0], "revenue");
+        assert_eq!(chart["y_keys"][1], "cost");
+    }
+
+    #[test]
+    fn parses_llm_hierarchy_datapanel_card_action() {
+        let response = parse_llm_workbench_response(
+            r#"{
+                "message": "I prepared a treemap card.",
+                "actions": [{
+                    "kind": "create_datapanel_card",
+                    "title": "Revenue hierarchy",
+                    "display": "chart",
+                    "sql": "select region, product, revenue from revenue_by_product",
+                    "chart_type": "treemap",
+                    "group_keys": ["region", "product"],
+                    "value_key": "revenue"
+                }]
+            }"#,
+            &llm_context(),
+        )
+        .unwrap();
+
+        let chart = &response.actions[0].payload["chart"];
+        assert_eq!(chart["chart_type"], "treemap");
+        assert_eq!(chart["group_keys"][0], "region");
+        assert_eq!(chart["group_keys"][1], "product");
+        assert_eq!(chart["value_key"], "revenue");
+        assert!(chart.get("x_key").is_none());
+        assert!(chart.get("y_keys").is_none());
+    }
+
+    #[test]
+    fn rejects_composed_chart_without_series() {
+        let error = parse_llm_workbench_response(
+            r#"{
+                "message": "I prepared a chart card.",
+                "actions": [{
+                    "kind": "create_datapanel_card",
+                    "title": "Revenue mix",
+                    "display": "chart",
+                    "sql": "select day, revenue from revenue_daily",
+                    "chart_type": "composed",
+                    "x_key": "day"
+                }]
+            }"#,
+            &llm_context(),
+        )
+        .unwrap_err();
+
+        assert_eq!(error.to_string(), "series is required");
+    }
+
+    #[test]
+    fn rejects_hierarchy_chart_without_value_key() {
+        let error = parse_llm_workbench_response(
+            r#"{
+                "message": "I prepared a chart card.",
+                "actions": [{
+                    "kind": "create_datapanel_card",
+                    "title": "Revenue hierarchy",
+                    "display": "chart",
+                    "sql": "select region, product, revenue from revenue_by_product",
+                    "chart_type": "sunburst",
+                    "group_keys": ["region", "product"]
+                }]
+            }"#,
+            &llm_context(),
+        )
+        .unwrap_err();
+
+        assert_eq!(error.to_string(), "value_key is required");
+    }
+
+    #[test]
     fn rejects_unknown_bi_chart_type() {
         let error = parse_llm_workbench_response(
             r#"{
@@ -1589,7 +1859,7 @@ mod tests {
                     "title": "Risk trend",
                     "display": "chart",
                     "sql": "select day, risk_count from risk_daily",
-                    "chart_type": "scatter",
+                    "chart_type": "bubble",
                     "x_key": "day",
                     "y_keys": ["risk_count"]
                 }]

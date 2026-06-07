@@ -17,6 +17,8 @@ export type { DatapanelCardKind } from "./generated/api-types/DatapanelCardKind"
 export type { DatapanelCardLayout } from "./generated/api-types/DatapanelCardLayout";
 export type { DatapanelCardLayoutUpdate } from "./generated/api-types/DatapanelCardLayoutUpdate";
 export type { DatapanelChartConfig } from "./generated/api-types/DatapanelChartConfig";
+export type { DatapanelChartSeries } from "./generated/api-types/DatapanelChartSeries";
+export type { DatapanelChartSeriesKind } from "./generated/api-types/DatapanelChartSeriesKind";
 export type { DatapanelChartType } from "./generated/api-types/DatapanelChartType";
 export type { Datapanel } from "./generated/api-types/Datapanel";
 export type { DatapanelCard } from "./generated/api-types/DatapanelCard";

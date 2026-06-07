@@ -24,24 +24,9 @@ import {
   Trash2,
   X,
 } from "lucide-react";
-import {
-  Area,
-  AreaChart,
-  Bar,
-  BarChart,
-  CartesianGrid,
-  Cell,
-  Line,
-  LineChart,
-  Pie,
-  PieChart,
-  ResponsiveContainer,
-  Tooltip,
-  XAxis,
-  YAxis,
-} from "recharts";
 import { toast } from "sonner";
 
+import { DatapanelChartRenderer } from "@/components/datapanel-chart-renderer";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import {
@@ -63,27 +48,9 @@ type DatapanelWorkspacePanelProps = {
   refreshKey: number;
 };
 
-type RowValue = Record<string, unknown>;
-
 const GRID_COLUMNS = 12;
 const GRID_ROW_HEIGHT = 44;
 const LAYOUT_SAVE_DELAY_MS = 600;
-
-const chartColors = [
-  "var(--chart-1)",
-  "var(--chart-2)",
-  "var(--chart-3)",
-  "var(--chart-4)",
-  "var(--chart-5)",
-];
-
-const chartBase = {
-  grid: "var(--border)",
-  text: "var(--muted-foreground)",
-  tooltipBackground: "var(--popover)",
-  tooltipBorder: "var(--border)",
-  tooltipText: "var(--popover-foreground)",
-};
 
 export function DatapanelWorkspacePanel({
   token,
@@ -705,152 +672,19 @@ function DatapanelTable({ card }: { card: DatapanelCard }) {
 }
 
 function DatapanelChart({ card }: { card: DatapanelCard }) {
-  const rows = card.result.rows as RowValue[];
+  const { t } = useI18n();
   const chart = card.chart;
 
   if (!chart) {
     return <DatapanelTable card={card} />;
   }
 
-  if (chart.chart_type === "pie") {
-    return (
-      <ResponsiveContainer width="100%" height="100%">
-        <PieChart>
-          <Tooltip content={<ChartTooltip />} />
-          <Pie
-            data={rows}
-            dataKey={chart.y_keys[0]}
-            nameKey={chart.x_key}
-            innerRadius="52%"
-            outerRadius="78%"
-            paddingAngle={2}
-          >
-            {rows.map((_, index) => (
-              <Cell
-                key={index}
-                fill={chartColors[index % chartColors.length]}
-              />
-            ))}
-          </Pie>
-        </PieChart>
-      </ResponsiveContainer>
-    );
-  }
-
-  const commonAxes = (
-    <>
-      <CartesianGrid stroke={chartBase.grid} vertical={false} />
-      <XAxis
-        dataKey={chart.x_key}
-        tickLine={false}
-        axisLine={false}
-        tick={{ fill: chartBase.text, fontSize: 12 }}
-      />
-      <YAxis
-        tickLine={false}
-        axisLine={false}
-        tick={{ fill: chartBase.text, fontSize: 12 }}
-        width={42}
-      />
-      <Tooltip content={<ChartTooltip />} />
-    </>
-  );
-
-  if (chart.chart_type === "bar") {
-    return (
-      <ResponsiveContainer width="100%" height="100%">
-        <BarChart data={rows}>
-          {commonAxes}
-          {chart.y_keys.map((key, index) => (
-            <Bar
-              key={key}
-              dataKey={key}
-              fill={chartColors[index % chartColors.length]}
-              radius={[4, 4, 0, 0]}
-            />
-          ))}
-        </BarChart>
-      </ResponsiveContainer>
-    );
-  }
-
-  if (chart.chart_type === "area") {
-    return (
-      <ResponsiveContainer width="100%" height="100%">
-        <AreaChart data={rows}>
-          {commonAxes}
-          {chart.y_keys.map((key, index) => (
-            <Area
-              key={key}
-              type="monotone"
-              dataKey={key}
-              stroke={chartColors[index % chartColors.length]}
-              fill={chartColors[index % chartColors.length]}
-              fillOpacity={0.16}
-              strokeWidth={2}
-            />
-          ))}
-        </AreaChart>
-      </ResponsiveContainer>
-    );
-  }
-
   return (
-    <ResponsiveContainer width="100%" height="100%">
-      <LineChart data={rows}>
-        {commonAxes}
-        {chart.y_keys.map((key, index) => (
-          <Line
-            key={key}
-            type="monotone"
-            dataKey={key}
-            stroke={chartColors[index % chartColors.length]}
-            strokeWidth={2}
-            dot={false}
-          />
-        ))}
-      </LineChart>
-    </ResponsiveContainer>
-  );
-}
-
-function ChartTooltip({
-  active,
-  payload,
-  label,
-}: {
-  active?: boolean;
-  payload?: Array<{
-    name?: string;
-    value?: number | string;
-    color?: string;
-  }>;
-  label?: string;
-}) {
-  if (!active || !payload?.length) {
-    return null;
-  }
-
-  return (
-    <div
-      className="rounded-md border px-3 py-2 text-xs shadow-sm"
-      style={{
-        background: chartBase.tooltipBackground,
-        borderColor: chartBase.tooltipBorder,
-        color: chartBase.tooltipText,
-      }}
-    >
-      {label ? <div className="mb-1 font-medium">{label}</div> : null}
-      <div className="space-y-1">
-        {payload.map((entry) => (
-          <div key={`${entry.name}-${entry.value}`} className="flex gap-2">
-            <span style={{ color: entry.color }}>●</span>
-            <span className="text-muted-foreground">{entry.name}</span>
-            <span className="font-medium">{entry.value}</span>
-          </div>
-        ))}
-      </div>
-    </div>
+    <DatapanelChartRenderer
+      chart={chart}
+      rows={card.result.rows}
+      emptyLabel={t.dashboard.noRows}
+    />
   );
 }
 

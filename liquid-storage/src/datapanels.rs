@@ -1,7 +1,7 @@
 use liquid_core::{
     CreateDatapanelCardRequest, Datapanel, DatapanelCard, DatapanelCardKind, DatapanelCardLayout,
-    DatapanelCardLayoutUpdate, DatapanelChartConfig, DatapanelExport, DatapanelQueryResult,
-    UpdateDatapanelCardRequest, UpdateDatapanelRequest,
+    DatapanelCardLayoutUpdate, DatapanelChartConfig, DatapanelChartType, DatapanelExport,
+    DatapanelQueryResult, UpdateDatapanelCardRequest, UpdateDatapanelRequest,
 };
 use serde_json::Value;
 use time::OffsetDateTime;
@@ -439,19 +439,157 @@ fn validate_layout(layout: &DatapanelCardLayout) -> Result<(), StorageError> {
 }
 
 fn validate_chart(chart: &DatapanelChartConfig) -> Result<(), StorageError> {
-    required_string("x_key", &chart.x_key)?;
+    let y_keys = chart.y_keys.as_deref().unwrap_or(&[]);
+    let series = chart.series.as_deref().unwrap_or(&[]);
+    let group_keys = chart.group_keys.as_deref().unwrap_or(&[]);
 
-    if chart.y_keys.is_empty() {
-        return Err(StorageError::Validation(
-            "chart cards require at least one y key".to_owned(),
-        ));
+    match chart.chart_type {
+        DatapanelChartType::Line
+        | DatapanelChartType::Bar
+        | DatapanelChartType::Area
+        | DatapanelChartType::Pie
+        | DatapanelChartType::Scatter
+        | DatapanelChartType::Radar
+        | DatapanelChartType::RadialBar
+        | DatapanelChartType::Funnel => {
+            required_chart_key("x_key", chart.x_key.as_ref())?;
+            required_chart_keys("y_key", y_keys)?;
+        }
+        DatapanelChartType::Composed => {
+            required_chart_key("x_key", chart.x_key.as_ref())?;
+
+            if series.is_empty() {
+                return Err(StorageError::Validation(
+                    "chart cards require at least one series".to_owned(),
+                ));
+            }
+        }
+        DatapanelChartType::Treemap | DatapanelChartType::Sunburst => {
+            required_chart_keys("group_key", group_keys)?;
+            required_chart_key("value_key", chart.value_key.as_ref())?;
+        }
     }
 
-    for key in &chart.y_keys {
+    if let Some(z_key) = &chart.z_key {
+        required_string("z_key", z_key)?;
+    }
+
+    for key in y_keys {
         required_string("y_key", key)?;
     }
 
+    for item in series {
+        required_string("series.key", &item.key)?;
+    }
+
+    for key in group_keys {
+        required_string("group_key", key)?;
+    }
+
     Ok(())
+}
+
+fn required_chart_key(field: &str, value: Option<&String>) -> Result<(), StorageError> {
+    match value {
+        Some(value) => required_string(field, value).map(|_| ()),
+        None => Err(StorageError::Validation(format!(
+            "chart cards require {field}"
+        ))),
+    }
+}
+
+fn required_chart_keys(field: &str, values: &[String]) -> Result<(), StorageError> {
+    if values.is_empty() {
+        return Err(StorageError::Validation(format!(
+            "chart cards require at least one {field}"
+        )));
+    }
+
+    for value in values {
+        required_string(field, value)?;
+    }
+
+    Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use liquid_core::{DatapanelChartSeries, DatapanelChartSeriesKind};
+
+    use super::*;
+
+    #[test]
+    fn validate_chart_accepts_composed_series() {
+        let chart = DatapanelChartConfig {
+            chart_type: DatapanelChartType::Composed,
+            x_key: Some("day".to_owned()),
+            y_keys: Some(vec!["revenue".to_owned(), "cost".to_owned()]),
+            z_key: None,
+            series: Some(vec![
+                DatapanelChartSeries {
+                    key: "revenue".to_owned(),
+                    kind: DatapanelChartSeriesKind::Bar,
+                },
+                DatapanelChartSeries {
+                    key: "cost".to_owned(),
+                    kind: DatapanelChartSeriesKind::Line,
+                },
+            ]),
+            group_keys: None,
+            value_key: None,
+        };
+
+        validate_chart(&chart).unwrap();
+    }
+
+    #[test]
+    fn validate_chart_accepts_hierarchy_config() {
+        let chart = DatapanelChartConfig {
+            chart_type: DatapanelChartType::Sunburst,
+            x_key: None,
+            y_keys: None,
+            z_key: None,
+            series: None,
+            group_keys: Some(vec!["region".to_owned(), "product".to_owned()]),
+            value_key: Some("revenue".to_owned()),
+        };
+
+        validate_chart(&chart).unwrap();
+    }
+
+    #[test]
+    fn validate_chart_rejects_composed_without_series() {
+        let chart = DatapanelChartConfig {
+            chart_type: DatapanelChartType::Composed,
+            x_key: Some("day".to_owned()),
+            y_keys: Some(vec!["revenue".to_owned()]),
+            z_key: None,
+            series: None,
+            group_keys: None,
+            value_key: None,
+        };
+
+        let error = validate_chart(&chart).unwrap_err();
+
+        assert_eq!(error.to_string(), "chart cards require at least one series");
+    }
+
+    #[test]
+    fn validate_chart_rejects_hierarchy_without_value_key() {
+        let chart = DatapanelChartConfig {
+            chart_type: DatapanelChartType::Treemap,
+            x_key: None,
+            y_keys: None,
+            z_key: None,
+            series: None,
+            group_keys: Some(vec!["region".to_owned(), "product".to_owned()]),
+            value_key: None,
+        };
+
+        let error = validate_chart(&chart).unwrap_err();
+
+        assert_eq!(error.to_string(), "chart cards require value_key");
+    }
 }
 
 fn checked_json<T: serde::Serialize>(field: &str, value: &T) -> Result<Value, StorageError> {

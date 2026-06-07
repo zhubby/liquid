@@ -10,8 +10,8 @@ use liquid_core::{
     AgentResourceKind, AgentTurn, AgentTurnStatus, ApproveSqlAuditRequest,
     CreateAgentActionRequest, CreateDatapanelCardRequest, CreateSqlAuditRequest, Datapanel,
     DatapanelCard, DatapanelCardKind, DatapanelCardLayout, DatapanelChartConfig,
-    DatapanelQueryResult, ManagedDatabasePoolKey, PublicUser, RejectSqlAuditRequest,
-    SqlAuditRecord, SqlAuditStatus,
+    DatapanelChartType, DatapanelQueryResult, ManagedDatabasePoolKey, PublicUser,
+    RejectSqlAuditRequest, SqlAuditRecord, SqlAuditStatus,
 };
 use serde::{Deserialize, Serialize};
 use serde_json::{Value, json};
@@ -1192,15 +1192,85 @@ fn ensure_chart_keys_available(
     let Some(chart) = chart else {
         return Ok(());
     };
+    let y_keys = chart.y_keys.as_deref().unwrap_or(&[]);
+    let series = chart.series.as_deref().unwrap_or(&[]);
+    let group_keys = chart.group_keys.as_deref().unwrap_or(&[]);
 
-    if !result.columns.iter().any(|column| column == &chart.x_key) {
-        anyhow::bail!("datapanel chart x_key is not present in query results");
+    match chart.chart_type {
+        DatapanelChartType::Line
+        | DatapanelChartType::Bar
+        | DatapanelChartType::Area
+        | DatapanelChartType::Pie
+        | DatapanelChartType::Scatter
+        | DatapanelChartType::Radar
+        | DatapanelChartType::RadialBar
+        | DatapanelChartType::Funnel => {
+            ensure_required_chart_column("x_key", chart.x_key.as_deref(), result)?;
+            ensure_chart_columns("y_key", y_keys, result)?;
+        }
+        DatapanelChartType::Composed => {
+            ensure_required_chart_column("x_key", chart.x_key.as_deref(), result)?;
+
+            if series.is_empty() {
+                anyhow::bail!("datapanel chart series is required");
+            }
+
+            for item in series {
+                ensure_chart_column("series.key", &item.key, result)?;
+            }
+        }
+        DatapanelChartType::Treemap | DatapanelChartType::Sunburst => {
+            ensure_chart_columns("group_key", group_keys, result)?;
+            ensure_required_chart_column("value_key", chart.value_key.as_deref(), result)?;
+        }
     }
 
-    for key in &chart.y_keys {
-        if !result.columns.iter().any(|column| column == key) {
-            anyhow::bail!("datapanel chart y_key is not present in query results: {key}");
-        }
+    if let Some(z_key) = &chart.z_key {
+        ensure_chart_column("z_key", z_key, result)?;
+    }
+
+    for key in y_keys {
+        ensure_chart_column("y_key", key, result)?;
+    }
+
+    Ok(())
+}
+
+fn ensure_required_chart_column(
+    field: &str,
+    key: Option<&str>,
+    result: &DatapanelQueryResult,
+) -> anyhow::Result<()> {
+    let Some(key) = key else {
+        anyhow::bail!("datapanel chart {field} is required");
+    };
+
+    ensure_chart_column(field, key, result)
+}
+
+fn ensure_chart_columns(
+    field: &str,
+    keys: &[String],
+    result: &DatapanelQueryResult,
+) -> anyhow::Result<()> {
+    if keys.is_empty() {
+        anyhow::bail!("datapanel chart {field} is required");
+    }
+
+    for key in keys {
+        ensure_chart_column(field, key, result)?;
+    }
+
+    Ok(())
+}
+
+fn ensure_chart_column(
+    field: &str,
+    key: &str,
+    result: &DatapanelQueryResult,
+) -> anyhow::Result<()> {
+    if !result.columns.iter().any(|column| column == key) {
+        anyhow::bail!("datapanel chart {field} is not present in query results: {key}");
     }
 
     Ok(())
@@ -1295,6 +1365,7 @@ fn datapanel_card_result(
 #[cfg(test)]
 mod tests {
     use liquid_agent::ToolOutput;
+    use liquid_core::{DatapanelChartSeries, DatapanelChartSeriesKind};
     use time::OffsetDateTime;
 
     use super::*;
@@ -1347,6 +1418,102 @@ mod tests {
         );
         assert_eq!(tables[0].result.row_count, 2);
         assert_eq!(tables[0].result.columns, vec!["id", "event_type"]);
+    }
+
+    #[test]
+    fn chart_key_validation_accepts_scatter_z_key() {
+        let result = chart_result(vec!["day", "risk_count", "risk_weight"]);
+        let chart = DatapanelChartConfig {
+            chart_type: DatapanelChartType::Scatter,
+            x_key: Some("day".to_owned()),
+            y_keys: Some(vec!["risk_count".to_owned()]),
+            z_key: Some("risk_weight".to_owned()),
+            series: None,
+            group_keys: None,
+            value_key: None,
+        };
+
+        ensure_chart_keys_available(Some(&chart), &result).unwrap();
+    }
+
+    #[test]
+    fn chart_key_validation_rejects_missing_composed_series_key() {
+        let result = chart_result(vec!["day", "revenue"]);
+        let chart = DatapanelChartConfig {
+            chart_type: DatapanelChartType::Composed,
+            x_key: Some("day".to_owned()),
+            y_keys: Some(vec!["revenue".to_owned(), "cost".to_owned()]),
+            z_key: None,
+            series: Some(vec![
+                DatapanelChartSeries {
+                    key: "revenue".to_owned(),
+                    kind: DatapanelChartSeriesKind::Bar,
+                },
+                DatapanelChartSeries {
+                    key: "cost".to_owned(),
+                    kind: DatapanelChartSeriesKind::Line,
+                },
+            ]),
+            group_keys: None,
+            value_key: None,
+        };
+
+        let error = ensure_chart_keys_available(Some(&chart), &result).unwrap_err();
+
+        assert!(
+            error
+                .to_string()
+                .contains("series.key is not present in query results: cost")
+        );
+    }
+
+    #[test]
+    fn chart_key_validation_accepts_hierarchy_keys() {
+        let result = chart_result(vec!["region", "product", "revenue"]);
+        let chart = DatapanelChartConfig {
+            chart_type: DatapanelChartType::Sunburst,
+            x_key: None,
+            y_keys: None,
+            z_key: None,
+            series: None,
+            group_keys: Some(vec!["region".to_owned(), "product".to_owned()]),
+            value_key: Some("revenue".to_owned()),
+        };
+
+        ensure_chart_keys_available(Some(&chart), &result).unwrap();
+    }
+
+    #[test]
+    fn chart_key_validation_rejects_missing_hierarchy_value_key() {
+        let result = chart_result(vec!["region", "product"]);
+        let chart = DatapanelChartConfig {
+            chart_type: DatapanelChartType::Treemap,
+            x_key: None,
+            y_keys: None,
+            z_key: None,
+            series: None,
+            group_keys: Some(vec!["region".to_owned(), "product".to_owned()]),
+            value_key: Some("revenue".to_owned()),
+        };
+
+        let error = ensure_chart_keys_available(Some(&chart), &result).unwrap_err();
+
+        assert!(
+            error
+                .to_string()
+                .contains("value_key is not present in query results: revenue")
+        );
+    }
+
+    fn chart_result(columns: Vec<&str>) -> DatapanelQueryResult {
+        DatapanelQueryResult {
+            columns: columns.into_iter().map(str::to_owned).collect(),
+            rows: vec![],
+            row_count: 0,
+            truncated: false,
+            elapsed_ms: 1,
+            refreshed_at: OffsetDateTime::UNIX_EPOCH,
+        }
     }
 }
 

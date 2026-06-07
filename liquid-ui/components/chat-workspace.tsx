@@ -36,23 +36,8 @@ import ReactMarkdown from "react-markdown";
 import rehypeSanitize from "rehype-sanitize";
 import remarkGfm from "remark-gfm";
 import { toast } from "sonner";
-import {
-  Area,
-  AreaChart,
-  Bar,
-  BarChart,
-  CartesianGrid,
-  Cell,
-  Line,
-  LineChart,
-  Pie,
-  PieChart,
-  ResponsiveContainer,
-  Tooltip,
-  XAxis,
-  YAxis,
-} from "recharts";
 
+import { DatapanelChartRenderer } from "@/components/datapanel-chart-renderer";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import {
@@ -1840,109 +1825,20 @@ function MiniDatapanelChart({
 }: {
   preview: Extract<NonNullable<ChatAction["preview"]>, { kind: "datapanel_card" }>;
 }) {
-  const rows = preview.result.rows as Record<string, unknown>[];
+  const { t } = useI18n();
   const chart = preview.chart;
 
   if (!chart) {
     return <MiniDatapanelTable preview={preview} />;
   }
 
-  const colors = [
-    "var(--chart-1)",
-    "var(--chart-2)",
-    "var(--chart-3)",
-    "var(--chart-4)",
-    "var(--chart-5)",
-  ];
-  const axis = (
-    <>
-      <CartesianGrid stroke="var(--border)" vertical={false} />
-      <XAxis
-        dataKey={chart.x_key}
-        tickLine={false}
-        axisLine={false}
-        tick={{ fill: "var(--muted-foreground)", fontSize: 11 }}
-      />
-      <YAxis
-        tickLine={false}
-        axisLine={false}
-        tick={{ fill: "var(--muted-foreground)", fontSize: 11 }}
-        width={34}
-      />
-      <Tooltip />
-    </>
-  );
-
-  if (chart.chart_type === "pie") {
-    return (
-      <ResponsiveContainer width="100%" height="100%">
-        <PieChart>
-          <Tooltip />
-          <Pie
-            data={rows}
-            dataKey={chart.y_keys[0]}
-            nameKey={chart.x_key}
-            innerRadius="48%"
-            outerRadius="76%"
-          >
-            {rows.map((_, index) => (
-              <Cell key={index} fill={colors[index % colors.length]} />
-            ))}
-          </Pie>
-        </PieChart>
-      </ResponsiveContainer>
-    );
-  }
-
-  if (chart.chart_type === "bar") {
-    return (
-      <ResponsiveContainer width="100%" height="100%">
-        <BarChart data={rows}>
-          {axis}
-          {chart.y_keys.map((key, index) => (
-            <Bar key={key} dataKey={key} fill={colors[index % colors.length]} />
-          ))}
-        </BarChart>
-      </ResponsiveContainer>
-    );
-  }
-
-  if (chart.chart_type === "area") {
-    return (
-      <ResponsiveContainer width="100%" height="100%">
-        <AreaChart data={rows}>
-          {axis}
-          {chart.y_keys.map((key, index) => (
-            <Area
-              key={key}
-              type="monotone"
-              dataKey={key}
-              stroke={colors[index % colors.length]}
-              fill={colors[index % colors.length]}
-              fillOpacity={0.16}
-            />
-          ))}
-        </AreaChart>
-      </ResponsiveContainer>
-    );
-  }
-
   return (
-    <ResponsiveContainer width="100%" height="100%">
-      <LineChart data={rows}>
-        {axis}
-        {chart.y_keys.map((key, index) => (
-          <Line
-            key={key}
-            type="monotone"
-            dataKey={key}
-            stroke={colors[index % colors.length]}
-            strokeWidth={2}
-            dot={false}
-          />
-        ))}
-      </LineChart>
-    </ResponsiveContainer>
+    <DatapanelChartRenderer
+      chart={chart}
+      rows={preview.result.rows}
+      variant="preview"
+      emptyLabel={t.workspace.queryResult.empty}
+    />
   );
 }
 
