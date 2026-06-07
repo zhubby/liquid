@@ -52,6 +52,7 @@ import {
   type ManagedDatabase,
   apiRequest,
 } from "@/lib/api";
+import { QueryResultTable } from "@/components/query-result-table";
 import { useI18n } from "@/lib/i18n";
 import { cn } from "@/lib/utils";
 
@@ -681,33 +682,13 @@ function IconButton({
 }
 
 function BiTable({ card }: { card: BiPanelCard }) {
-  const rows = card.result.rows as RowValue[];
+  const { t } = useI18n();
 
   return (
-    <div className="h-full overflow-auto rounded-md border">
-      <table className="w-full min-w-max border-collapse text-xs">
-        <thead className="sticky top-0 z-10 bg-muted">
-          <tr className="border-b text-left text-muted-foreground">
-            {card.result.columns.map((column) => (
-              <th key={column} className="px-2.5 py-2 font-medium">
-                {column}
-              </th>
-            ))}
-          </tr>
-        </thead>
-        <tbody>
-          {rows.map((row, index) => (
-            <tr key={index} className="border-b last:border-0 hover:bg-muted/40">
-              {card.result.columns.map((column) => (
-                <td key={column} className="px-2.5 py-2 align-top">
-                  {formatValue(row[column])}
-                </td>
-              ))}
-            </tr>
-          ))}
-        </tbody>
-      </table>
-    </div>
+    <QueryResultTable
+      result={card.result}
+      emptyLabel={t.dashboard.noRows}
+    />
   );
 }
 
@@ -888,18 +869,6 @@ function sameLayout(panel: BiPanel, layout: Layout) {
       item.h === card.layout.h
     );
   });
-}
-
-function formatValue(value: unknown) {
-  if (value === null || value === undefined) {
-    return "";
-  }
-
-  if (typeof value === "object") {
-    return JSON.stringify(value);
-  }
-
-  return String(value);
 }
 
 function safeFileName(value: string) {

@@ -64,6 +64,7 @@ export type { RegisterRequest } from "./generated/api-types/RegisterRequest";
 export type { RejectSqlAuditRequest } from "./generated/api-types/RejectSqlAuditRequest";
 export type { RiskBreakdown } from "./generated/api-types/RiskBreakdown";
 export type { RiskSeverity } from "./generated/api-types/RiskSeverity";
+export type { SaveBiPanelTableCardRequest } from "./generated/api-types/SaveBiPanelTableCardRequest";
 export type { SetCurrentManagedDatabaseRequest } from "./generated/api-types/SetCurrentManagedDatabaseRequest";
 export type { SqlAuditExecutionResult } from "./generated/api-types/SqlAuditExecutionResult";
 export type { SqlAuditFinding } from "./generated/api-types/SqlAuditFinding";

@@ -2479,6 +2479,138 @@ async fn chat_turn_runs_readonly_tool_without_action_or_audit() {
 }
 
 #[tokio::test]
+async fn chat_messages_and_stream_include_query_result_table_parts() {
+    let store = Arc::new(TestStore::default());
+    let app = test_app_with_agent_store_execution_and_executor(
+        Arc::new(MockSqlAuditAgent),
+        store.clone(),
+        PostgresToolExecutionMode::Readonly,
+        Arc::new(FakeApprovedSqlExecutor::default()),
+    );
+    let database = store
+        .create_managed_database(
+            "user-1",
+            CreateManagedDatabaseRequest {
+                name: "Warehouse".to_owned(),
+                engine: ManagedDatabaseEngine::Postgres,
+                host: "localhost".to_owned(),
+                port: 5432,
+                database: "warehouse".to_owned(),
+                username: "readonly".to_owned(),
+                password: "password123".to_owned(),
+                ssl_mode: ManagedDatabaseSslMode::Disable,
+            },
+        )
+        .await
+        .unwrap();
+    let conversation = store
+        .create_agent_conversation(
+            "user-1",
+            CreateAgentConversationRequest {
+                title: Some("Query workspace".to_owned()),
+                managed_database_id: Some(database.id.clone()),
+            },
+        )
+        .await
+        .unwrap();
+    let turn = store
+        .create_agent_turn(
+            "user-1",
+            &conversation.id,
+            CreateAgentTurnRequest {
+                message: "查询 agent_events 表的数据".to_owned(),
+                managed_database_id: Some(database.id.clone()),
+                dashboard_context: None,
+                client_request_id: None,
+            },
+        )
+        .await
+        .unwrap();
+    let assistant = store
+        .append_agent_message(
+            "user-1",
+            &conversation.id,
+            Some(&turn.id),
+            AgentMessageRole::Assistant,
+            "这是查询结果。",
+            Some(json!({
+                "kind": "assistant_response",
+                "query_result_tables": [{
+                    "managed_database_id": database.id,
+                    "sql": "select id, event_type from agent_events order by id limit 2",
+                    "result": {
+                        "columns": ["id", "event_type"],
+                        "rows": [
+                            { "id": 1, "event_type": "turn_started" },
+                            { "id": 2, "event_type": "message_created" }
+                        ],
+                        "row_count": 2,
+                        "truncated": false,
+                        "elapsed_ms": 4,
+                        "refreshed_at": "1970-01-01T00:00:00Z"
+                    }
+                }]
+            })),
+        )
+        .await
+        .unwrap();
+    store
+        .set_agent_turn_assistant_message("user-1", &turn.id, &assistant.id)
+        .await
+        .unwrap();
+    store
+        .append_agent_turn_event(
+            "user-1",
+            &turn.id,
+            AgentEventType::MessageCreated,
+            json!({
+                "message_id": assistant.id,
+                "role": "assistant",
+            }),
+        )
+        .await
+        .unwrap();
+    store
+        .update_agent_turn_status("user-1", &turn.id, AgentTurnStatus::Completed, None)
+        .await
+        .unwrap();
+    store
+        .append_agent_turn_event(
+            "user-1",
+            &turn.id,
+            AgentEventType::TurnCompleted,
+            json!({ "status": "completed" }),
+        )
+        .await
+        .unwrap();
+
+    let messages_response = app
+        .clone()
+        .oneshot(auth_request(
+            "/api/v1/chat/conversations/conversation-1/messages",
+        ))
+        .await
+        .unwrap();
+    assert_eq!(messages_response.status(), StatusCode::OK);
+    let messages = response_json(messages_response).await;
+    assert_eq!(messages[1]["parts"][0]["kind"], "markdown");
+    assert_eq!(messages[1]["parts"][1]["kind"], "query_result_table");
+    assert_eq!(messages[1]["parts"][1]["result"]["row_count"], 2);
+
+    let stream_response = app
+        .oneshot(auth_request("/api/v1/chat/turns/turn-1/stream?after_seq=0"))
+        .await
+        .unwrap();
+    assert_eq!(stream_response.status(), StatusCode::OK);
+    let stream_body = axum::body::to_bytes(stream_response.into_body(), usize::MAX)
+        .await
+        .unwrap();
+    let stream_body = String::from_utf8(stream_body.to_vec()).unwrap();
+    assert!(stream_body.contains(r#""type":"assistant_done""#));
+    assert!(stream_body.contains(r#""kind":"query_result_table""#));
+}
+
+#[tokio::test]
 async fn chat_turn_reports_provider_not_configured_without_assistant_message() {
     let app = test_app();
     create_test_database(&app).await;
@@ -3710,6 +3842,148 @@ async fn refreshing_bi_card_rejects_non_select_sql_before_pool_use() {
             "POST",
             &format!("/api/v1/bi-panels/{}/cards/{}/refresh", panel.id, card.id),
             json!({}),
+        ))
+        .await
+        .unwrap();
+
+    assert_eq!(response.status(), StatusCode::BAD_REQUEST);
+    let payload = response_json(response).await;
+    assert!(payload["error"].as_str().unwrap().contains("SELECT"));
+}
+
+#[tokio::test]
+async fn saving_chat_query_result_creates_table_bi_card() {
+    let store = Arc::new(TestStore::default());
+    let app = test_app_with_agent_store_execution_and_executor(
+        Arc::new(MockSqlAuditAgent),
+        store.clone(),
+        PostgresToolExecutionMode::Readonly,
+        Arc::new(FakeApprovedSqlExecutor::default()),
+    );
+    let database = store
+        .create_managed_database(
+            "user-1",
+            CreateManagedDatabaseRequest {
+                name: "Warehouse".to_owned(),
+                engine: ManagedDatabaseEngine::Postgres,
+                host: "localhost".to_owned(),
+                port: 5432,
+                database: "warehouse".to_owned(),
+                username: "readonly".to_owned(),
+                password: "password123".to_owned(),
+                ssl_mode: ManagedDatabaseSslMode::Disable,
+            },
+        )
+        .await
+        .unwrap();
+    let conversation = store
+        .create_agent_conversation(
+            "user-1",
+            CreateAgentConversationRequest {
+                title: Some("BI workspace".to_owned()),
+                managed_database_id: Some(database.id.clone()),
+            },
+        )
+        .await
+        .unwrap();
+
+    let response = app
+        .clone()
+        .oneshot(auth_json_request(
+            "POST",
+            &format!(
+                "/api/v1/chat/conversations/{}/bi-panel/cards",
+                conversation.id
+            ),
+            json!({
+                "managed_database_id": database.id,
+                "title": "Agent events",
+                "description": "Recent agent events",
+                "sql": "select id, event_type from agent_events order by id limit 2;",
+                "result": {
+                    "columns": ["id", "event_type"],
+                    "rows": [
+                        { "id": 1, "event_type": "turn_started" },
+                        { "id": 2, "event_type": "message_created" }
+                    ],
+                    "row_count": 2,
+                    "truncated": false,
+                    "elapsed_ms": 4,
+                    "refreshed_at": "1970-01-01T00:00:00Z"
+                }
+            }),
+        ))
+        .await
+        .unwrap();
+
+    assert_eq!(response.status(), StatusCode::OK);
+    let card = response_json(response).await;
+    assert_eq!(card["kind"], "table");
+    assert_eq!(card["title"], "Agent events");
+    assert_eq!(
+        card["sql"],
+        "select id, event_type from agent_events order by id limit 2"
+    );
+    assert_eq!(card["result"]["row_count"], 2);
+    assert_eq!(card["layout"]["w"], 12);
+}
+
+#[tokio::test]
+async fn saving_chat_query_result_rejects_non_select_sql() {
+    let store = Arc::new(TestStore::default());
+    let app = test_app_with_agent_store_execution_and_executor(
+        Arc::new(MockSqlAuditAgent),
+        store.clone(),
+        PostgresToolExecutionMode::Readonly,
+        Arc::new(FakeApprovedSqlExecutor::default()),
+    );
+    let database = store
+        .create_managed_database(
+            "user-1",
+            CreateManagedDatabaseRequest {
+                name: "Warehouse".to_owned(),
+                engine: ManagedDatabaseEngine::Postgres,
+                host: "localhost".to_owned(),
+                port: 5432,
+                database: "warehouse".to_owned(),
+                username: "readonly".to_owned(),
+                password: "password123".to_owned(),
+                ssl_mode: ManagedDatabaseSslMode::Disable,
+            },
+        )
+        .await
+        .unwrap();
+    let conversation = store
+        .create_agent_conversation(
+            "user-1",
+            CreateAgentConversationRequest {
+                title: Some("BI workspace".to_owned()),
+                managed_database_id: Some(database.id.clone()),
+            },
+        )
+        .await
+        .unwrap();
+
+    let response = app
+        .oneshot(auth_json_request(
+            "POST",
+            &format!(
+                "/api/v1/chat/conversations/{}/bi-panel/cards",
+                conversation.id
+            ),
+            json!({
+                "managed_database_id": database.id,
+                "title": "Bad card",
+                "sql": "delete from agent_events",
+                "result": {
+                    "columns": [],
+                    "rows": [],
+                    "row_count": 0,
+                    "truncated": false,
+                    "elapsed_ms": 0,
+                    "refreshed_at": "1970-01-01T00:00:00Z"
+                }
+            }),
         ))
         .await
         .unwrap();

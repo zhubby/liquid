@@ -14,6 +14,7 @@ use liquid_core::{
 };
 use serde::{Deserialize, Serialize};
 use serde_json::{Value, json};
+use time::OffsetDateTime;
 
 use crate::{
     bi_panels::materialize_bi_query,
@@ -24,6 +25,7 @@ use crate::{
 };
 
 const MISSING_LLM_PROVIDER_MESSAGE: &str = "LLM provider is not configured. Configure a provider and API key before using AI workbench chat.";
+const MAX_ASSISTANT_QUERY_RESULT_TABLES: usize = 3;
 
 #[derive(Debug, Deserialize)]
 struct CreateSqlAuditActionPayload {
@@ -52,6 +54,26 @@ pub(crate) struct CreateBiCardActionPayload {
     pub(crate) layout: Option<BiCardLayout>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub(crate) result: Option<BiQueryResult>,
+}
+
+#[derive(Debug, Clone, Serialize)]
+struct AssistantQueryResultTable {
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    title: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    description: Option<String>,
+    managed_database_id: String,
+    sql: String,
+    result: BiQueryResult,
+}
+
+#[derive(Debug, Deserialize)]
+struct ReadonlyToolQueryResult {
+    columns: Vec<String>,
+    rows: Vec<Value>,
+    row_count: i32,
+    truncated: bool,
+    elapsed_ms: i64,
 }
 
 pub(crate) async fn run_agent_turn(
@@ -252,6 +274,16 @@ async fn persist_workbench_response(
         append_workbench_tool_step(state, owner_user_id, turn, step).await?;
     }
 
+    let query_result_tables = assistant_query_result_tables(turn, &response.tool_steps);
+    let assistant_metadata = if query_result_tables.is_empty() {
+        None
+    } else {
+        Some(json!({
+            "kind": "assistant_response",
+            "query_result_tables": query_result_tables,
+        }))
+    };
+
     let mut prepared_actions = Vec::new();
     for suggestion in response.actions {
         prepared_actions.push(prepare_workbench_action(state, owner_user_id, suggestion).await?);
@@ -265,7 +297,7 @@ async fn persist_workbench_response(
             Some(&turn.id),
             AgentMessageRole::Assistant,
             &response.content,
-            None,
+            assistant_metadata,
         )
         .await?;
     state
@@ -357,6 +389,56 @@ async fn persist_workbench_response(
     }
 
     Ok(())
+}
+
+fn assistant_query_result_tables(
+    turn: &AgentTurn,
+    steps: &[WorkbenchToolStep],
+) -> Vec<AssistantQueryResultTable> {
+    let Some(managed_database_id) = turn.managed_database_id.as_deref() else {
+        return Vec::new();
+    };
+
+    steps
+        .iter()
+        .rev()
+        .filter(|step| step.name == "pg_execute_readonly_sql" && step.succeeded)
+        .filter_map(|step| assistant_query_result_table(managed_database_id, step))
+        .take(MAX_ASSISTANT_QUERY_RESULT_TABLES)
+        .collect::<Vec<_>>()
+        .into_iter()
+        .rev()
+        .collect()
+}
+
+fn assistant_query_result_table(
+    managed_database_id: &str,
+    step: &WorkbenchToolStep,
+) -> Option<AssistantQueryResultTable> {
+    let sql = step
+        .arguments
+        .get("sql")
+        .and_then(Value::as_str)
+        .map(str::trim)
+        .filter(|sql| !sql.is_empty())?
+        .to_owned();
+    let query_result =
+        serde_json::from_str::<ReadonlyToolQueryResult>(&step.output.content).ok()?;
+
+    Some(AssistantQueryResultTable {
+        title: None,
+        description: None,
+        managed_database_id: managed_database_id.to_owned(),
+        sql,
+        result: BiQueryResult {
+            columns: query_result.columns,
+            rows: query_result.rows,
+            row_count: query_result.row_count,
+            truncated: query_result.truncated,
+            elapsed_ms: query_result.elapsed_ms,
+            refreshed_at: OffsetDateTime::now_utc(),
+        },
+    })
 }
 
 async fn prepare_workbench_action(
@@ -1203,6 +1285,64 @@ fn bi_card_result(
             "record": card,
         }),
     )
+}
+
+#[cfg(test)]
+mod tests {
+    use liquid_agent::ToolOutput;
+    use time::OffsetDateTime;
+
+    use super::*;
+
+    #[test]
+    fn assistant_query_result_tables_extract_successful_readonly_tool_results() {
+        let turn = AgentTurn {
+            id: "turn-1".to_owned(),
+            conversation_id: "conversation-1".to_owned(),
+            status: AgentTurnStatus::Running,
+            user_message_id: "message-1".to_owned(),
+            assistant_message_id: None,
+            error: None,
+            client_request_id: None,
+            managed_database_id: Some("db-1".to_owned()),
+            dashboard_context: None,
+            created_at: OffsetDateTime::UNIX_EPOCH,
+            updated_at: OffsetDateTime::UNIX_EPOCH,
+            completed_at: None,
+        };
+        let step = WorkbenchToolStep {
+            id: "call-1".to_owned(),
+            name: "pg_execute_readonly_sql".to_owned(),
+            arguments: json!({
+                "sql": "select id, event_type from agent_events order by id limit 2",
+                "limit": 100
+            }),
+            output: ToolOutput::json(json!({
+                "columns": ["id", "event_type"],
+                "rows": [
+                    { "id": 1, "event_type": "turn_started" },
+                    { "id": 2, "event_type": "message_created" }
+                ],
+                "row_count": 2,
+                "truncated": false,
+                "elapsed_ms": 4
+            })),
+            succeeded: true,
+            elapsed_ms: 4,
+            proposal: None,
+        };
+
+        let tables = assistant_query_result_tables(&turn, &[step]);
+
+        assert_eq!(tables.len(), 1);
+        assert_eq!(tables[0].managed_database_id, "db-1");
+        assert_eq!(
+            tables[0].sql,
+            "select id, event_type from agent_events order by id limit 2"
+        );
+        assert_eq!(tables[0].result.row_count, 2);
+        assert_eq!(tables[0].result.columns, vec!["id", "event_type"]);
+    }
 }
 
 pub(crate) async fn append_event(

@@ -1120,37 +1120,6 @@ fn risk_severity_label(severity: &liquid_core::RiskSeverity) -> &'static str {
     }
 }
 
-#[cfg(test)]
-mod tests {
-    use liquid_core::BiQueryResult;
-    use serde_json::json;
-    use time::OffsetDateTime;
-
-    use super::query_result_markdown;
-
-    #[test]
-    fn query_result_markdown_renders_result_table() {
-        let result = BiQueryResult {
-            columns: vec!["datname".to_owned(), "size".to_owned()],
-            rows: vec![
-                json!({ "datname": "postgres", "size": "7 MB" }),
-                json!({ "datname": "liquid", "size": "12 MB" }),
-            ],
-            row_count: 2,
-            truncated: false,
-            elapsed_ms: 5,
-            refreshed_at: OffsetDateTime::UNIX_EPOCH,
-        };
-
-        let markdown = query_result_markdown(&result);
-
-        assert!(markdown.contains("2 rows returned in 5ms."));
-        assert!(markdown.contains("| datname | size |"));
-        assert!(markdown.contains("| postgres | 7 MB |"));
-        assert!(markdown.contains("| liquid | 12 MB |"));
-    }
-}
-
 async fn chat_stream_events(
     store: &std::sync::Arc<dyn liquid_storage::LiquidStore>,
     owner_user_id: &str,
@@ -1475,16 +1444,20 @@ fn chat_database_summary(database: &ManagedDatabase) -> ChatManagedDatabaseSumma
 
 fn chat_message(message: AgentMessage) -> ChatMessage {
     let status = ChatMessageStatus::Complete;
-    let parts = if message.role == AgentMessageRole::Assistant || is_action_result_message(&message)
-    {
-        vec![ChatMessagePart::Markdown {
-            markdown: message.content.clone(),
-        }]
-    } else {
-        vec![ChatMessagePart::Text {
-            text: message.content.clone(),
-        }]
-    };
+    let mut parts =
+        if message.role == AgentMessageRole::Assistant || is_action_result_message(&message) {
+            vec![ChatMessagePart::Markdown {
+                markdown: message.content.clone(),
+            }]
+        } else {
+            vec![ChatMessagePart::Text {
+                text: message.content.clone(),
+            }]
+        };
+
+    if message.role == AgentMessageRole::Assistant {
+        parts.extend(query_result_table_parts(message.metadata.as_ref()));
+    }
 
     ChatMessage {
         id: message.id,
@@ -1495,6 +1468,34 @@ fn chat_message(message: AgentMessage) -> ChatMessage {
         turn_id: message.turn_id,
         created_at: message.created_at,
     }
+}
+
+#[derive(Debug, Deserialize)]
+struct QueryResultTablePartMetadata {
+    #[serde(default)]
+    title: Option<String>,
+    #[serde(default)]
+    description: Option<String>,
+    managed_database_id: String,
+    sql: String,
+    result: BiQueryResult,
+}
+
+fn query_result_table_parts(metadata: Option<&Value>) -> Vec<ChatMessagePart> {
+    metadata
+        .and_then(|metadata| metadata.get("query_result_tables"))
+        .cloned()
+        .and_then(|value| serde_json::from_value::<Vec<QueryResultTablePartMetadata>>(value).ok())
+        .unwrap_or_default()
+        .into_iter()
+        .map(|part| ChatMessagePart::QueryResultTable {
+            title: part.title,
+            description: part.description,
+            managed_database_id: part.managed_database_id,
+            sql: part.sql,
+            result: part.result,
+        })
+        .collect()
 }
 
 fn is_action_result_message(message: &AgentMessage) -> bool {
@@ -1663,5 +1664,36 @@ fn agent_dashboard_context(
         active_view: context.active_view,
         selected_sql_audit_id: context.selected_sql_audit_id,
         date_range: context.date_range,
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use liquid_core::BiQueryResult;
+    use serde_json::json;
+    use time::OffsetDateTime;
+
+    use super::query_result_markdown;
+
+    #[test]
+    fn query_result_markdown_renders_result_table() {
+        let result = BiQueryResult {
+            columns: vec!["datname".to_owned(), "size".to_owned()],
+            rows: vec![
+                json!({ "datname": "postgres", "size": "7 MB" }),
+                json!({ "datname": "liquid", "size": "12 MB" }),
+            ],
+            row_count: 2,
+            truncated: false,
+            elapsed_ms: 5,
+            refreshed_at: OffsetDateTime::UNIX_EPOCH,
+        };
+
+        let markdown = query_result_markdown(&result);
+
+        assert!(markdown.contains("2 rows returned in 5ms."));
+        assert!(markdown.contains("| datname | size |"));
+        assert!(markdown.contains("| postgres | 7 MB |"));
+        assert!(markdown.contains("| liquid | 12 MB |"));
     }
 }

@@ -57,6 +57,7 @@ import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import {
   type AgentMessageRole,
+  type BiPanelCard,
   type ChatAction,
   type ChatConversation,
   type ChatErrorCode,
@@ -67,9 +68,11 @@ import {
   type ChatTurn,
   type LlmProviderSettingsResponse,
   type ManagedDatabase,
+  type SaveBiPanelTableCardRequest,
   apiRequest,
   apiStream,
 } from "@/lib/api";
+import { QueryResultTable } from "@/components/query-result-table";
 import { type Locale, useI18n } from "@/lib/i18n";
 import { cn } from "@/lib/utils";
 
@@ -842,6 +845,8 @@ export function ChatPanel({
 
       <div className="flex min-h-0 flex-1 flex-col">
         <MessageList
+          token={token}
+          conversationId={conversation.id}
           listRef={listRef}
           messages={messages}
           actionsByTurn={actionGroups}
@@ -983,6 +988,8 @@ function ProviderBadge({ providerReady }: { providerReady: boolean | null }) {
 }
 
 const MessageList = ({
+  token,
+  conversationId,
   listRef,
   messages,
   actionsByTurn,
@@ -998,6 +1005,8 @@ const MessageList = ({
   onActionApply,
   onActionReject,
 }: {
+  token: string;
+  conversationId: string;
   listRef: Ref<HTMLDivElement>;
   messages: DisplayMessage[];
   actionsByTurn: Map<string, ChatAction[]>;
@@ -1065,6 +1074,8 @@ const MessageList = ({
           return (
             <MessageStack
               key={message.id}
+              token={token}
+              conversationId={conversationId}
               message={message}
               actions={
                 actionAnchorMessageIds.has(message.id) ? messageActions : []
@@ -1155,6 +1166,8 @@ function ChatEmptyState({
 }
 
 function MessageStack({
+  token,
+  conversationId,
   message,
   actions,
   selectedDatabase,
@@ -1162,6 +1175,8 @@ function MessageStack({
   onActionApply,
   onActionReject,
 }: {
+  token: string;
+  conversationId: string;
   message: DisplayMessage;
   actions: ChatAction[];
   selectedDatabase: ManagedDatabase;
@@ -1171,7 +1186,11 @@ function MessageStack({
 }) {
   return (
     <div className="space-y-2">
-      <MessageBubble message={message} />
+      <MessageBubble
+        token={token}
+        conversationId={conversationId}
+        message={message}
+      />
       {actions.length > 0 ? (
         <div className="ml-11 space-y-2">
           {actions.map((action) => (
@@ -1190,7 +1209,15 @@ function MessageStack({
   );
 }
 
-function MessageBubble({ message }: { message: DisplayMessage }) {
+function MessageBubble({
+  token,
+  conversationId,
+  message,
+}: {
+  token: string;
+  conversationId: string;
+  message: DisplayMessage;
+}) {
   const { locale, t } = useI18n();
   const isUser = message.role === "user";
   const isFailed = message.status === "failed";
@@ -1229,7 +1256,11 @@ function MessageBubble({ message }: { message: DisplayMessage }) {
               "rounded-md border border-destructive/25 bg-destructive/5 px-3 py-2 text-destructive",
           )}
         >
-          <MessageContent message={message} />
+          <MessageContent
+            token={token}
+            conversationId={conversationId}
+            message={message}
+          />
           {!isUser && copyText ? (
             <CopyButton
               text={copyText}
@@ -1256,7 +1287,15 @@ function MessageBubble({ message }: { message: DisplayMessage }) {
   );
 }
 
-function MessageContent({ message }: { message: DisplayMessage }) {
+function MessageContent({
+  token,
+  conversationId,
+  message,
+}: {
+  token: string;
+  conversationId: string;
+  message: DisplayMessage;
+}) {
   const parts =
     message.parts.length > 0
       ? message.parts
@@ -1265,13 +1304,26 @@ function MessageContent({ message }: { message: DisplayMessage }) {
   return (
     <div className="min-w-0 space-y-3">
       {parts.map((part, index) => (
-        <MessagePart key={`${message.id}-${index}`} part={part} />
+        <MessagePart
+          key={`${message.id}-${index}`}
+          token={token}
+          conversationId={conversationId}
+          part={part}
+        />
       ))}
     </div>
   );
 }
 
-function MessagePart({ part }: { part: ChatMessagePart }) {
+function MessagePart({
+  token,
+  conversationId,
+  part,
+}: {
+  token: string;
+  conversationId: string;
+  part: ChatMessagePart;
+}) {
   const { t } = useI18n();
 
   switch (part.kind) {
@@ -1281,6 +1333,14 @@ function MessagePart({ part }: { part: ChatMessagePart }) {
       return <MarkdownContent markdown={part.markdown} />;
     case "code":
       return <CodeBlock code={part.code} language={part.language} />;
+    case "query_result_table":
+      return (
+        <QueryResultTableCard
+          token={token}
+          conversationId={conversationId}
+          part={part}
+        />
+      );
     case "error":
       return (
         <div className="flex items-start gap-2 text-sm">
@@ -1296,6 +1356,116 @@ function MessagePart({ part }: { part: ChatMessagePart }) {
     case "action_ref":
       return null;
   }
+}
+
+type QueryResultTablePart = Extract<
+  ChatMessagePart,
+  { kind: "query_result_table" }
+>;
+
+function QueryResultTableCard({
+  token,
+  conversationId,
+  part,
+}: {
+  token: string;
+  conversationId: string;
+  part: QueryResultTablePart;
+}) {
+  const { t } = useI18n();
+  const [isSaving, setIsSaving] = useState(false);
+  const [savedCardId, setSavedCardId] = useState<string | null>(null);
+  const title = part.title?.trim() || t.workspace.queryResult.title;
+  const description = part.description?.trim();
+  const summary = t.workspace.queryResult.summary(
+    part.result.row_count,
+    part.result.elapsed_ms,
+    part.result.truncated,
+  );
+
+  const saveToBiPanel = async () => {
+    if (isSaving || savedCardId) {
+      return;
+    }
+
+    setIsSaving(true);
+
+    try {
+      const body: SaveBiPanelTableCardRequest = {
+        managed_database_id: part.managed_database_id,
+        title,
+        description,
+        sql: part.sql,
+        result: part.result,
+      };
+      const card = await apiRequest<BiPanelCard>(
+        `/api/v1/chat/conversations/${conversationId}/bi-panel/cards`,
+        {
+          method: "POST",
+          token,
+          body,
+        },
+      );
+
+      setSavedCardId(card.id);
+      toast.success(t.workspace.queryResult.savedToast);
+    } catch (error) {
+      toast.error(
+        error instanceof Error
+          ? error.message
+          : t.workspace.queryResult.saveFailed,
+      );
+    } finally {
+      setIsSaving(false);
+    }
+  };
+
+  return (
+    <article className="overflow-hidden rounded-lg border bg-background text-left shadow-xs">
+      <header className="flex flex-col gap-2 border-b bg-muted/35 px-3 py-2 sm:flex-row sm:items-start sm:justify-between">
+        <div className="min-w-0">
+          <div className="flex min-w-0 items-center gap-2">
+            <Table2 className="size-4 shrink-0 text-muted-foreground" aria-hidden />
+            <h3 className="truncate text-sm font-medium">{title}</h3>
+          </div>
+          <div className="mt-1 flex flex-wrap items-center gap-2 text-xs text-muted-foreground">
+            <span>{summary}</span>
+            {description ? <span>{description}</span> : null}
+          </div>
+        </div>
+        <Button
+          type="button"
+          variant={savedCardId ? "outline" : "secondary"}
+          size="sm"
+          className="h-8 shrink-0 rounded-md"
+          disabled={isSaving || Boolean(savedCardId)}
+          onClick={() => void saveToBiPanel()}
+        >
+          {isSaving ? (
+            <Loader2 className="size-4 animate-spin" aria-hidden />
+          ) : savedCardId ? (
+            <Check className="size-4" aria-hidden />
+          ) : (
+            <PanelRightOpen className="size-4" aria-hidden />
+          )}
+          {isSaving
+            ? t.workspace.queryResult.saving
+            : savedCardId
+              ? t.workspace.queryResult.saved
+              : t.workspace.queryResult.save}
+        </Button>
+      </header>
+      <div className="h-64 min-h-0 p-2">
+        <QueryResultTable
+          result={part.result}
+          emptyLabel={t.workspace.queryResult.empty}
+        />
+      </div>
+      <div className="border-t bg-muted/20 px-3 py-2">
+        <CodeBlock code={part.sql} language="sql" />
+      </div>
+    </article>
+  );
 }
 
 function MarkdownContent({ markdown }: { markdown: string }) {
@@ -1589,34 +1759,16 @@ function MiniBiTable({
 }: {
   preview: Extract<NonNullable<ChatAction["preview"]>, { kind: "bi_card" }>;
 }) {
-  const rows = preview.result.rows as Record<string, unknown>[];
-  const visibleRows = rows.slice(0, 5);
+  const { t } = useI18n();
 
   return (
-    <div className="h-full overflow-auto rounded-sm border">
-      <table className="w-full min-w-max border-collapse text-xs">
-        <thead className="bg-muted text-left text-muted-foreground">
-          <tr>
-            {preview.result.columns.map((column) => (
-              <th key={column} className="border-b px-2 py-1.5 font-medium">
-                {column}
-              </th>
-            ))}
-          </tr>
-        </thead>
-        <tbody>
-          {visibleRows.map((row, rowIndex) => (
-            <tr key={rowIndex} className="border-b last:border-0">
-              {preview.result.columns.map((column) => (
-                <td key={column} className="px-2 py-1.5">
-                  {formatPreviewValue(row[column])}
-                </td>
-              ))}
-            </tr>
-          ))}
-        </tbody>
-      </table>
-    </div>
+    <QueryResultTable
+      result={preview.result}
+      maxRows={5}
+      stickyHeader={false}
+      emptyLabel={t.workspace.queryResult.empty}
+      className="rounded-sm"
+    />
   );
 }
 
@@ -1729,18 +1881,6 @@ function MiniBiChart({
       </LineChart>
     </ResponsiveContainer>
   );
-}
-
-function formatPreviewValue(value: unknown) {
-  if (value === null || value === undefined) {
-    return "";
-  }
-
-  if (typeof value === "object") {
-    return JSON.stringify(value);
-  }
-
-  return String(value);
 }
 
 function ActivityTimeline({ items }: { items: ActivityItem[] }) {

@@ -133,6 +133,17 @@ pub enum ChatMessagePart {
         language: Option<String>,
         code: String,
     },
+    QueryResultTable {
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        #[ts(optional)]
+        title: Option<String>,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        #[ts(optional)]
+        description: Option<String>,
+        managed_database_id: String,
+        sql: String,
+        result: BiQueryResult,
+    },
     ActionRef {
         action_id: String,
     },

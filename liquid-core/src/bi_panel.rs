@@ -175,6 +175,18 @@ pub struct CreateBiPanelCardRequest {
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize, TS)]
 #[ts(export)]
+pub struct SaveBiPanelTableCardRequest {
+    pub managed_database_id: String,
+    pub title: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[ts(optional)]
+    pub description: Option<String>,
+    pub sql: String,
+    pub result: BiQueryResult,
+}
+
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize, TS)]
+#[ts(export)]
 pub struct BiPanelExport {
     #[serde(with = "time::serde::rfc3339")]
     #[ts(type = "string")]

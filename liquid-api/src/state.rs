@@ -149,17 +149,9 @@ impl ApiState {
                 sql_execution,
                 PostgresToolExecutionMode::WriteGated
             ),
-            sql_execution: managed_database_audit_execution(sql_execution),
+            sql_execution,
             approved_sql_executor,
             managed_database_connection_tester,
         }
-    }
-}
-
-fn managed_database_audit_execution(mode: PostgresToolExecutionMode) -> PostgresToolExecutionMode {
-    match mode {
-        PostgresToolExecutionMode::Off => PostgresToolExecutionMode::Off,
-        PostgresToolExecutionMode::Readonly => PostgresToolExecutionMode::Readonly,
-        PostgresToolExecutionMode::WriteGated => PostgresToolExecutionMode::WriteGated,
     }
 }

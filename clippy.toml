@@ -1,0 +1,72 @@
+# Workspace-wide Clippy configuration for Liquid.
+#
+# This file tunes configurable lints only. Lint levels still come from the
+# project command:
+# cargo clippy --workspace --all-targets -- -D warnings
+
+# Rust 2024 first stabilized in Rust 1.85. Keep suggestions compatible with the
+# edition floor until the workspace declares a different rust-version.
+msrv = "1.85.0"
+
+# The workspace exposes shared DTOs from liquid-core and reusable service crates.
+# Avoid suggestions that would clean up internals while breaking exported APIs.
+avoid-breaking-exported-api = true
+
+# Keep complexity warnings useful for API handlers, storage methods, and LLM
+# parsing code without forcing domain DTOs into premature abstractions.
+cognitive-complexity-threshold = 25
+too-many-arguments-threshold = 9
+too-many-lines-threshold = 140
+type-complexity-threshold = 250
+
+# Service errors should remain lightweight. Large domain payloads should be
+# boxed or moved behind typed records instead of living in Result::Err.
+large-error-threshold = 128
+
+# Generated transport types and SQL metadata can contain larger enums/arrays
+# than typical application code.
+enum-variant-size-threshold = 256
+array-size-threshold = 524288
+future-size-threshold = 16384
+
+# Tests intentionally unwrap fixture setup, JSON probes, and route helper state.
+# Keep production code strict while allowing tests to stay direct.
+allow-dbg-in-tests = false
+allow-expect-in-tests = true
+allow-indexing-slicing-in-tests = true
+allow-panic-in-tests = true
+allow-print-in-tests = true
+allow-unwrap-in-tests = true
+
+# Common short names and product/domain terms used across the Rust workspace.
+allowed-idents-below-min-chars = ["db", "id", "io", "llm", "s3", "sql", "ui"]
+
+doc-valid-idents = [
+    "AI",
+    "API",
+    "APIs",
+    "Axum",
+    "BI",
+    "Bun",
+    "CLI",
+    "CORS",
+    "DTO",
+    "DTOs",
+    "HTTP",
+    "JSON",
+    "LLM",
+    "LLMs",
+    "Next.js",
+    "OpenAI",
+    "Postgres",
+    "PostgreSQL",
+    "S3",
+    "SQL",
+    "SQLx",
+    "SSE",
+    "TOML",
+    "UI",
+    "URL",
+    "URLs",
+    "UUID",
+]

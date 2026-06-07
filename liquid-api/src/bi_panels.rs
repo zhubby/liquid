@@ -7,7 +7,8 @@ use axum::{
     routing::{get, patch, post},
 };
 use liquid_core::{
-    BiPanel, BiPanelCard, BiPanelExport, BiQueryResult, ManagedDatabasePoolKey,
+    BiCardKind, BiCardLayout, BiPanel, BiPanelCard, BiPanelExport, BiQueryResult,
+    CreateBiPanelCardRequest, ManagedDatabasePoolKey, SaveBiPanelTableCardRequest,
     UpdateBiPanelCardRequest, UpdateBiPanelLayoutRequest, UpdateBiPanelRequest,
 };
 use liquid_sql::{PgSqlAnalysisRequest, PgSqlStatementKind, analyze_postgres_sql};
@@ -25,6 +26,10 @@ pub(crate) fn routes() -> Router<ApiState> {
         .route(
             "/api/v1/chat/conversations/{conversation_id}/bi-panel",
             get(get_conversation_bi_panel).patch(update_conversation_bi_panel),
+        )
+        .route(
+            "/api/v1/chat/conversations/{conversation_id}/bi-panel/cards",
+            post(save_conversation_bi_panel_table_card),
         )
         .route("/api/v1/bi-panels/{panel_id}/layout", patch(update_layout))
         .route(
@@ -69,6 +74,40 @@ async fn update_conversation_bi_panel(
         .await?;
 
     Ok(Json(panel))
+}
+
+async fn save_conversation_bi_panel_table_card(
+    State(state): State<ApiState>,
+    headers: HeaderMap,
+    Path(conversation_id): Path<String>,
+    Json(request): Json<SaveBiPanelTableCardRequest>,
+) -> Result<Json<BiPanelCard>, ApiError> {
+    let user = authenticated_user(&state, &headers).await?;
+    let sql = validate_readonly_select(&request.sql)?;
+    let panel = state
+        .store
+        .get_or_create_bi_panel(&user.id, &conversation_id)
+        .await?;
+    let card = state
+        .store
+        .create_bi_panel_card(
+            &user.id,
+            &panel.id,
+            CreateBiPanelCardRequest {
+                managed_database_id: request.managed_database_id,
+                source_action_id: None,
+                title: request.title,
+                description: request.description,
+                kind: BiCardKind::Table,
+                sql,
+                chart: None,
+                layout: next_table_card_layout(&panel),
+                result: request.result,
+            },
+        )
+        .await?;
+
+    Ok(Json(card))
 }
 
 async fn update_layout(
@@ -256,6 +295,20 @@ fn validate_readonly_select(sql: &str) -> Result<String, ApiError> {
     }
 
     Ok(strip_trailing_semicolon(trimmed))
+}
+
+fn next_table_card_layout(panel: &BiPanel) -> BiCardLayout {
+    BiCardLayout {
+        x: 0,
+        y: panel
+            .cards
+            .iter()
+            .map(|card| card.layout.y + card.layout.h)
+            .max()
+            .unwrap_or(0),
+        w: 12,
+        h: 5,
+    }
 }
 
 fn strip_trailing_semicolon(sql: &str) -> String {

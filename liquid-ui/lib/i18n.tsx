@@ -308,6 +308,17 @@ const zhCN = {
     rejecting: "拒绝中",
     biPreview: "BI 卡片预览",
     biRows: (count: number) => `${count} 行`,
+    queryResult: {
+      title: "查询结果",
+      summary: (count: number, elapsedMs: number, truncated: boolean) =>
+        `${count} 行 · ${elapsedMs}ms${truncated ? " · 已截断" : ""}`,
+      empty: "没有返回行",
+      save: "保存到 BI 面板",
+      saving: "保存中",
+      saved: "已保存",
+      saveFailed: "保存到 BI 面板失败",
+      savedToast: "已保存到 BI 面板",
+    },
     actionLabels: {
       create_sql_audit: "创建审计",
       create_bi_card: "创建 BI 卡片",
@@ -336,6 +347,7 @@ const zhCN = {
     export: "导出",
     allDatasets: "全部数据集",
     loading: "正在加载",
+    noRows: "没有返回行",
     loadFailed: "加载 BI 面板失败",
     saved: "已保存",
     saveFailed: "保存失败",
@@ -735,6 +747,19 @@ const enUS: Messages = {
     rejecting: "Rejecting",
     biPreview: "BI card preview",
     biRows: (count: number) => `${count} ${count === 1 ? "row" : "rows"}`,
+    queryResult: {
+      title: "Query result",
+      summary: (count: number, elapsedMs: number, truncated: boolean) =>
+        `${count} ${count === 1 ? "row" : "rows"} · ${elapsedMs}ms${
+          truncated ? " · truncated" : ""
+        }`,
+      empty: "No rows returned",
+      save: "Save to BI panel",
+      saving: "Saving",
+      saved: "Saved",
+      saveFailed: "Failed to save to BI panel",
+      savedToast: "Saved to BI panel",
+    },
     actionLabels: {
       create_sql_audit: "Create audit",
       create_bi_card: "Create BI card",
@@ -763,6 +788,7 @@ const enUS: Messages = {
     export: "Export",
     allDatasets: "All datasets",
     loading: "Loading",
+    noRows: "No rows returned",
     loadFailed: "Failed to load BI panel",
     saved: "Saved",
     saveFailed: "Save failed",
