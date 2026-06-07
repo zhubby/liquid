@@ -1,5 +1,6 @@
 use std::{path::PathBuf, sync::Arc, time::Duration};
 
+use anyhow::Context;
 use liquid_agent::{
     DatabaseBackupWorkerConfig, DatabaseOperationWorker, DefaultDatabaseProcessExecutor,
     PostgresToolExecutionMode, S3BackupObjectStore, S3BackupObjectStoreConfig, SqlAuditAgent,
@@ -19,7 +20,10 @@ pub async fn serve(
     agent: Arc<dyn SqlAuditAgent>,
     store: Arc<Storage>,
 ) -> anyhow::Result<()> {
-    let listener = TcpListener::bind(config.api_addr).await?;
+    let listener = TcpListener::bind(config.api_addr)
+        .await
+        .with_context(|| format!("failed to bind Liquid API listener at {}", config.api_addr))?;
+    tracing::info!(addr = %config.api_addr, "liquid api listener bound");
     let loader: Arc<dyn ManagedDatabaseConnectionLoader> = store.clone();
     let managed_database_pools = Arc::new(ManagedDatabasePoolManager::new(
         loader,

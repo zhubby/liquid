@@ -16,7 +16,11 @@ use liquid_core::{
     UpdatePasswordRequest,
 };
 use serde_json::Value;
-use sqlx::{PgPool, postgres::PgPoolOptions};
+use sqlx::{
+    Connection, PgConnection, PgPool,
+    postgres::{PgConnectOptions, PgPoolOptions},
+};
+use std::str::FromStr;
 
 use crate::{
     agent_workbench, auth,
@@ -42,9 +46,13 @@ impl Storage {
     }
 
     pub async fn connect_with_options(options: StorageOptions) -> Result<Self, sqlx::Error> {
+        let connect_options = PgConnectOptions::from_str(&options.database_url)?;
+        let connection = PgConnection::connect_with(&connect_options).await?;
+        drop(connection);
+
         let pool = PgPoolOptions::new()
             .max_connections(options.max_connections)
-            .connect(&options.database_url)
+            .connect_with(connect_options)
             .await?;
 
         Ok(Self {

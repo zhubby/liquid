@@ -1,11 +1,18 @@
-use std::fmt;
-use std::sync::Arc;
-use std::{env, fs, path::PathBuf};
+use std::{
+    env, fmt, fs,
+    path::{Path, PathBuf},
+    process,
+    sync::Arc,
+    thread,
+    time::{Duration, Instant},
+};
 
 use anyhow::Context;
 use clap::{Args, Parser, Subcommand};
 use liquid_agent::{MockSqlAuditAgent, SqlAuditAgent, ToolCallingSqlAuditAgent};
-use liquid_config::{LiquidConfig, LlmApiMode, default_config_toml};
+use liquid_config::{
+    LiquidConfig, LlmApiMode, SqlExecutionMode, SqlMetadataMode, default_config_toml,
+};
 use liquid_llm::{LlmProtocol, OpenAiCompatibleClient, OpenAiCompatibleConfig};
 use liquid_storage::{Storage, StorageOptions};
 use time::{OffsetDateTime, format_description::well_known::Rfc3339};
@@ -49,6 +56,11 @@ struct ConfigArgs {
     config: Option<PathBuf>,
 }
 
+struct LoadedConfig {
+    config: LiquidConfig,
+    path: PathBuf,
+}
+
 #[tokio::main]
 async fn main() -> anyhow::Result<()> {
     let cli = Cli::parse();
@@ -65,17 +77,51 @@ async fn main() -> anyhow::Result<()> {
 }
 
 async fn run_server(args: ConfigArgs) -> anyhow::Result<()> {
-    let config = load_config(&args)?;
-    let storage = build_storage(&config).await?;
-    let agent = build_agent(&config).await?;
+    let loaded = load_config(&args)?;
+    print_server_startup_overview(&loaded.config, &loaded.path);
+    print_startup_step(
+        "config",
+        format!("loaded from {}", loaded.path.display()),
+        Duration::ZERO,
+    );
 
-    tracing::info!(addr = %config.api_addr, "starting liquid api");
-    liquid_api::serve(config, agent, storage).await
+    let started = Instant::now();
+    let storage = connect_storage(&loaded.config).await?;
+    print_startup_step(
+        "database",
+        format!(
+            "connected to {}",
+            redact_database_url_password(&loaded.config.database.url)
+        ),
+        started.elapsed(),
+    );
+
+    if loaded.config.database.auto_migrate {
+        let started = Instant::now();
+        storage
+            .migrate()
+            .await
+            .context("failed to run Liquid application database migrations")?;
+        print_startup_step("migrations", "applied".to_owned(), started.elapsed());
+    } else {
+        print_startup_step("migrations", "skipped by config".to_owned(), Duration::ZERO);
+    }
+
+    let started = Instant::now();
+    let (agent, agent_info) = build_agent(&loaded.config).await?;
+    print_startup_step("agent", agent_info.summary(), started.elapsed());
+
+    let server_url = server_url(&loaded.config);
+    print_startup_step("http", format!("starting at {server_url}"), Duration::ZERO);
+    tracing::info!(addr = %loaded.config.api_addr, "starting liquid api");
+    liquid_api::serve(loaded.config, agent, Arc::new(storage))
+        .await
+        .with_context(|| format!("Liquid API server failed at {server_url}"))
 }
 
 async fn run_migrate(args: ConfigArgs) -> anyhow::Result<()> {
-    let config = load_config(&args)?;
-    let storage = connect_storage(&config).await?;
+    let loaded = load_config(&args)?;
+    let storage = connect_storage(&loaded.config).await?;
 
     tracing::info!("running liquid database migrations");
     storage.migrate().await?;
@@ -84,10 +130,14 @@ async fn run_migrate(args: ConfigArgs) -> anyhow::Result<()> {
     Ok(())
 }
 
-fn load_config(args: &ConfigArgs) -> anyhow::Result<LiquidConfig> {
+fn load_config(args: &ConfigArgs) -> anyhow::Result<LoadedConfig> {
     let config_path = config_path_from_args(args, default_config_path)?;
+    let config = LiquidConfig::from_file_and_env(Some(&config_path))?;
 
-    LiquidConfig::from_file_and_env(Some(&config_path))
+    Ok(LoadedConfig {
+        config,
+        path: config_path,
+    })
 }
 
 fn config_path_from_args<F>(args: &ConfigArgs, default_path: F) -> anyhow::Result<PathBuf>
@@ -132,35 +182,68 @@ fn ensure_default_config_file(path: PathBuf) -> anyhow::Result<PathBuf> {
     Ok(path)
 }
 
-async fn build_storage(config: &LiquidConfig) -> anyhow::Result<Arc<Storage>> {
-    let storage = connect_storage(config).await?;
-
-    if config.database.auto_migrate {
-        storage.migrate().await?;
-    }
-
-    Ok(Arc::new(storage))
-}
-
 async fn connect_storage(config: &LiquidConfig) -> anyhow::Result<Storage> {
-    Ok(Storage::connect_with_options(
+    Storage::connect_with_options(
         StorageOptions::new(config.database.url.clone())
             .with_max_connections(config.database.max_connections)
             .with_token_ttl_seconds(config.auth.token_ttl_seconds)
             .with_encryption_key(config.security.encryption_key.clone()),
     )
-    .await?)
+    .await
+    .with_context(|| {
+        format!(
+            "failed to connect to Liquid application database at {}",
+            redact_database_url_password(&config.database.url)
+        )
+    })
 }
 
-async fn build_agent(config: &LiquidConfig) -> anyhow::Result<Arc<dyn SqlAuditAgent>> {
+fn redact_database_url_password(database_url: &str) -> String {
+    redact_url_password(database_url)
+}
+
+fn redact_url_password(url: &str) -> String {
+    let Some(scheme_end) = url.find("://") else {
+        return url.to_owned();
+    };
+    let credentials_start = scheme_end + 3;
+    let after_scheme = &url[credentials_start..];
+    let Some(credentials_end) = after_scheme.find('@') else {
+        return url.to_owned();
+    };
+    let credentials = &after_scheme[..credentials_end];
+    let Some(password_start) = credentials.rfind(':') else {
+        return url.to_owned();
+    };
+
+    format!(
+        "{}{}{}[redacted]@{}",
+        &url[..credentials_start],
+        &credentials[..password_start],
+        &credentials[password_start..=password_start],
+        &after_scheme[credentials_end + 1..]
+    )
+}
+
+async fn build_agent(
+    config: &LiquidConfig,
+) -> anyhow::Result<(Arc<dyn SqlAuditAgent>, AgentStartupInfo)> {
     let Some(api_key) = config.llm.api_key.clone() else {
-        tracing::info!("OPENAI_API_KEY is not set; using mock SQL audit agent");
-        return Ok(Arc::new(MockSqlAuditAgent));
+        return Ok((
+            Arc::new(MockSqlAuditAgent),
+            AgentStartupInfo::Mock {
+                reason: "OPENAI_API_KEY unset",
+            },
+        ));
     };
 
     let Some(model) = config.llm.model.clone() else {
-        tracing::info!("OPENAI_MODEL is not set; using mock SQL audit agent");
-        return Ok(Arc::new(MockSqlAuditAgent));
+        return Ok((
+            Arc::new(MockSqlAuditAgent),
+            AgentStartupInfo::Mock {
+                reason: "OPENAI_MODEL unset",
+            },
+        ));
     };
 
     let llm = Arc::new(OpenAiCompatibleClient::new(OpenAiCompatibleConfig::new(
@@ -172,17 +255,200 @@ async fn build_agent(config: &LiquidConfig) -> anyhow::Result<Arc<dyn SqlAuditAg
         LlmApiMode::Responses => LlmProtocol::Responses,
     };
 
-    tracing::info!(
-        model = %model,
-        base_url = %config.llm.base_url,
-        api_mode = ?config.llm.api_mode,
-        "using OpenAI-compatible SQL audit agent"
-    );
-
-    Ok(Arc::new(ToolCallingSqlAuditAgent::new(
-        llm, model, protocol,
-    )))
+    Ok((
+        Arc::new(ToolCallingSqlAuditAgent::new(llm, model.clone(), protocol)),
+        AgentStartupInfo::OpenAiCompatible {
+            model,
+            api_mode: config.llm.api_mode,
+            base_url: config.llm.base_url.clone(),
+        },
+    ))
 }
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+enum AgentStartupInfo {
+    Mock {
+        reason: &'static str,
+    },
+    OpenAiCompatible {
+        model: String,
+        api_mode: LlmApiMode,
+        base_url: String,
+    },
+}
+
+impl AgentStartupInfo {
+    fn summary(&self) -> String {
+        match self {
+            Self::Mock { reason } => format!("mock SQL audit agent ({reason})"),
+            Self::OpenAiCompatible {
+                model,
+                api_mode,
+                base_url,
+            } => format!(
+                "OpenAI-compatible model={} api_mode={} base_url={}",
+                model,
+                llm_api_mode_label(*api_mode),
+                redact_url_password(base_url)
+            ),
+        }
+    }
+}
+
+fn print_server_startup_overview(config: &LiquidConfig, config_path: &Path) {
+    println!("{}", render_server_startup_overview(config, config_path));
+}
+
+fn render_server_startup_overview(config: &LiquidConfig, config_path: &Path) -> String {
+    let rows = [
+        (
+            "version",
+            format!("{} ({})", env!("CARGO_PKG_VERSION"), build_profile()),
+        ),
+        ("system", system_summary()),
+        ("process", process_summary()),
+        ("config", config_path.display().to_string()),
+        (
+            "api",
+            format!("{} cors={}", server_url(config), config.cors_origin),
+        ),
+        (
+            "database",
+            format!(
+                "{} pool={} auto_migrate={}",
+                redact_database_url_password(&config.database.url),
+                config.database.max_connections,
+                enabled_label(config.database.auto_migrate)
+            ),
+        ),
+        (
+            "sql",
+            format!(
+                "metadata={} execution={} managed_pool={} acquire_timeout={}s",
+                sql_metadata_mode_label(config.sql_metadata),
+                sql_execution_mode_label(config.sql_execution),
+                config.managed_database_pool.max_connections,
+                config.managed_database_pool.acquire_timeout_seconds
+            ),
+        ),
+        ("llm", llm_config_summary(config)),
+        ("backups", backup_config_summary(config)),
+    ];
+
+    let mut output = String::from("\nLiquid server\n=============\n");
+    for (label, value) in rows {
+        output.push_str(&format!("  {label:<12} {value}\n"));
+    }
+    output.push_str("\nInitialization\n--------------");
+    output
+}
+
+fn print_startup_step(label: &str, detail: String, duration: Duration) {
+    println!(
+        "  [ok] {label:<12} {detail} ({})",
+        format_duration(duration)
+    );
+}
+
+fn format_duration(duration: Duration) -> String {
+    if duration.as_millis() < 1_000 {
+        format!("{}ms", duration.as_millis())
+    } else {
+        format!("{:.2}s", duration.as_secs_f64())
+    }
+}
+
+fn build_profile() -> &'static str {
+    if cfg!(debug_assertions) {
+        "debug"
+    } else {
+        "release"
+    }
+}
+
+fn system_summary() -> String {
+    let cpus = thread::available_parallelism()
+        .map(|count| count.get())
+        .unwrap_or(1);
+
+    format!("{} {} cpus={cpus}", env::consts::OS, env::consts::ARCH)
+}
+
+fn process_summary() -> String {
+    let cwd = env::current_dir()
+        .map(|path| path.display().to_string())
+        .unwrap_or_else(|_| "unknown".to_owned());
+
+    format!("pid={} cwd={cwd}", process::id())
+}
+
+fn server_url(config: &LiquidConfig) -> String {
+    format!("http://{}", config.api_addr)
+}
+
+fn llm_config_summary(config: &LiquidConfig) -> String {
+    match (&config.llm.api_key, &config.llm.model) {
+        (Some(_), Some(model)) => format!(
+            "openai-compatible model={} api_mode={} base_url={}",
+            model,
+            llm_api_mode_label(config.llm.api_mode),
+            redact_url_password(&config.llm.base_url)
+        ),
+        (None, _) => format!(
+            "mock api_mode={} reason=OPENAI_API_KEY unset",
+            llm_api_mode_label(config.llm.api_mode)
+        ),
+        (_, None) => format!(
+            "mock api_mode={} reason=OPENAI_MODEL unset",
+            llm_api_mode_label(config.llm.api_mode)
+        ),
+    }
+}
+
+fn backup_config_summary(config: &LiquidConfig) -> String {
+    let Some(bucket) = config.database_backup.s3_bucket.as_deref() else {
+        return format!(
+            "disabled work_dir={} concurrency={}",
+            config.database_backup.work_dir, config.database_backup.worker_concurrency
+        );
+    };
+
+    format!(
+        "enabled bucket={} region={} prefix={} concurrency={}",
+        bucket,
+        config.database_backup.s3_region,
+        config.database_backup.s3_prefix,
+        config.database_backup.worker_concurrency
+    )
+}
+
+fn enabled_label(enabled: bool) -> &'static str {
+    if enabled { "on" } else { "off" }
+}
+
+fn llm_api_mode_label(mode: LlmApiMode) -> &'static str {
+    match mode {
+        LlmApiMode::ChatCompletions => "chat_completions",
+        LlmApiMode::Responses => "responses",
+    }
+}
+
+fn sql_metadata_mode_label(mode: SqlMetadataMode) -> &'static str {
+    match mode {
+        SqlMetadataMode::Auto => "auto",
+        SqlMetadataMode::Off => "off",
+        SqlMetadataMode::Required => "required",
+    }
+}
+
+fn sql_execution_mode_label(mode: SqlExecutionMode) -> &'static str {
+    match mode {
+        SqlExecutionMode::Off => "off",
+        SqlExecutionMode::Readonly => "readonly",
+        SqlExecutionMode::WriteGated => "write_gated",
+    }
+}
+
 fn init_tracing() {
     let regular_filter = env_filter_from_env().add_directive(
         "sqlx::query=off"
@@ -386,6 +652,10 @@ mod tests {
     };
 
     use clap::Parser;
+    use liquid_config::{
+        AuthConfig, DatabaseBackupConfig, DatabaseConfig, LlmConfig, ManagedDatabasePoolConfig,
+        SecurityConfig,
+    };
 
     use super::*;
 
@@ -447,6 +717,57 @@ mod tests {
         for value in ["", "0", "false", "off", "debug"] {
             assert!(!truthy_env_switch(value));
         }
+    }
+
+    #[test]
+    fn redacts_database_url_password() {
+        assert_eq!(
+            redact_database_url_password("postgres://liquid:secret@localhost:5432/liquid"),
+            "postgres://liquid:[redacted]@localhost:5432/liquid"
+        );
+        assert_eq!(
+            redact_url_password("https://user:secret@example.test/v1"),
+            "https://user:[redacted]@example.test/v1"
+        );
+        assert_eq!(
+            redact_database_url_password("postgres://liquid@localhost:5432/liquid"),
+            "postgres://liquid@localhost:5432/liquid"
+        );
+    }
+
+    #[test]
+    fn renders_server_startup_overview_with_redacted_database_url() {
+        let config = test_config();
+        let rendered = render_server_startup_overview(&config, Path::new("/tmp/liquid.toml"));
+
+        assert!(rendered.contains("Liquid server"));
+        assert!(rendered.contains("Initialization"));
+        assert!(rendered.contains("postgres://postgres:[redacted]@localhost:5432/liquid"));
+        assert!(rendered.contains("metadata=required execution=write_gated"));
+        assert!(rendered.contains("openai-compatible model=gpt-test"));
+        assert!(!rendered.contains("db-secret"));
+        assert!(!rendered.contains("llm-secret"));
+    }
+
+    #[test]
+    fn summarizes_agent_startup_with_redacted_base_url() {
+        let info = AgentStartupInfo::OpenAiCompatible {
+            model: "gpt-test".to_owned(),
+            api_mode: LlmApiMode::Responses,
+            base_url: "https://user:llm-secret@example.test/v1".to_owned(),
+        };
+
+        let summary = info.summary();
+
+        assert!(summary.contains("api_mode=responses"));
+        assert!(summary.contains("https://user:[redacted]@example.test/v1"));
+        assert!(!summary.contains("llm-secret"));
+    }
+
+    #[test]
+    fn formats_startup_durations() {
+        assert_eq!(format_duration(Duration::from_millis(42)), "42ms");
+        assert_eq!(format_duration(Duration::from_millis(1_250)), "1.25s");
     }
 
     #[test]
@@ -524,5 +845,46 @@ mod tests {
             .as_nanos();
 
         env::temp_dir().join(format!("{name}-{}-{nanos}", process::id()))
+    }
+
+    fn test_config() -> LiquidConfig {
+        LiquidConfig {
+            api_addr: "127.0.0.1:3001".parse().unwrap(),
+            cors_origin: "http://localhost:3000".to_owned(),
+            database: DatabaseConfig {
+                url: "postgres://postgres:db-secret@localhost:5432/liquid".to_owned(),
+                max_connections: 5,
+                auto_migrate: true,
+            },
+            auth: AuthConfig {
+                token_ttl_seconds: 604_800,
+            },
+            security: SecurityConfig {
+                encryption_key: "test-encryption-key".to_owned(),
+            },
+            sql_metadata: SqlMetadataMode::Required,
+            sql_execution: SqlExecutionMode::WriteGated,
+            managed_database_pool: ManagedDatabasePoolConfig {
+                max_connections: 2,
+                idle_ttl_seconds: 600,
+                reap_interval_seconds: 60,
+                acquire_timeout_seconds: 10,
+            },
+            database_backup: DatabaseBackupConfig {
+                s3_bucket: None,
+                s3_prefix: "liquid/database-backups".to_owned(),
+                s3_region: "us-east-1".to_owned(),
+                s3_endpoint: None,
+                s3_path_style: false,
+                work_dir: "/tmp/liquid-backups".to_owned(),
+                worker_concurrency: 1,
+            },
+            llm: LlmConfig {
+                api_key: Some("llm-secret".to_owned()),
+                base_url: "https://user:llm-secret@example.test/v1".to_owned(),
+                model: Some("gpt-test".to_owned()),
+                api_mode: LlmApiMode::ChatCompletions,
+            },
+        }
     }
 }
