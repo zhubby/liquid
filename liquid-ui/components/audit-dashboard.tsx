@@ -445,17 +445,25 @@ function IconSidebar({
           />
         </nav>
         <div className="flex w-full flex-col items-center gap-2 border-t border-sidebar-border py-3">
-          <Button
-            type="button"
-            variant="ghost"
-            size="icon"
-            className="size-10 rounded-md text-sidebar-foreground/70 hover:bg-sidebar-accent hover:text-sidebar-accent-foreground"
-            aria-label={t.workspace.returnToDatabases}
-            title={t.workspace.returnToDatabases}
-            onClick={onDatabaseExit}
-          >
-            <ArrowLeft className="size-5" aria-hidden />
-          </Button>
+          <Tooltip>
+            <TooltipTrigger asChild>
+              <Button
+                type="button"
+                variant="ghost"
+                size="icon"
+                className="size-10 rounded-md text-sidebar-foreground/70 hover:bg-sidebar-accent hover:text-sidebar-accent-foreground"
+                aria-label={t.workspace.returnToDatabases}
+                onClick={onDatabaseExit}
+              >
+                <ArrowLeft className="size-5" aria-hidden />
+              </Button>
+            </TooltipTrigger>
+            <TooltipContent side="right" align="center" sideOffset={8}>
+              <span className="block max-w-64 truncate">
+                {t.workspace.returnToDatabases}
+              </span>
+            </TooltipContent>
+          </Tooltip>
         </div>
       </aside>
     </TooltipProvider>
@@ -486,8 +494,9 @@ function SidebarIcon({
           className={cn(
             "size-10 rounded-md text-sidebar-foreground/70 hover:bg-sidebar-accent hover:text-sidebar-accent-foreground",
             active &&
-              "bg-sidebar-accent text-sidebar-accent-foreground shadow-xs ring-1 ring-sidebar-border",
+              "bg-sidebar-primary text-sidebar-primary-foreground shadow-sm ring-1 ring-sidebar-primary/25 hover:bg-sidebar-primary hover:text-sidebar-primary-foreground",
           )}
+          aria-current={active ? "page" : undefined}
           aria-label={label}
           onClick={onClick}
         >

@@ -2,6 +2,7 @@
 
 import {
   type FormEvent,
+  type ReactElement,
   type ReactNode,
   type KeyboardEvent as ReactKeyboardEvent,
   useCallback,
@@ -13,8 +14,6 @@ import {
 import {
   Archive,
   ChevronDown,
-  CircleAlert,
-  CircleCheck,
   ClipboardCheck,
   Database,
   KeyRound,
@@ -46,6 +45,12 @@ import {
   CardTitle,
 } from "@/components/ui/card";
 import {
+  Tooltip,
+  TooltipContent,
+  TooltipProvider,
+  TooltipTrigger,
+} from "@/components/ui/tooltip";
+import {
   type CreateManagedDatabaseRequest,
   type CurrentManagedDatabaseResponse,
   type ManagedDatabase,
@@ -75,11 +80,6 @@ type ManagedDatabaseForm = {
   password: string;
   tags: string[];
   ssl_mode: ManagedDatabase["ssl_mode"];
-};
-
-type ConnectionTestState = {
-  tone: "success" | "error";
-  message: string;
 };
 
 type ManagedDatabaseView = "overview" | "audits" | "backups";
@@ -120,9 +120,6 @@ export function ManagedDatabasePicker({
   const [isSettingsOpen, setIsSettingsOpen] = useState(false);
   const [activeView, setActiveView] = useState<ManagedDatabaseView>("overview");
   const accountMenuRef = useRef<HTMLDivElement | null>(null);
-  const [testResults, setTestResults] = useState<
-    Record<string, ConnectionTestState>
-  >({});
 
   const loadDatabases = useCallback(async () => {
     setIsLoading(true);
@@ -367,11 +364,6 @@ export function ManagedDatabasePicker({
       setDatabases((current) =>
         current.filter((item) => item.id !== database.id),
       );
-      setTestResults((current) => {
-        const next = { ...current };
-        delete next[database.id];
-        return next;
-      });
 
       if (editingId === database.id) {
         closeForm();
@@ -399,22 +391,11 @@ export function ManagedDatabasePicker({
           body: {},
         },
       );
-      setTestResults((current) => ({
-        ...current,
-        [database.id]: {
-          tone: "success",
-          message: response.message,
-        },
-      }));
+      toast.success(response.message);
     } catch (error) {
-      setTestResults((current) => ({
-        ...current,
-        [database.id]: {
-          tone: "error",
-          message:
-            error instanceof Error ? error.message : t.databasePicker.testFailed,
-        },
-      }));
+      toast.error(
+        error instanceof Error ? error.message : t.databasePicker.testFailed,
+      );
     } finally {
       setTestingId(null);
     }
@@ -623,7 +604,6 @@ export function ManagedDatabasePicker({
                       <DatabaseListItem
                         key={database.id}
                         database={database}
-                        testState={testResults[database.id]}
                         isTesting={testingId === database.id}
                         isEntering={enteringId === database.id}
                         isDeleting={deletingId === database.id}
@@ -670,7 +650,6 @@ export function ManagedDatabasePicker({
 
 function DatabaseListItem({
   database,
-  testState,
   isTesting,
   isEntering,
   isDeleting,
@@ -680,7 +659,6 @@ function DatabaseListItem({
   onDelete,
 }: {
   database: ManagedDatabase;
-  testState?: ConnectionTestState;
   isTesting: boolean;
   isEntering: boolean;
   isDeleting: boolean;
@@ -725,102 +703,95 @@ function DatabaseListItem({
                 ? t.databasePicker.passwordSaved
                 : t.databasePicker.noPassword}
             </Badge>
-            {testState ? (
-              <Badge
-                variant={testState.tone === "success" ? "secondary" : "destructive"}
-                className="rounded-md"
-              >
-                {testState.tone === "success"
-                  ? t.databasePicker.connectionAvailable
-                  : t.databasePicker.connectionIssue}
-              </Badge>
-            ) : null}
           </div>
         </div>
 
-        <div className="grid grid-cols-[repeat(4,2.25rem)] items-center justify-end gap-2 md:w-auto">
-          <Button
-            type="button"
-            size="icon"
-            className="size-9"
-            title={t.databasePicker.enter}
-            aria-label={t.databasePicker.enterDatabaseLabel(database.name)}
-            disabled={isBusy}
-            onClick={onEnter}
-          >
-            {isEntering ? (
-              <Loader2 className="size-4 animate-spin" aria-hidden />
-            ) : (
-              <LogIn className="size-4" aria-hidden />
-            )}
-          </Button>
-          <Button
-            type="button"
-            variant="outline"
-            size="icon"
-            className="size-9"
-            title={t.databasePicker.testConnection}
-            aria-label={t.databasePicker.testDatabaseLabel(database.name)}
-            disabled={isBusy}
-            onClick={onTest}
-          >
-            {isTesting ? (
-              <Loader2 className="size-4 animate-spin" aria-hidden />
-            ) : (
-              <Plug className="size-4" aria-hidden />
-            )}
-          </Button>
-          <Button
-            type="button"
-            variant="outline"
-            size="icon"
-            className="size-9"
-            title={t.databasePicker.editConnection}
-            aria-label={t.databasePicker.editDatabaseLabel(database.name)}
-            disabled={isDeleting}
-            onClick={onEdit}
-          >
-            <PencilLine className="size-4" aria-hidden />
-          </Button>
-          <Button
-            type="button"
-            variant="outline"
-            size="icon"
-            className="size-9 border-destructive/20 text-destructive hover:bg-destructive/10 hover:text-destructive"
-            title={t.databasePicker.deleteConnection}
-            aria-label={t.databasePicker.deleteDatabaseLabel(database.name)}
-            disabled={isBusy}
-            onClick={onDelete}
-          >
-            {isDeleting ? (
-              <Loader2 className="size-4 animate-spin" aria-hidden />
-            ) : (
-              <Trash2 className="size-4" aria-hidden />
-            )}
-          </Button>
-        </div>
+        <TooltipProvider delayDuration={250}>
+          <div className="grid grid-cols-[repeat(4,2.25rem)] items-center justify-end gap-2 md:w-auto">
+            <DatabaseActionTooltip label={t.databasePicker.enter}>
+              <Button
+                type="button"
+                size="icon"
+                className="size-9"
+                aria-label={t.databasePicker.enterDatabaseLabel(database.name)}
+                disabled={isBusy}
+                onClick={onEnter}
+              >
+                {isEntering ? (
+                  <Loader2 className="size-4 animate-spin" aria-hidden />
+                ) : (
+                  <LogIn className="size-4" aria-hidden />
+                )}
+              </Button>
+            </DatabaseActionTooltip>
+            <DatabaseActionTooltip label={t.databasePicker.testConnection}>
+              <Button
+                type="button"
+                variant="outline"
+                size="icon"
+                className="size-9"
+                aria-label={t.databasePicker.testDatabaseLabel(database.name)}
+                disabled={isBusy}
+                onClick={onTest}
+              >
+                {isTesting ? (
+                  <Loader2 className="size-4 animate-spin" aria-hidden />
+                ) : (
+                  <Plug className="size-4" aria-hidden />
+                )}
+              </Button>
+            </DatabaseActionTooltip>
+            <DatabaseActionTooltip label={t.databasePicker.editConnection}>
+              <Button
+                type="button"
+                variant="outline"
+                size="icon"
+                className="size-9"
+                aria-label={t.databasePicker.editDatabaseLabel(database.name)}
+                disabled={isDeleting}
+                onClick={onEdit}
+              >
+                <PencilLine className="size-4" aria-hidden />
+              </Button>
+            </DatabaseActionTooltip>
+            <DatabaseActionTooltip label={t.databasePicker.deleteConnection}>
+              <Button
+                type="button"
+                variant="outline"
+                size="icon"
+                className="size-9 border-destructive/20 text-destructive hover:bg-destructive/10 hover:text-destructive"
+                aria-label={t.databasePicker.deleteDatabaseLabel(database.name)}
+                disabled={isBusy}
+                onClick={onDelete}
+              >
+                {isDeleting ? (
+                  <Loader2 className="size-4 animate-spin" aria-hidden />
+                ) : (
+                  <Trash2 className="size-4" aria-hidden />
+                )}
+              </Button>
+            </DatabaseActionTooltip>
+          </div>
+        </TooltipProvider>
       </div>
-      {testState ? (
-        <div
-          className={cn(
-            "mt-3 flex items-center gap-2 rounded-md border px-3 py-2 text-xs",
-            testState.tone === "success"
-              ? "border-emerald-200 bg-emerald-50 text-emerald-800"
-              : "border-destructive/30 bg-destructive/10 text-destructive",
-          )}
-        >
-          {testState.tone === "success" ? (
-            <CircleCheck
-              className="size-4 shrink-0 text-emerald-600"
-              aria-hidden
-            />
-          ) : (
-            <CircleAlert className="size-4 shrink-0" aria-hidden />
-          )}
-          <span className="min-w-0">{testState.message}</span>
-        </div>
-      ) : null}
     </article>
+  );
+}
+
+function DatabaseActionTooltip({
+  children,
+  label,
+}: {
+  children: ReactElement;
+  label: string;
+}) {
+  return (
+    <Tooltip>
+      <TooltipTrigger asChild>{children}</TooltipTrigger>
+      <TooltipContent side="top" align="center" sideOffset={8}>
+        <span className="block max-w-48 truncate">{label}</span>
+      </TooltipContent>
+    </Tooltip>
   );
 }
 

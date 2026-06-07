@@ -1,8 +1,11 @@
-# Liquid
-
-Liquid is a Rust and Next.js SQL AI audit dashboard. It provides an Axum API for
-authentication, managed database connection records, and SQL audit summaries,
-plus a Bun-managed Next.js frontend for operational datapanel workflows.
+<div align="center">
+  <img src="liquid-ui/public/logo.png" alt="Liquid logo" width="96" height="96">
+  <h1>Liquid</h1>
+  <img src="liquid-ui/public/banner.png" alt="Liquid dashboard banner" width="860">
+  <p>
+    <strong>Liquid is the AI audit and observability layer for your database, built to help teams understand, review, and monitor SQL from local development to production Postgres.</strong>
+  </p>
+</div>
 
 ## Features
 
