@@ -10,6 +10,7 @@ export type ManagedDatabase = {
   port: number;
   database: string;
   username: string;
+  tags: Array<string>;
   ssl_mode: ManagedDatabaseSslMode;
   has_password: boolean;
 };

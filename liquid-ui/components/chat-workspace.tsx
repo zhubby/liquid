@@ -1330,7 +1330,7 @@ function MessageBubble({
       </div>
       {isUser ? (
         <div
-          className="mt-1 flex size-8 shrink-0 items-center justify-center rounded-md border bg-primary text-xs font-semibold text-primary-foreground shadow-xs"
+          className="mt-1 flex size-8 shrink-0 items-center justify-center rounded-md border bg-background text-xs font-semibold text-foreground shadow-xs"
           title={user.email}
           aria-label={user.display_name}
         >

@@ -32,6 +32,7 @@ async fn sql_audit_store_persists_and_transitions_records() {
                 database: "warehouse".to_owned(),
                 username: "readonly".to_owned(),
                 password: "secret123".to_owned(),
+                tags: None,
                 ssl_mode: ManagedDatabaseSslMode::Disable,
             },
         )
@@ -144,6 +145,7 @@ async fn sql_audit_store_rejects_invalid_status_transitions() {
                 database: "warehouse".to_owned(),
                 username: "readonly".to_owned(),
                 password: "secret123".to_owned(),
+                tags: None,
                 ssl_mode: ManagedDatabaseSslMode::Prefer,
             },
         )

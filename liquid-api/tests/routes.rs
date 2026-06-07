@@ -276,6 +276,7 @@ impl LiquidStore for TestStore {
             port: request.port,
             database: request.database,
             username: request.username,
+            tags: request.tags.unwrap_or_default(),
             ssl_mode: request.ssl_mode,
             has_password: true,
         };
@@ -308,6 +309,9 @@ impl LiquidStore for TestStore {
         }
         if let Some(username) = request.username {
             database.username = username;
+        }
+        if let Some(tags) = request.tags {
+            database.tags = tags;
         }
         if let Some(ssl_mode) = request.ssl_mode {
             database.ssl_mode = ssl_mode;
@@ -2498,6 +2502,7 @@ async fn chat_messages_and_stream_include_query_result_table_parts() {
                 database: "warehouse".to_owned(),
                 username: "readonly".to_owned(),
                 password: "password123".to_owned(),
+                tags: None,
                 ssl_mode: ManagedDatabaseSslMode::Disable,
             },
         )
@@ -3706,6 +3711,7 @@ async fn create_datapanel_card_action_fixture(
                 database: "warehouse".to_owned(),
                 username: "readonly".to_owned(),
                 password: "password123".to_owned(),
+                tags: None,
                 ssl_mode: ManagedDatabaseSslMode::Disable,
             },
         )
@@ -3789,6 +3795,7 @@ async fn refreshing_datapanel_card_rejects_non_select_sql_before_pool_use() {
                 database: "warehouse".to_owned(),
                 username: "readonly".to_owned(),
                 password: "password123".to_owned(),
+                tags: None,
                 ssl_mode: ManagedDatabaseSslMode::Disable,
             },
         )
@@ -3873,6 +3880,7 @@ async fn saving_chat_query_result_creates_table_datapanel_card() {
                 database: "warehouse".to_owned(),
                 username: "readonly".to_owned(),
                 password: "password123".to_owned(),
+                tags: None,
                 ssl_mode: ManagedDatabaseSslMode::Disable,
             },
         )
@@ -3950,6 +3958,7 @@ async fn saving_chat_query_result_rejects_non_select_sql() {
                 database: "warehouse".to_owned(),
                 username: "readonly".to_owned(),
                 password: "password123".to_owned(),
+                tags: None,
                 ssl_mode: ManagedDatabaseSslMode::Disable,
             },
         )
@@ -4011,6 +4020,7 @@ async fn managed_database_crud_is_bearer_protected() {
                 "database": "warehouse",
                 "username": "readonly",
                 "password": "password123",
+                "tags": ["prod", "finance"],
                 "ssl_mode": "prefer"
             }),
         ))
@@ -4020,6 +4030,7 @@ async fn managed_database_crud_is_bearer_protected() {
     assert_eq!(create_response.status(), StatusCode::CREATED);
     let payload = response_json(create_response).await;
     assert_eq!(payload["name"], "Warehouse");
+    assert_eq!(payload["tags"], json!(["prod", "finance"]));
     assert_eq!(payload["has_password"], true);
     assert!(payload.get("password").is_none());
 
@@ -4030,6 +4041,7 @@ async fn managed_database_crud_is_bearer_protected() {
             "/api/v1/managed-databases/db-1",
             json!({
                 "name": "Warehouse Replica",
+                "tags": ["replica"],
                 "ssl_mode": "require"
             }),
         ))
@@ -4039,6 +4051,7 @@ async fn managed_database_crud_is_bearer_protected() {
     assert_eq!(update_response.status(), StatusCode::OK);
     let payload = response_json(update_response).await;
     assert_eq!(payload["name"], "Warehouse Replica");
+    assert_eq!(payload["tags"], json!(["replica"]));
     assert_eq!(payload["ssl_mode"], "require");
 
     let list_response = app
@@ -4770,6 +4783,7 @@ fn fake_store_uses_expected_enum_values() {
         port: 5432,
         database: "warehouse".to_owned(),
         username: "readonly".to_owned(),
+        tags: vec![],
         ssl_mode: ManagedDatabaseSslMode::Prefer,
         has_password: true,
     };

@@ -49,6 +49,7 @@ pub struct ManagedDatabase {
     pub port: i32,
     pub database: String,
     pub username: String,
+    pub tags: Vec<String>,
     pub ssl_mode: ManagedDatabaseSslMode,
     pub has_password: bool,
 }
@@ -83,6 +84,9 @@ pub struct CreateManagedDatabaseRequest {
     pub username: String,
     pub password: String,
     #[serde(default)]
+    #[ts(optional)]
+    pub tags: Option<Vec<String>>,
+    #[serde(default)]
     pub ssl_mode: ManagedDatabaseSslMode,
 }
 
@@ -101,6 +105,8 @@ pub struct UpdateManagedDatabaseRequest {
     pub username: Option<String>,
     #[ts(optional)]
     pub password: Option<String>,
+    #[ts(optional)]
+    pub tags: Option<Vec<String>>,
     #[ts(optional)]
     pub ssl_mode: Option<ManagedDatabaseSslMode>,
 }

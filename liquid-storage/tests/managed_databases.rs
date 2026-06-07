@@ -1,5 +1,6 @@
 use liquid_core::{
     CreateManagedDatabaseRequest, ManagedDatabaseEngine, ManagedDatabaseSslMode, RegisterRequest,
+    UpdateManagedDatabaseRequest,
 };
 use liquid_storage::{LiquidStore, Storage, StorageError, StorageOptions};
 
@@ -36,6 +37,7 @@ async fn managed_database_current_selection_persists_and_clears() {
                 database: "warehouse".to_owned(),
                 username: "readonly".to_owned(),
                 password: "secret123".to_owned(),
+                tags: None,
                 ssl_mode: ManagedDatabaseSslMode::Prefer,
             },
         )
@@ -96,6 +98,77 @@ async fn managed_database_current_selection_persists_and_clears() {
             .unwrap()
             .is_none()
     );
+}
+
+#[tokio::test]
+async fn managed_database_tags_persist_update_and_clear() {
+    let Some(storage) = test_storage().await else {
+        return;
+    };
+
+    let owner = storage
+        .register_user(RegisterRequest {
+            email: unique_email("managed-database-tags"),
+            display_name: "Managed Database Tags".to_owned(),
+            password: "password123".to_owned(),
+        })
+        .await
+        .unwrap();
+    let database = storage
+        .create_managed_database(
+            &owner.user.id,
+            CreateManagedDatabaseRequest {
+                name: "Tagged Warehouse".to_owned(),
+                engine: ManagedDatabaseEngine::Postgres,
+                host: "localhost".to_owned(),
+                port: 5432,
+                database: "warehouse".to_owned(),
+                username: "readonly".to_owned(),
+                password: "secret123".to_owned(),
+                tags: Some(vec![
+                    " prod ".to_owned(),
+                    "".to_owned(),
+                    "Prod".to_owned(),
+                    "finance".to_owned(),
+                ]),
+                ssl_mode: ManagedDatabaseSslMode::Prefer,
+            },
+        )
+        .await
+        .unwrap();
+    assert_eq!(database.tags, vec!["prod", "finance"]);
+
+    let listed = storage
+        .list_managed_databases(&owner.user.id)
+        .await
+        .unwrap();
+    assert_eq!(listed[0].tags, vec!["prod", "finance"]);
+
+    let updated = storage
+        .update_managed_database(
+            &owner.user.id,
+            &database.id,
+            UpdateManagedDatabaseRequest {
+                tags: Some(vec!["readonly".to_owned()]),
+                ..UpdateManagedDatabaseRequest::default()
+            },
+        )
+        .await
+        .unwrap();
+    assert_eq!(updated.tags, vec!["readonly"]);
+
+    let cleared = storage
+        .update_managed_database(
+            &owner.user.id,
+            &database.id,
+            UpdateManagedDatabaseRequest {
+                tags: Some(vec![]),
+                ..UpdateManagedDatabaseRequest::default()
+            },
+        )
+        .await
+        .unwrap();
+    assert!(cleared.tags.is_empty());
 }
 
 async fn test_storage() -> Option<Storage> {

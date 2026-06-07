@@ -37,6 +37,7 @@ async fn database_backup_store_persists_owner_scoped_jobs_and_restores() {
                 database: "source".to_owned(),
                 username: "postgres".to_owned(),
                 password: "secret123".to_owned(),
+                tags: None,
                 ssl_mode: ManagedDatabaseSslMode::Disable,
             },
         )
@@ -53,6 +54,7 @@ async fn database_backup_store_persists_owner_scoped_jobs_and_restores() {
                 database: "target".to_owned(),
                 username: "postgres".to_owned(),
                 password: "secret123".to_owned(),
+                tags: None,
                 ssl_mode: ManagedDatabaseSslMode::Disable,
             },
         )

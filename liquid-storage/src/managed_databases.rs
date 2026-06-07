@@ -17,7 +17,7 @@ pub(crate) async fn list_managed_databases(
 ) -> Result<Vec<ManagedDatabase>, StorageError> {
     let rows = sqlx::query_as::<_, ManagedDatabaseRow>(
         r#"
-        select id::text, name, engine, host, port, database_name, username, ssl_mode,
+        select id::text, name, engine, host, port, database_name, username, tags, ssl_mode,
                encrypted_password <> '' as has_password
         from managed_databases
         where owner_user_id = $1::uuid
@@ -40,7 +40,7 @@ pub(crate) async fn get_current_managed_database(
         select managed_databases.id::text, managed_databases.name, managed_databases.engine,
                managed_databases.host, managed_databases.port,
                managed_databases.database_name, managed_databases.username,
-               managed_databases.ssl_mode,
+               managed_databases.tags, managed_databases.ssl_mode,
                managed_databases.encrypted_password <> '' as has_password
         from user_managed_database_preferences
         join managed_databases
@@ -65,7 +65,7 @@ pub(crate) async fn set_current_managed_database(
     let mut transaction = storage.pool.begin().await?;
     let row = sqlx::query_as::<_, ManagedDatabaseRow>(
         r#"
-        select id::text, name, engine, host, port, database_name, username, ssl_mode,
+        select id::text, name, engine, host, port, database_name, username, tags, ssl_mode,
                encrypted_password <> '' as has_password
         from managed_databases
         where id = $1::uuid
@@ -134,10 +134,10 @@ pub(crate) async fn create_managed_database(
         r#"
         insert into managed_databases (
             owner_user_id, name, engine, host, port, database_name, username,
-            encrypted_password, ssl_mode
+            encrypted_password, tags, ssl_mode
         )
-        values ($1::uuid, $2, $3, $4, $5, $6, $7, $8, $9)
-        returning id::text, name, engine, host, port, database_name, username, ssl_mode,
+        values ($1::uuid, $2, $3, $4, $5, $6, $7, $8, $9, $10)
+        returning id::text, name, engine, host, port, database_name, username, tags, ssl_mode,
                   encrypted_password <> '' as has_password
         "#,
     )
@@ -149,6 +149,7 @@ pub(crate) async fn create_managed_database(
     .bind(record.database)
     .bind(record.username)
     .bind(encrypted_password)
+    .bind(record.tags)
     .bind(record.ssl_mode.as_str())
     .fetch_one(&storage.pool)
     .await
@@ -173,11 +174,12 @@ pub(crate) async fn update_managed_database(
             database_name = coalesce($6::text, database_name),
             username = coalesce($7::text, username),
             encrypted_password = coalesce($8::text, encrypted_password),
-            ssl_mode = coalesce($9::text, ssl_mode),
+            tags = coalesce($9::text[], tags),
+            ssl_mode = coalesce($10::text, ssl_mode),
             updated_at = now()
         where id = $1::uuid
           and owner_user_id = $2::uuid
-        returning id::text, name, engine, host, port, database_name, username, ssl_mode,
+        returning id::text, name, engine, host, port, database_name, username, tags, ssl_mode,
                   encrypted_password <> '' as has_password
         "#,
     )
@@ -189,6 +191,7 @@ pub(crate) async fn update_managed_database(
     .bind(update.database)
     .bind(update.username)
     .bind(update.encrypted_password)
+    .bind(update.tags)
     .bind(update.ssl_mode.map(|mode| mode.as_str().to_owned()))
     .fetch_optional(&storage.pool)
     .await
@@ -259,6 +262,7 @@ struct ManagedDatabaseRow {
     port: i32,
     database_name: String,
     username: String,
+    tags: Vec<String>,
     ssl_mode: String,
     has_password: bool,
 }
@@ -286,6 +290,7 @@ impl<'r> sqlx::FromRow<'r, sqlx::postgres::PgRow> for ManagedDatabaseRow {
             port: row.try_get("port")?,
             database_name: row.try_get("database_name")?,
             username: row.try_get("username")?,
+            tags: row.try_get("tags")?,
             ssl_mode: row.try_get("ssl_mode")?,
             has_password: row.try_get("has_password")?,
         })
@@ -304,6 +309,7 @@ impl TryFrom<ManagedDatabaseRow> for ManagedDatabase {
             port: row.port,
             database: row.database_name,
             username: row.username,
+            tags: row.tags,
             ssl_mode: parse_ssl_mode(&row.ssl_mode)?,
             has_password: row.has_password,
         })
@@ -355,7 +361,7 @@ pub(crate) async fn load_managed_database_snapshot(
 ) -> Result<ManagedDatabaseSnapshot, StorageError> {
     let row = sqlx::query_as::<_, ManagedDatabaseRow>(
         r#"
-        select id::text, name, engine, host, port, database_name, username, ssl_mode,
+        select id::text, name, engine, host, port, database_name, username, tags, ssl_mode,
                encrypted_password <> '' as has_password
         from managed_databases
         where id = $1::uuid
@@ -393,6 +399,7 @@ struct ValidatedManagedDatabase {
     database: String,
     username: String,
     password: String,
+    tags: Vec<String>,
     ssl_mode: ManagedDatabaseSslMode,
 }
 
@@ -408,6 +415,7 @@ impl ValidatedManagedDatabase {
             database: required_string("database", &request.database)?,
             username: required_string("username", &request.username)?,
             password: required_string("password", &request.password)?,
+            tags: normalize_tags(request.tags.unwrap_or_default()),
             ssl_mode: request.ssl_mode,
         })
     }
@@ -421,6 +429,7 @@ struct ValidatedManagedDatabaseUpdate {
     database: Option<String>,
     username: Option<String>,
     encrypted_password: Option<String>,
+    tags: Option<Vec<String>>,
     ssl_mode: Option<ManagedDatabaseSslMode>,
 }
 
@@ -445,9 +454,31 @@ impl ValidatedManagedDatabaseUpdate {
             database: optional_string("database", request.database)?,
             username: optional_string("username", request.username)?,
             encrypted_password,
+            tags: request.tags.map(normalize_tags),
             ssl_mode: request.ssl_mode,
         })
     }
+}
+
+fn normalize_tags(tags: Vec<String>) -> Vec<String> {
+    let mut normalized = Vec::new();
+    let mut seen = std::collections::HashSet::new();
+
+    for tag in tags {
+        let tag = tag.trim();
+
+        if tag.is_empty() {
+            continue;
+        }
+
+        let key = tag.to_lowercase();
+
+        if seen.insert(key) {
+            normalized.push(tag.to_owned());
+        }
+    }
+
+    normalized
 }
 
 pub(crate) fn parse_engine(value: &str) -> Result<ManagedDatabaseEngine, StorageError> {
@@ -488,11 +519,50 @@ mod tests {
             database: "warehouse".to_owned(),
             username: "readonly".to_owned(),
             password: "secret".to_owned(),
+            tags: None,
             ssl_mode: ManagedDatabaseSslMode::Prefer,
         };
 
         let error = ValidatedManagedDatabase::from_create(request).unwrap_err();
 
         assert!(error.to_string().contains("port must be between"));
+    }
+
+    #[test]
+    fn create_managed_database_validation_normalizes_tags() {
+        let request = CreateManagedDatabaseRequest {
+            name: "Warehouse".to_owned(),
+            engine: ManagedDatabaseEngine::Postgres,
+            host: "localhost".to_owned(),
+            port: 5432,
+            database: "warehouse".to_owned(),
+            username: "readonly".to_owned(),
+            password: "secret".to_owned(),
+            tags: Some(vec![
+                " production ".to_owned(),
+                "".to_owned(),
+                "Production".to_owned(),
+                "finance".to_owned(),
+            ]),
+            ssl_mode: ManagedDatabaseSslMode::Prefer,
+        };
+
+        let record = ValidatedManagedDatabase::from_create(request).unwrap();
+
+        assert_eq!(record.tags, vec!["production", "finance"]);
+    }
+
+    #[test]
+    fn update_managed_database_validation_preserves_empty_tags() {
+        let request = UpdateManagedDatabaseRequest {
+            tags: Some(vec![]),
+            ..UpdateManagedDatabaseRequest::default()
+        };
+
+        let update =
+            ValidatedManagedDatabaseUpdate::from_update(request, &PasswordCipher::new("test-key"))
+                .unwrap();
+
+        assert_eq!(update.tags, Some(vec![]));
     }
 }

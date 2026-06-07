@@ -140,6 +140,7 @@ async fn datapanel_store_persists_cards_layouts_and_export() {
                 database: "app".to_owned(),
                 username: "postgres".to_owned(),
                 password: "password123".to_owned(),
+                tags: None,
                 ssl_mode: ManagedDatabaseSslMode::Disable,
             },
         )

@@ -8,5 +8,6 @@ export type UpdateManagedDatabaseRequest = {
   database?: string;
   username?: string;
   password?: string;
+  tags?: Array<string>;
   ssl_mode?: ManagedDatabaseSslMode;
 };

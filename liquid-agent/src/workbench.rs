@@ -1393,6 +1393,7 @@ mod tests {
                 port: 5432,
                 database: "app".to_owned(),
                 username: "postgres".to_owned(),
+                tags: vec![],
                 ssl_mode: ManagedDatabaseSslMode::Disable,
                 has_password: true,
             }),

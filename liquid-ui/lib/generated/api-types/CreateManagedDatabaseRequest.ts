@@ -10,5 +10,6 @@ export type CreateManagedDatabaseRequest = {
   database: string;
   username: string;
   password: string;
+  tags?: Array<string>;
   ssl_mode: ManagedDatabaseSslMode;
 };

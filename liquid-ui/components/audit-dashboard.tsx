@@ -12,7 +12,8 @@ import {
   useRef,
   useState,
 } from "react";
-import { ArrowLeft, Bot, Loader2, Plus, Sparkles } from "lucide-react";
+import Image from "next/image";
+import { ArrowLeft, Bot, Loader2, Plus } from "lucide-react";
 import { toast } from "sonner";
 
 import { DatapanelWorkspacePanel } from "@/components/datapanel";
@@ -405,11 +406,19 @@ function IconSidebar({
     <aside className="flex w-14 shrink-0 flex-col items-center border-r bg-sidebar text-sidebar-foreground">
       <div className="flex h-16 w-full items-center justify-center border-b border-sidebar-border">
         <div
-          className="flex size-9 items-center justify-center rounded-md bg-sidebar-primary text-sidebar-primary-foreground shadow-sm"
-          aria-label="Liquid"
+          className="flex size-10 items-center justify-center"
           title="Liquid"
         >
-          <Sparkles className="size-5" aria-hidden />
+          <Image
+            src="/logo.png"
+            alt="Liquid"
+            width={36}
+            height={36}
+            priority
+            unoptimized
+            draggable={false}
+            className="size-9 select-none object-contain"
+          />
         </div>
       </div>
       <nav className="flex flex-1 flex-col items-center gap-2 overflow-y-auto py-4">

@@ -2,6 +2,8 @@
 
 import {
   type FormEvent,
+  type ReactNode,
+  type KeyboardEvent as ReactKeyboardEvent,
   useCallback,
   useEffect,
   useMemo,
@@ -13,6 +15,7 @@ import {
   CircleAlert,
   CircleCheck,
   Database,
+  KeyRound,
   Loader2,
   LogIn,
   LogOut,
@@ -21,8 +24,10 @@ import {
   Plus,
   Save,
   Search,
+  Server,
   Settings,
   ShieldCheck,
+  Tags,
   Trash2,
   X,
 } from "lucide-react";
@@ -65,6 +70,7 @@ type ManagedDatabaseForm = {
   database: string;
   username: string;
   password: string;
+  tags: string[];
   ssl_mode: ManagedDatabase["ssl_mode"];
 };
 
@@ -80,6 +86,7 @@ const emptyManagedDatabaseForm: ManagedDatabaseForm = {
   database: "",
   username: "",
   password: "",
+  tags: [],
   ssl_mode: "prefer",
 };
 
@@ -173,6 +180,7 @@ export function ManagedDatabasePicker({
         database.database,
         database.username,
         database.ssl_mode,
+        ...(database.tags ?? []),
       ]
         .join(" ")
         .toLowerCase()
@@ -237,6 +245,7 @@ export function ManagedDatabasePicker({
           port,
           database: form.database,
           username: form.username,
+          tags: form.tags,
           ssl_mode: form.ssl_mode,
         };
 
@@ -268,6 +277,7 @@ export function ManagedDatabasePicker({
           database: form.database,
           username: form.username,
           password: form.password,
+          tags: form.tags,
           ssl_mode: form.ssl_mode,
         };
         const created = await apiRequest<ManagedDatabase>(
@@ -302,6 +312,7 @@ export function ManagedDatabasePicker({
       database: database.database,
       username: database.username,
       password: "",
+      tags: database.tags ?? [],
       ssl_mode: database.ssl_mode,
     });
     setFormError(null);
@@ -621,11 +632,21 @@ function DatabaseListItem({
             <div className="truncate text-sm font-medium">{database.name}</div>
           </div>
           <div className="mt-1 truncate text-xs text-muted-foreground">
-            {database.host}:{database.port} / {database.database}
+            {database.username}@{database.host}:{database.port} /{" "}
+            {database.database}
           </div>
           <div className="mt-2 flex flex-wrap gap-1.5">
+            {(database.tags ?? []).map((tag) => (
+              <Badge
+                key={tag}
+                variant="secondary"
+                className="rounded-md bg-primary/10 text-foreground"
+              >
+                {tag}
+              </Badge>
+            ))}
             <Badge variant="outline" className="rounded-md">
-              {database.username}
+              {database.engine}
             </Badge>
             <Badge variant="outline" className="rounded-md">
               SSL {database.ssl_mode}
@@ -765,24 +786,29 @@ function ManagedDatabaseFormDialog({
         onClick={onClose}
       />
       <Card
-        className="relative w-full max-w-2xl rounded-lg py-4 shadow-lg"
+        className="relative w-full max-w-3xl overflow-hidden rounded-xl py-0 shadow-xl"
         role="dialog"
         aria-modal="true"
         aria-labelledby="managed-database-dialog-title"
       >
-        <CardHeader className="flex flex-row items-center justify-between gap-3 px-4">
-          <div>
-            <CardTitle
-              id="managed-database-dialog-title"
-              className="text-sm"
-            >
-              {editingId
-                ? t.databasePicker.editDialogTitle
-                : t.databasePicker.createDialogTitle}
-            </CardTitle>
-            <p className="mt-1 text-xs text-muted-foreground">
-              {t.databasePicker.encryptedDescription}
-            </p>
+        <CardHeader className="flex flex-row items-start justify-between gap-4 border-b bg-muted/30 px-5 py-4">
+          <div className="flex min-w-0 items-start gap-3">
+            <span className="mt-0.5 flex size-10 shrink-0 items-center justify-center rounded-lg bg-primary text-primary-foreground shadow-sm">
+              <Database className="size-5" aria-hidden />
+            </span>
+            <div className="min-w-0">
+              <CardTitle
+                id="managed-database-dialog-title"
+                className="text-base"
+              >
+                {editingId
+                  ? t.databasePicker.editDialogTitle
+                  : t.databasePicker.createDialogTitle}
+              </CardTitle>
+              <p className="mt-1 text-xs text-muted-foreground">
+                {t.databasePicker.encryptedDescription}
+              </p>
+            </div>
           </div>
           <Button
             type="button"
@@ -796,101 +822,143 @@ function ManagedDatabaseFormDialog({
             <X className="size-4" aria-hidden />
           </Button>
         </CardHeader>
-        <CardContent className="px-4">
-          <form className="grid gap-3 sm:grid-cols-12" onSubmit={onSubmit}>
-            <DatabaseField
-              className="sm:col-span-4"
-              id="managed-name"
-              label={t.databasePicker.fields.name}
-              value={form.name}
-              onChange={(name) =>
-                onFormChange((current) => ({ ...current, name }))
-              }
-              required
-            />
-            <DatabaseField
-              className="sm:col-span-5"
-              id="managed-host"
-              label={t.databasePicker.fields.host}
-              value={form.host}
-              onChange={(host) =>
-                onFormChange((current) => ({ ...current, host }))
-              }
-              required
-            />
-            <DatabaseField
-              className="sm:col-span-3"
-              id="managed-port"
-              label={t.databasePicker.fields.port}
-              value={form.port}
-              onChange={(port) =>
-                onFormChange((current) => ({ ...current, port }))
-              }
-              inputMode="numeric"
-              required
-            />
-            <DatabaseField
-              className="sm:col-span-5"
-              id="managed-database"
-              label={t.databasePicker.fields.database}
-              value={form.database}
-              onChange={(database) =>
-                onFormChange((current) => ({ ...current, database }))
-              }
-              required
-            />
-            <DatabaseField
-              className="sm:col-span-4"
-              id="managed-username"
-              label={t.databasePicker.fields.username}
-              value={form.username}
-              onChange={(username) =>
-                onFormChange((current) => ({ ...current, username }))
-              }
-              required
-            />
-            <div className="space-y-1.5 sm:col-span-3">
-              <label
-                className="text-xs font-medium text-muted-foreground"
-                htmlFor="managed-ssl"
-              >
-                SSL
-              </label>
-              <select
-                id="managed-ssl"
-                value={form.ssl_mode}
-                onChange={(event) =>
-                  onFormChange((current) => ({
-                    ...current,
-                    ssl_mode: event.target.value as ManagedDatabase["ssl_mode"],
-                  }))
+        <CardContent className="px-5 py-4">
+          <form className="space-y-4" onSubmit={onSubmit}>
+            <FormSection
+              icon={<Server className="size-4" aria-hidden />}
+              title={t.databasePicker.sections.connection}
+            >
+              <div className="grid gap-3 sm:grid-cols-12">
+                <DatabaseField
+                  className="sm:col-span-4"
+                  id="managed-name"
+                  label={t.databasePicker.fields.name}
+                  value={form.name}
+                  onChange={(name) =>
+                    onFormChange((current) => ({ ...current, name }))
+                  }
+                  required
+                />
+                <DatabaseField
+                  className="sm:col-span-6"
+                  id="managed-host"
+                  label={t.databasePicker.fields.host}
+                  value={form.host}
+                  onChange={(host) =>
+                    onFormChange((current) => ({ ...current, host }))
+                  }
+                  required
+                />
+                <DatabaseField
+                  className="sm:col-span-2"
+                  id="managed-port"
+                  label={t.databasePicker.fields.port}
+                  value={form.port}
+                  onChange={(port) =>
+                    onFormChange((current) => ({ ...current, port }))
+                  }
+                  inputMode="numeric"
+                  required
+                />
+                <DatabaseField
+                  className="sm:col-span-7"
+                  id="managed-database"
+                  label={t.databasePicker.fields.database}
+                  value={form.database}
+                  onChange={(database) =>
+                    onFormChange((current) => ({ ...current, database }))
+                  }
+                  required
+                />
+                <div className="space-y-1.5 sm:col-span-5">
+                  <label
+                    className="text-xs font-medium text-muted-foreground"
+                    htmlFor="managed-ssl"
+                  >
+                    SSL
+                  </label>
+                  <select
+                    id="managed-ssl"
+                    value={form.ssl_mode}
+                    onChange={(event) =>
+                      onFormChange((current) => ({
+                        ...current,
+                        ssl_mode: event.target
+                          .value as ManagedDatabase["ssl_mode"],
+                      }))
+                    }
+                    className="h-10 w-full rounded-md border bg-background px-3 text-sm outline-none transition-shadow focus-visible:ring-[3px] focus-visible:ring-ring/50"
+                  >
+                    <option value="disable">disable</option>
+                    <option value="prefer">prefer</option>
+                    <option value="require">require</option>
+                  </select>
+                </div>
+              </div>
+            </FormSection>
+
+            <FormSection
+              icon={<KeyRound className="size-4" aria-hidden />}
+              title={t.databasePicker.sections.auth}
+            >
+              <div className="grid gap-3 sm:grid-cols-12">
+                <DatabaseField
+                  className="sm:col-span-5"
+                  id="managed-username"
+                  label={t.databasePicker.fields.username}
+                  value={form.username}
+                  onChange={(username) =>
+                    onFormChange((current) => ({ ...current, username }))
+                  }
+                  required
+                />
+                <DatabaseField
+                  className="sm:col-span-7"
+                  id="managed-password"
+                  label={
+                    editingId
+                      ? t.databasePicker.fields.newPassword
+                      : t.databasePicker.fields.password
+                  }
+                  type="password"
+                  value={form.password}
+                  onChange={(password) =>
+                    onFormChange((current) => ({ ...current, password }))
+                  }
+                  placeholder={
+                    editingId
+                      ? t.databasePicker.fields.keepPasswordPlaceholder
+                      : ""
+                  }
+                  required={!editingId}
+                />
+              </div>
+            </FormSection>
+
+            <FormSection
+              icon={<Tags className="size-4" aria-hidden />}
+              title={t.databasePicker.sections.tags}
+            >
+              <TagInput
+                id="managed-tags"
+                label={t.databasePicker.fields.tags}
+                tags={form.tags}
+                onChange={(tags) =>
+                  onFormChange((current) => ({ ...current, tags }))
                 }
-                className="h-9 w-full rounded-md border bg-background px-3 text-sm outline-none transition-shadow focus-visible:ring-[3px] focus-visible:ring-ring/50"
-              >
-                <option value="disable">disable</option>
-                <option value="prefer">prefer</option>
-                <option value="require">require</option>
-              </select>
+                placeholder={t.databasePicker.fields.tagsPlaceholder}
+                duplicateMessage={t.databasePicker.tagDuplicate}
+                emptyMessage={t.databasePicker.tagEmpty}
+                removeLabel={t.databasePicker.removeTagLabel}
+              />
+            </FormSection>
+
+          {error ? (
+            <div className="mt-3 rounded-md border border-destructive/30 bg-destructive/10 px-3 py-2 text-sm text-destructive">
+              {error}
             </div>
-            <DatabaseField
-              className="sm:col-span-7"
-              id="managed-password"
-              label={
-                editingId
-                  ? t.databasePicker.fields.newPassword
-                  : t.databasePicker.fields.password
-              }
-              type="password"
-              value={form.password}
-              onChange={(password) =>
-                onFormChange((current) => ({ ...current, password }))
-              }
-              placeholder={
-                editingId ? t.databasePicker.fields.keepPasswordPlaceholder : ""
-              }
-              required={!editingId}
-            />
-            <div className="flex items-end justify-end gap-2 sm:col-span-5">
+          ) : null}
+            <div className="-mx-5 -mb-4 mt-4 flex flex-col-reverse gap-2 border-t bg-muted/20 px-5 py-4 sm:flex-row sm:justify-end">
               <Button
                 type="button"
                 variant="outline"
@@ -913,13 +981,164 @@ function ManagedDatabaseFormDialog({
               </Button>
             </div>
           </form>
-          {error ? (
-            <div className="mt-3 rounded-md border border-destructive/30 bg-destructive/10 px-3 py-2 text-sm text-destructive">
-              {error}
-            </div>
-          ) : null}
         </CardContent>
       </Card>
+    </div>
+  );
+}
+
+function FormSection({
+  icon,
+  title,
+  children,
+}: {
+  icon: ReactNode;
+  title: string;
+  children: ReactNode;
+}) {
+  return (
+    <section className="space-y-3 rounded-lg bg-muted/40 p-3">
+      <div className="flex items-center gap-2 text-sm font-medium">
+        <span className="flex size-7 items-center justify-center rounded-md bg-background text-muted-foreground shadow-xs">
+          {icon}
+        </span>
+        {title}
+      </div>
+      {children}
+    </section>
+  );
+}
+
+function TagInput({
+  id,
+  label,
+  tags,
+  onChange,
+  placeholder,
+  duplicateMessage,
+  emptyMessage,
+  removeLabel,
+}: {
+  id: string;
+  label: string;
+  tags: string[];
+  onChange: (tags: string[]) => void;
+  placeholder: string;
+  duplicateMessage: string;
+  emptyMessage: string;
+  removeLabel: (tag: string) => string;
+}) {
+  const [draft, setDraft] = useState("");
+  const [feedback, setFeedback] = useState<string | null>(null);
+
+  const addTags = (value: string) => {
+    const candidates = value
+      .split(",")
+      .map((tag) => tag.trim())
+      .filter(Boolean);
+
+    if (candidates.length === 0) {
+      setFeedback(emptyMessage);
+      setDraft("");
+      return;
+    }
+
+    const seen = new Set(tags.map((tag) => tag.toLowerCase()));
+    const next = [...tags];
+
+    for (const tag of candidates) {
+      const key = tag.toLowerCase();
+
+      if (seen.has(key)) {
+        continue;
+      }
+
+      seen.add(key);
+      next.push(tag);
+    }
+
+    if (next.length === tags.length) {
+      setFeedback(duplicateMessage);
+      setDraft("");
+      return;
+    }
+
+    onChange(next);
+    setDraft("");
+    setFeedback(null);
+  };
+
+  const handleKeyDown = (event: ReactKeyboardEvent<HTMLInputElement>) => {
+    if (event.nativeEvent.isComposing) {
+      return;
+    }
+
+    if (event.key === "Enter" || event.key === ",") {
+      event.preventDefault();
+      addTags(draft);
+      return;
+    }
+
+    if (event.key === "Backspace" && !draft && tags.length > 0) {
+      event.preventDefault();
+      onChange(tags.slice(0, -1));
+      setFeedback(null);
+    }
+  };
+
+  const removeTag = (tag: string) => {
+    onChange(tags.filter((current) => current !== tag));
+    setFeedback(null);
+  };
+
+  return (
+    <div className="space-y-1.5">
+      <label className="text-xs font-medium text-muted-foreground" htmlFor={id}>
+        {label}
+      </label>
+      <div
+        className={cn(
+          "flex min-h-10 w-full flex-wrap items-center gap-1.5 rounded-md border bg-background px-2 py-1.5 text-sm transition-shadow focus-within:ring-[3px] focus-within:ring-ring/50",
+          feedback && "border-destructive/50 focus-within:ring-destructive/20",
+        )}
+      >
+        {tags.map((tag) => (
+          <span
+            key={tag}
+            className="inline-flex h-7 max-w-full items-center gap-1 rounded-md bg-primary/10 px-2 text-xs font-medium text-foreground"
+          >
+            <span className="truncate">{tag}</span>
+            <button
+              type="button"
+              className="rounded-sm text-muted-foreground outline-none transition-colors hover:text-foreground focus-visible:ring-[2px] focus-visible:ring-ring/50"
+              aria-label={removeLabel(tag)}
+              title={removeLabel(tag)}
+              onClick={() => removeTag(tag)}
+            >
+              <X className="size-3" aria-hidden />
+            </button>
+          </span>
+        ))}
+        <input
+          id={id}
+          value={draft}
+          onChange={(event) => {
+            setDraft(event.target.value);
+            setFeedback(null);
+          }}
+          onBlur={() => {
+            if (draft.trim()) {
+              addTags(draft);
+            }
+          }}
+          onKeyDown={handleKeyDown}
+          placeholder={tags.length === 0 ? placeholder : ""}
+          className="h-7 min-w-28 flex-1 bg-transparent px-1 text-sm outline-none placeholder:text-muted-foreground"
+        />
+      </div>
+      {feedback ? (
+        <p className="text-xs text-destructive">{feedback}</p>
+      ) : null}
     </div>
   );
 }
@@ -974,7 +1193,7 @@ function DatabaseField({
         placeholder={placeholder}
         inputMode={inputMode}
         required={required}
-        className="h-9 w-full rounded-md border bg-background px-3 text-sm outline-none transition-shadow placeholder:text-muted-foreground focus-visible:ring-[3px] focus-visible:ring-ring/50"
+        className="h-10 w-full rounded-md border bg-background px-3 text-sm outline-none transition-shadow placeholder:text-muted-foreground focus-visible:ring-[3px] focus-visible:ring-ring/50"
       />
     </div>
   );
