@@ -687,13 +687,14 @@ export function ChatPanel({
         setActiveTurn(response.turn);
         setActivityItems([]);
         setMessages((current) => {
+          const userMessage = sqlUserMessage(response.user_message, sql);
           const withUser = current.some((message) => message.id === localUserId)
             ? current.map((message) =>
                 message.id === localUserId
-                  ? { ...response.user_message, local: false }
+                  ? { ...userMessage, local: false }
                   : message,
               )
-            : upsertMessage(current, response.user_message);
+            : upsertMessage(current, userMessage);
 
           return upsertMessage(withUser, response.assistant_message);
         });
@@ -1821,7 +1822,7 @@ function CodeBlock({
 
 function UserSqlCodeBubble({ code }: { code: string }) {
   return (
-    <div className="overflow-hidden rounded-lg bg-primary text-left text-primary-foreground shadow-xs">
+    <div className="overflow-hidden rounded-lg border border-white/10 bg-neutral-950 text-left text-neutral-50 shadow-sm ring-1 ring-black/20">
       <SyntaxHighlighter
         language="sql"
         useInlineStyles={false}
@@ -1855,6 +1856,13 @@ function messageHasSqlCodePart(message: DisplayMessage) {
   return message.parts.some(
     (part) => part.kind === "code" && normalizeCodeLanguage(part.language) === "sql",
   );
+}
+
+function sqlUserMessage(message: ChatMessage, sql: string): DisplayMessage {
+  return {
+    ...message,
+    parts: [{ kind: "code", language: "sql", code: sql }],
+  };
 }
 
 function ActionCard({
