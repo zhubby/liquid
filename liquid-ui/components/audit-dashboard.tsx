@@ -342,6 +342,7 @@ export function AuditDashboard({
               <ChatPanel
                 key={`ai-${selectedDatabase.id}-${activeConversation.id}`}
                 token={token}
+                user={user}
                 selectedDatabase={selectedDatabase}
                 conversation={activeConversation}
                 isDeletingWorkspace={isDeletingWorkspace}

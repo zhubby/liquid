@@ -68,6 +68,7 @@ import {
   type ChatTurn,
   type LlmProviderSettingsResponse,
   type ManagedDatabase,
+  type PublicUser,
   type SaveDatapanelTableCardRequest,
   apiRequest,
   apiStream,
@@ -113,6 +114,7 @@ type ToolFinishedPayload = Extract<
 
 type ChatPanelProps = {
   token: string;
+  user: PublicUser;
   selectedDatabase: ManagedDatabase;
   conversation: ChatConversation;
   isDeletingWorkspace: boolean;
@@ -128,6 +130,7 @@ type CodeElementProps = {
 
 export function ChatPanel({
   token,
+  user,
   selectedDatabase,
   conversation,
   isDeletingWorkspace,
@@ -868,6 +871,7 @@ export function ChatPanel({
       <div className="flex min-h-0 flex-1 flex-col">
         <MessageList
           token={token}
+          user={user}
           conversationId={conversation.id}
           listRef={listRef}
           messages={messages}
@@ -1012,6 +1016,7 @@ function ProviderBadge({ providerReady }: { providerReady: boolean | null }) {
 
 const MessageList = ({
   token,
+  user,
   conversationId,
   listRef,
   messages,
@@ -1030,6 +1035,7 @@ const MessageList = ({
   onDatapanelChanged,
 }: {
   token: string;
+  user: PublicUser;
   conversationId: string;
   listRef: Ref<HTMLDivElement>;
   messages: DisplayMessage[];
@@ -1100,6 +1106,7 @@ const MessageList = ({
             <MessageStack
               key={message.id}
               token={token}
+              user={user}
               conversationId={conversationId}
               message={message}
               actions={
@@ -1193,6 +1200,7 @@ function ChatEmptyState({
 
 function MessageStack({
   token,
+  user,
   conversationId,
   message,
   actions,
@@ -1203,6 +1211,7 @@ function MessageStack({
   onDatapanelChanged,
 }: {
   token: string;
+  user: PublicUser;
   conversationId: string;
   message: DisplayMessage;
   actions: ChatAction[];
@@ -1216,6 +1225,7 @@ function MessageStack({
     <div className="space-y-2">
       <MessageBubble
         token={token}
+        user={user}
         conversationId={conversationId}
         message={message}
         onDatapanelChanged={onDatapanelChanged}
@@ -1240,11 +1250,13 @@ function MessageStack({
 
 function MessageBubble({
   token,
+  user,
   conversationId,
   message,
   onDatapanelChanged,
 }: {
   token: string;
+  user: PublicUser;
   conversationId: string;
   message: DisplayMessage;
   onDatapanelChanged: () => void;
@@ -1253,6 +1265,7 @@ function MessageBubble({
   const isUser = message.role === "user";
   const isFailed = message.status === "failed";
   const copyText = message.content.trim();
+  const senderLabel = isUser ? user.display_name : roleLabel(message.role, t);
 
   return (
     <article
@@ -1307,7 +1320,7 @@ function MessageBubble({
             isUser && "justify-end",
           )}
         >
-          <span>{roleLabel(message.role, t)}</span>
+          <span>{senderLabel}</span>
           <span>{timeLabel(message.created_at, locale)}</span>
           {message.status === "streaming" ? (
             <span>{t.workspace.pending}</span>
@@ -1315,6 +1328,15 @@ function MessageBubble({
           {message.local ? <span>{t.workspace.localPending}</span> : null}
         </div>
       </div>
+      {isUser ? (
+        <div
+          className="mt-1 flex size-8 shrink-0 items-center justify-center rounded-md border bg-primary text-xs font-semibold text-primary-foreground shadow-xs"
+          title={user.email}
+          aria-label={user.display_name}
+        >
+          {userInitials(user)}
+        </div>
+      ) : null}
     </article>
   );
 }
@@ -2533,6 +2555,18 @@ function roleLabel(
   }
 
   return role;
+}
+
+function userInitials(user: PublicUser) {
+  return (
+    user.display_name
+      .split(/\s+/)
+      .filter(Boolean)
+      .slice(0, 2)
+      .map((part) => part[0])
+      .join("")
+      .toUpperCase() || user.email.slice(0, 1).toUpperCase()
+  );
 }
 
 function lastUserPrompt(messages: DisplayMessage[]) {
