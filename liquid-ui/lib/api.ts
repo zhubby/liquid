@@ -23,6 +23,9 @@ export type { DatapanelChartType } from "./generated/api-types/DatapanelChartTyp
 export type { Datapanel } from "./generated/api-types/Datapanel";
 export type { DatapanelCard } from "./generated/api-types/DatapanelCard";
 export type { DatapanelExport } from "./generated/api-types/DatapanelExport";
+export type { DatapanelPreview } from "./generated/api-types/DatapanelPreview";
+export type { DatapanelPreviewCard } from "./generated/api-types/DatapanelPreviewCard";
+export type { DatapanelPreviewLink } from "./generated/api-types/DatapanelPreviewLink";
 export type { DatapanelQueryResult } from "./generated/api-types/DatapanelQueryResult";
 export type { ChatAction } from "./generated/api-types/ChatAction";
 export type { ChatActionDecisionRequest } from "./generated/api-types/ChatActionDecisionRequest";

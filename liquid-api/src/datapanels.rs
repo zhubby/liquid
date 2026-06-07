@@ -8,8 +8,9 @@ use axum::{
 };
 use liquid_core::{
     CreateDatapanelCardRequest, Datapanel, DatapanelCard, DatapanelCardKind, DatapanelCardLayout,
-    DatapanelExport, DatapanelQueryResult, ManagedDatabasePoolKey, SaveDatapanelTableCardRequest,
-    UpdateDatapanelCardRequest, UpdateDatapanelLayoutRequest, UpdateDatapanelRequest,
+    DatapanelExport, DatapanelPreview, DatapanelPreviewLink, DatapanelQueryResult,
+    ManagedDatabasePoolKey, SaveDatapanelTableCardRequest, UpdateDatapanelCardRequest,
+    UpdateDatapanelLayoutRequest, UpdateDatapanelRequest,
 };
 use liquid_sql::{PgSqlAnalysisRequest, PgSqlStatementKind, analyze_postgres_sql};
 use serde_json::Value;
@@ -41,6 +42,11 @@ pub(crate) fn routes() -> Router<ApiState> {
             post(refresh_card),
         )
         .route("/api/v1/datapanels/{panel_id}/export", get(export_panel))
+        .route(
+            "/api/v1/datapanels/{panel_id}/preview",
+            post(create_preview),
+        )
+        .route("/api/v1/datapanel-previews/{slug}", get(get_preview))
 }
 
 async fn get_conversation_datapanel(
@@ -189,6 +195,29 @@ async fn export_panel(
     let export = state.store.export_datapanel(&user.id, &panel_id).await?;
 
     Ok(Json(export))
+}
+
+async fn create_preview(
+    State(state): State<ApiState>,
+    headers: HeaderMap,
+    Path(panel_id): Path<String>,
+) -> Result<Json<DatapanelPreviewLink>, ApiError> {
+    let user = authenticated_user(&state, &headers).await?;
+    let preview = state
+        .store
+        .create_datapanel_preview(&user.id, &panel_id)
+        .await?;
+
+    Ok(Json(preview))
+}
+
+async fn get_preview(
+    State(state): State<ApiState>,
+    Path(slug): Path<String>,
+) -> Result<Json<DatapanelPreview>, ApiError> {
+    let preview = state.store.get_datapanel_preview(&slug).await?;
+
+    Ok(Json(preview))
 }
 
 pub(crate) async fn materialize_datapanel_query(

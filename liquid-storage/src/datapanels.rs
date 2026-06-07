@@ -1,8 +1,11 @@
+use base64::{Engine as _, engine::general_purpose::URL_SAFE_NO_PAD};
 use liquid_core::{
     CreateDatapanelCardRequest, Datapanel, DatapanelCard, DatapanelCardKind, DatapanelCardLayout,
     DatapanelCardLayoutUpdate, DatapanelChartConfig, DatapanelChartType, DatapanelExport,
-    DatapanelQueryResult, UpdateDatapanelCardRequest, UpdateDatapanelRequest,
+    DatapanelPreview, DatapanelPreviewLink, DatapanelQueryResult, UpdateDatapanelCardRequest,
+    UpdateDatapanelRequest,
 };
+use rand_core::{OsRng, RngCore};
 use serde_json::Value;
 use time::OffsetDateTime;
 
@@ -36,6 +39,8 @@ result,
 created_at,
 updated_at
 "#;
+
+const PREVIEW_SLUG_BYTES: usize = 32;
 
 pub(crate) async fn get_or_create_datapanel(
     storage: &Storage,
@@ -334,6 +339,67 @@ pub(crate) async fn export_datapanel(
     })
 }
 
+pub(crate) async fn create_datapanel_preview(
+    storage: &Storage,
+    owner_user_id: &str,
+    panel_id: &str,
+) -> Result<DatapanelPreviewLink, StorageError> {
+    let slug = generate_preview_slug();
+    let row = sqlx::query_as::<_, (String,)>(
+        r#"
+        insert into datapanel_previews (panel_id, owner_user_id, slug)
+        select id, owner_user_id, $3
+        from datapanels
+        where id = $2::uuid
+          and owner_user_id = $1::uuid
+        on conflict (panel_id) do update
+        set updated_at = datapanel_previews.updated_at
+        returning slug
+        "#,
+    )
+    .bind(owner_user_id)
+    .bind(panel_id)
+    .bind(slug)
+    .fetch_optional(&storage.pool)
+    .await
+    .map_err(map_database_error)?;
+
+    let (slug,) = row.ok_or(StorageError::NotFound)?;
+
+    Ok(DatapanelPreviewLink { slug })
+}
+
+pub(crate) async fn get_datapanel_preview(
+    storage: &Storage,
+    slug: &str,
+) -> Result<DatapanelPreview, StorageError> {
+    let row = sqlx::query_as::<_, DatapanelPreviewPanelRow>(
+        r#"
+        select
+            p.id::text,
+            p.conversation_id::text,
+            p.owner_user_id::text,
+            p.title,
+            p.description,
+            p.created_at,
+            p.updated_at
+        from datapanel_previews preview
+        join datapanels p on p.id = preview.panel_id
+        where preview.slug = $1
+        "#,
+    )
+    .bind(slug)
+    .fetch_optional(&storage.pool)
+    .await
+    .map_err(map_database_error)?;
+
+    let row = row.ok_or(StorageError::NotFound)?;
+    let owner_user_id = row.owner_user_id.clone();
+    let panel = panel_with_cards(storage, &owner_user_id, row.into()).await?;
+
+    Ok(panel.into())
+}
+
 async fn fetch_panel(
     storage: &Storage,
     owner_user_id: &str,
@@ -613,10 +679,27 @@ fn blank_to_none(value: Option<String>) -> Option<String> {
         .filter(|value| !value.is_empty())
 }
 
+fn generate_preview_slug() -> String {
+    let mut bytes = [0u8; PREVIEW_SLUG_BYTES];
+    OsRng.fill_bytes(&mut bytes);
+    URL_SAFE_NO_PAD.encode(bytes)
+}
+
 #[derive(sqlx::FromRow)]
 struct DatapanelRow {
     id: String,
     conversation_id: String,
+    title: String,
+    description: Option<String>,
+    created_at: OffsetDateTime,
+    updated_at: OffsetDateTime,
+}
+
+#[derive(sqlx::FromRow)]
+struct DatapanelPreviewPanelRow {
+    id: String,
+    conversation_id: String,
+    owner_user_id: String,
     title: String,
     description: Option<String>,
     created_at: OffsetDateTime,
@@ -653,6 +736,20 @@ impl TryFrom<DatapanelRow> for Datapanel {
             created_at: row.created_at,
             updated_at: row.updated_at,
         })
+    }
+}
+
+impl From<DatapanelPreviewPanelRow> for Datapanel {
+    fn from(row: DatapanelPreviewPanelRow) -> Self {
+        Self {
+            id: row.id,
+            conversation_id: row.conversation_id,
+            title: row.title,
+            description: row.description,
+            cards: Vec::new(),
+            created_at: row.created_at,
+            updated_at: row.updated_at,
+        }
     }
 }
 

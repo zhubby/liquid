@@ -10,8 +10,6 @@ import {
   useRef,
   useState,
 } from "react";
-import Image from "next/image";
-import { useTheme } from "next-themes";
 import {
   Archive,
   ChevronDown,
@@ -20,12 +18,9 @@ import {
   ClipboardCheck,
   Database,
   KeyRound,
-  Languages,
   Loader2,
   LogIn,
   LogOut,
-  Monitor,
-  Moon,
   PencilLine,
   Plug,
   Plus,
@@ -33,7 +28,6 @@ import {
   Search,
   Server,
   Settings,
-  Sun,
   Tags,
   Trash2,
   X,
@@ -41,6 +35,7 @@ import {
 import { toast } from "sonner";
 
 import { AccountSettingsDialog } from "@/components/account-settings-dialog";
+import { AppTopNav } from "@/components/app-top-nav";
 import { SqlAuditHistory } from "@/components/sql-audit-history";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
@@ -100,10 +95,6 @@ const emptyManagedDatabaseForm: ManagedDatabaseForm = {
   ssl_mode: "prefer",
 };
 
-type ThemeShortcut = "system" | "light" | "dark";
-
-const themeShortcutOrder: ThemeShortcut[] = ["system", "light", "dark"];
-
 export function ManagedDatabasePicker({
   token,
   user,
@@ -111,8 +102,7 @@ export function ManagedDatabasePicker({
   onLogout,
   onUserUpdated,
 }: ManagedDatabasePickerProps) {
-  const { locale, setLocale, t } = useI18n();
-  const { theme, setTheme } = useTheme();
+  const { t } = useI18n();
   const [databases, setDatabases] = useState<ManagedDatabase[]>([]);
   const [query, setQuery] = useState("");
   const [form, setForm] = useState<ManagedDatabaseForm>(
@@ -133,20 +123,6 @@ export function ManagedDatabasePicker({
   const [testResults, setTestResults] = useState<
     Record<string, ConnectionTestState>
   >({});
-
-  const selectedTheme: ThemeShortcut =
-    theme === "light" || theme === "dark" || theme === "system"
-      ? theme
-      : "system";
-  const ThemeShortcutIcon =
-    selectedTheme === "dark" ? Moon : selectedTheme === "light" ? Sun : Monitor;
-  const nextLocale = locale === "zh-CN" ? "en-US" : "zh-CN";
-  const nextLanguageLabel = nextLocale === "zh-CN" ? "中文" : "English";
-  const themeShortcutLabel = t.databasePicker.themeShortcutLabel(
-    t.settings.preferences.themeBadges[selectedTheme],
-  );
-  const languageShortcutLabel =
-    t.databasePicker.languageShortcutLabel(nextLanguageLabel);
 
   const loadDatabases = useCallback(async () => {
     setIsLoading(true);
@@ -270,18 +246,6 @@ export function ManagedDatabasePicker({
   const openSettings = () => {
     setIsAccountMenuOpen(false);
     setIsSettingsOpen(true);
-  };
-
-  const handleThemeShortcut = () => {
-    const currentIndex = themeShortcutOrder.indexOf(selectedTheme);
-    const nextTheme =
-      themeShortcutOrder[(currentIndex + 1) % themeShortcutOrder.length];
-
-    setTheme(nextTheme);
-  };
-
-  const handleLanguageShortcut = () => {
-    setLocale(nextLocale);
   };
 
   const handleLogout = () => {
@@ -484,115 +448,74 @@ export function ManagedDatabasePicker({
   return (
     <main className="min-h-screen bg-background text-foreground">
       <div className="flex min-h-screen flex-col">
-        <header className="sticky top-0 z-30 border-b bg-background">
-          <nav className="flex h-16 items-center justify-between gap-3 px-3 sm:px-4 lg:px-5">
-            <div className="flex min-w-0 items-center">
-              <Image
-                src="/banner.png"
-                alt="Liquid"
-                width={217}
-                height={72}
-                priority
-                unoptimized
-                draggable={false}
-                className="h-10 w-auto max-w-[150px] select-none object-contain sm:h-11 sm:max-w-[210px]"
+        <AppTopNav title={t.databasePicker.title}>
+          <div className="relative flex justify-end" ref={accountMenuRef}>
+            <button
+              type="button"
+              className={cn(
+                "group flex h-9 min-w-0 items-center gap-2 rounded-lg border bg-background px-2 text-left shadow-xs outline-none transition-all hover:border-foreground/20 hover:bg-accent/70 focus-visible:border-ring focus-visible:ring-[3px] focus-visible:ring-ring/50 sm:gap-3 sm:px-2.5",
+                isAccountMenuOpen && "border-foreground/20 bg-accent/70",
+              )}
+              aria-haspopup="menu"
+              aria-expanded={isAccountMenuOpen}
+              aria-label={t.databasePicker.accountMenuLabel(user.display_name)}
+              onClick={() => setIsAccountMenuOpen((isOpen) => !isOpen)}
+            >
+              <span className="flex size-7 shrink-0 items-center justify-center rounded-full bg-primary text-xs font-semibold text-primary-foreground shadow-sm sm:size-8">
+                {userInitials}
+              </span>
+              <span className="hidden max-w-32 truncate text-sm font-medium text-foreground sm:inline">
+                {user.display_name}
+              </span>
+              <ChevronDown
+                className={cn(
+                  "size-4 text-muted-foreground transition-transform group-hover:text-foreground",
+                  isAccountMenuOpen && "rotate-180",
+                )}
+                aria-hidden
               />
-              <h1 className="sr-only">{t.databasePicker.title}</h1>
-            </div>
-
-            <div className="flex min-w-0 items-center justify-end gap-2">
-              <Button
-                type="button"
-                variant="outline"
-                size="icon"
-                className="size-9 rounded-lg"
-                title={themeShortcutLabel}
-                aria-label={themeShortcutLabel}
-                onClick={handleThemeShortcut}
+            </button>
+            {isAccountMenuOpen ? (
+              <div
+                className="absolute right-0 top-[calc(100%+0.5rem)] z-20 w-64 overflow-hidden rounded-xl border bg-popover p-2 text-popover-foreground shadow-lg"
+                role="menu"
               >
-                <ThemeShortcutIcon className="size-4" aria-hidden />
-              </Button>
-              <Button
-                type="button"
-                variant="outline"
-                size="icon"
-                className="size-9 rounded-lg"
-                title={languageShortcutLabel}
-                aria-label={languageShortcutLabel}
-                onClick={handleLanguageShortcut}
-              >
-                <Languages className="size-4" aria-hidden />
-              </Button>
-
-              <div className="relative flex justify-end" ref={accountMenuRef}>
-                <button
-                  type="button"
-                  className={cn(
-                    "group flex h-9 min-w-0 items-center gap-2 rounded-lg border bg-background px-2 text-left shadow-xs outline-none transition-all hover:border-foreground/20 hover:bg-accent/70 focus-visible:border-ring focus-visible:ring-[3px] focus-visible:ring-ring/50 sm:gap-3 sm:px-2.5",
-                    isAccountMenuOpen && "border-foreground/20 bg-accent/70",
-                  )}
-                  aria-haspopup="menu"
-                  aria-expanded={isAccountMenuOpen}
-                  aria-label={t.databasePicker.accountMenuLabel(user.display_name)}
-                  onClick={() => setIsAccountMenuOpen((isOpen) => !isOpen)}
-                >
-                  <span className="flex size-7 shrink-0 items-center justify-center rounded-full bg-primary text-xs font-semibold text-primary-foreground shadow-sm sm:size-8">
+                <div className="flex items-center gap-3 rounded-lg bg-muted/60 p-2.5">
+                  <span className="flex size-9 shrink-0 items-center justify-center rounded-full bg-primary text-xs font-semibold text-primary-foreground">
                     {userInitials}
                   </span>
-                  <span className="hidden max-w-32 truncate text-sm font-medium text-foreground sm:inline">
-                    {user.display_name}
-                  </span>
-                  <ChevronDown
-                    className={cn(
-                      "size-4 text-muted-foreground transition-transform group-hover:text-foreground",
-                      isAccountMenuOpen && "rotate-180",
-                    )}
-                    aria-hidden
-                  />
-                </button>
-                {isAccountMenuOpen ? (
-                  <div
-                    className="absolute right-0 top-[calc(100%+0.5rem)] z-20 w-64 overflow-hidden rounded-xl border bg-popover p-2 text-popover-foreground shadow-lg"
-                    role="menu"
-                  >
-                    <div className="flex items-center gap-3 rounded-lg bg-muted/60 p-2.5">
-                      <span className="flex size-9 shrink-0 items-center justify-center rounded-full bg-primary text-xs font-semibold text-primary-foreground">
-                        {userInitials}
-                      </span>
-                      <div className="min-w-0">
-                        <div className="truncate text-sm font-semibold">
-                          {user.display_name}
-                        </div>
-                        <div className="truncate text-xs text-muted-foreground">
-                          {user.email}
-                        </div>
-                      </div>
+                  <div className="min-w-0">
+                    <div className="truncate text-sm font-semibold">
+                      {user.display_name}
                     </div>
-                    <div className="my-1.5 h-px bg-border" />
-                    <button
-                      type="button"
-                      className="flex w-full items-center gap-2.5 rounded-lg px-2.5 py-2 text-left text-sm outline-none transition-colors hover:bg-accent hover:text-accent-foreground focus-visible:bg-accent focus-visible:text-accent-foreground"
-                      role="menuitem"
-                      onClick={openSettings}
-                    >
-                      <Settings className="size-4" aria-hidden />
-                      {t.databasePicker.settings}
-                    </button>
-                    <button
-                      type="button"
-                      className="flex w-full items-center gap-2.5 rounded-lg px-2.5 py-2 text-left text-sm text-destructive outline-none transition-colors hover:bg-destructive/10 focus-visible:bg-destructive/10"
-                      role="menuitem"
-                      onClick={handleLogout}
-                    >
-                      <LogOut className="size-4" aria-hidden />
-                      {t.databasePicker.logout}
-                    </button>
+                    <div className="truncate text-xs text-muted-foreground">
+                      {user.email}
+                    </div>
                   </div>
-                ) : null}
+                </div>
+                <div className="my-1.5 h-px bg-border" />
+                <button
+                  type="button"
+                  className="flex w-full items-center gap-2.5 rounded-lg px-2.5 py-2 text-left text-sm outline-none transition-colors hover:bg-accent hover:text-accent-foreground focus-visible:bg-accent focus-visible:text-accent-foreground"
+                  role="menuitem"
+                  onClick={openSettings}
+                >
+                  <Settings className="size-4" aria-hidden />
+                  {t.databasePicker.settings}
+                </button>
+                <button
+                  type="button"
+                  className="flex w-full items-center gap-2.5 rounded-lg px-2.5 py-2 text-left text-sm text-destructive outline-none transition-colors hover:bg-destructive/10 focus-visible:bg-destructive/10"
+                  role="menuitem"
+                  onClick={handleLogout}
+                >
+                  <LogOut className="size-4" aria-hidden />
+                  {t.databasePicker.logout}
+                </button>
               </div>
-            </div>
-          </nav>
-        </header>
+            ) : null}
+          </div>
+        </AppTopNav>
 
         <div className="flex min-h-0 flex-1 flex-col lg:flex-row">
           <aside className="border-b bg-muted/20 px-3 py-3 lg:w-64 lg:shrink-0 lg:border-b-0 lg:border-r lg:px-4 lg:py-5">

@@ -6,13 +6,14 @@ use liquid_core::{
     CreateAgentConversationRequest, CreateAgentTurnRequest, CreateDatapanelCardRequest,
     CreateManagedDatabaseRequest, DatabaseBackupMetadataStore, DatabaseBackupMetadataStoreError,
     DatabaseBackupRecord, DatabaseBackupStatus, DatabaseRestoreRecord, Datapanel, DatapanelCard,
-    DatapanelCardLayoutUpdate, DatapanelExport, DatapanelQueryResult, LlmProviderSettings,
-    LoginRequest, ManagedDatabase, ManagedDatabaseConnectionLoader,
-    ManagedDatabaseConnectionLoaderError, ManagedDatabaseConnectionSpec, ManagedDatabasePoolKey,
-    PublicUser, RegisterRequest, RejectSqlAuditRequest, ResolvedLlmProviderSettings,
-    SqlAuditExecutionResult, SqlAuditRecord, UpdateAgentConversationRequest,
-    UpdateCurrentUserRequest, UpdateDatapanelCardRequest, UpdateDatapanelRequest,
-    UpdateLlmProviderSettingsRequest, UpdateManagedDatabaseRequest, UpdatePasswordRequest,
+    DatapanelCardLayoutUpdate, DatapanelExport, DatapanelPreview, DatapanelPreviewLink,
+    DatapanelQueryResult, LlmProviderSettings, LoginRequest, ManagedDatabase,
+    ManagedDatabaseConnectionLoader, ManagedDatabaseConnectionLoaderError,
+    ManagedDatabaseConnectionSpec, ManagedDatabasePoolKey, PublicUser, RegisterRequest,
+    RejectSqlAuditRequest, ResolvedLlmProviderSettings, SqlAuditExecutionResult, SqlAuditRecord,
+    UpdateAgentConversationRequest, UpdateCurrentUserRequest, UpdateDatapanelCardRequest,
+    UpdateDatapanelRequest, UpdateLlmProviderSettingsRequest, UpdateManagedDatabaseRequest,
+    UpdatePasswordRequest,
 };
 use serde_json::Value;
 use sqlx::{PgPool, postgres::PgPoolOptions};
@@ -722,6 +723,18 @@ impl LiquidStore for Storage {
         panel_id: &str,
     ) -> Result<DatapanelExport, StorageError> {
         datapanels::export_datapanel(self, owner_user_id, panel_id).await
+    }
+
+    async fn create_datapanel_preview(
+        &self,
+        owner_user_id: &str,
+        panel_id: &str,
+    ) -> Result<DatapanelPreviewLink, StorageError> {
+        datapanels::create_datapanel_preview(self, owner_user_id, panel_id).await
+    }
+
+    async fn get_datapanel_preview(&self, slug: &str) -> Result<DatapanelPreview, StorageError> {
+        datapanels::get_datapanel_preview(self, slug).await
     }
 
     async fn fail_stale_agent_turns(&self, stale_after_seconds: i64) -> Result<u64, StorageError> {

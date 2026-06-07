@@ -7,8 +7,9 @@ use axum::{
 use liquid_agent::{PostgresToolConfig, SqlAuditAgent, ToolCallingSqlAuditAgent};
 use liquid_core::{
     ApproveSqlAuditRequest, CreateSqlAuditRequest, DatapanelQueryResult, ManagedDatabase,
-    ManagedDatabasePoolKey, RejectSqlAuditRequest, SqlAuditExecutionResult, SqlAuditRecord,
-    SqlAuditExecutionStatus, SqlAuditLifecycleStatus, SqlAuditStatus, SqlStatementKind,
+    ManagedDatabasePoolKey, RejectSqlAuditRequest, SqlAuditExecutionResult,
+    SqlAuditExecutionStatus, SqlAuditLifecycleStatus, SqlAuditRecord, SqlAuditStatus,
+    SqlStatementKind,
 };
 use liquid_sql::{
     PgSqlAnalysis, PgSqlAnalysisRequest, PgSqlRiskSeverity, PgSqlStatementKind,
@@ -154,7 +155,9 @@ async fn list_sql_audits(
     let user = authenticated_user(&state, &headers).await?;
     let page = query.page.unwrap_or(1);
     if page < 1 {
-        return Err(ApiError::bad_request("page must be greater than or equal to 1"));
+        return Err(ApiError::bad_request(
+            "page must be greater than or equal to 1",
+        ));
     }
     let page_size = list_page_size(query.page_size, query.limit)?;
     let created_from = parse_query_datetime("created_from", query.created_from.as_deref())?;
@@ -163,7 +166,9 @@ async fn list_sql_audits(
     if let (Some(created_from), Some(created_to)) = (created_from, created_to)
         && created_to <= created_from
     {
-        return Err(ApiError::bad_request("created_to must be after created_from"));
+        return Err(ApiError::bad_request(
+            "created_to must be after created_from",
+        ));
     }
 
     let result = state

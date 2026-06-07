@@ -16,6 +16,7 @@ import ReactGridLayout, {
 } from "react-grid-layout";
 import {
   Download,
+  Eye,
   GripVertical,
   Loader2,
   Pencil,
@@ -34,6 +35,9 @@ import {
   type Datapanel,
   type DatapanelCard,
   type DatapanelExport,
+  type DatapanelPreview,
+  type DatapanelPreviewCard,
+  type DatapanelPreviewLink,
   type ManagedDatabase,
   apiRequest,
 } from "@/lib/api";
@@ -48,6 +52,16 @@ type DatapanelWorkspacePanelProps = {
   refreshKey: number;
 };
 
+type DatapanelDisplayCard = {
+  renderId: string;
+  title: string;
+  description?: string;
+  kind: DatapanelCard["kind"];
+  chart?: DatapanelCard["chart"];
+  layout: DatapanelCard["layout"];
+  result: DatapanelCard["result"];
+};
+
 const GRID_COLUMNS = 12;
 const GRID_ROW_HEIGHT = 44;
 const LAYOUT_SAVE_DELAY_MS = 600;
@@ -59,13 +73,13 @@ export function DatapanelWorkspacePanel({
   refreshKey,
 }: DatapanelWorkspacePanelProps) {
   const { t } = useI18n();
-  const { width, containerRef, mounted } = useContainerWidth();
   const [panel, setPanel] = useState<Datapanel | null>(null);
   const [titleInput, setTitleInput] = useState("");
   const [descriptionInput, setDescriptionInput] = useState("");
   const [isLoading, setIsLoading] = useState(true);
   const [isSavingPanel, setIsSavingPanel] = useState(false);
   const [isSavingLayout, setIsSavingLayout] = useState(false);
+  const [isOpeningPreview, setIsOpeningPreview] = useState(false);
   const [refreshingCardId, setRefreshingCardId] = useState<string | null>(null);
   const [deletingCardId, setDeletingCardId] = useState<string | null>(null);
   const layoutSaveRef = useRef<ReturnType<typeof setTimeout> | null>(null);
@@ -113,21 +127,6 @@ export function DatapanelWorkspacePanel({
     lastRefreshKeyRef.current = refreshKey;
     void loadPanel({ silent: true });
   }, [loadPanel, refreshKey]);
-
-  const layout = useMemo<Layout>(
-    () =>
-      panel?.cards.map((card) => ({
-        i: card.id,
-        x: card.layout.x,
-        y: card.layout.y,
-        w: card.layout.w,
-        h: card.layout.h,
-        minW: card.kind === "table" ? 4 : 3,
-        minH: 3,
-      })) ?? [],
-    [panel?.cards],
-  );
-  const useStackedCards = mounted && width < 640;
 
   const savePanelMetadata = useCallback(async () => {
     if (!panel || isSavingPanel) {
@@ -362,6 +361,43 @@ export function DatapanelWorkspacePanel({
     }
   }, [panel, t.dashboard.exportFailed, t.dashboard.exported, token]);
 
+  const openPreview = useCallback(async () => {
+    if (!panel || isOpeningPreview) {
+      return;
+    }
+
+    const previewWindow = window.open("about:blank", "_blank");
+    if (previewWindow) {
+      previewWindow.opener = null;
+    }
+
+    setIsOpeningPreview(true);
+
+    try {
+      const preview = await apiRequest<DatapanelPreviewLink>(
+        `/api/v1/datapanels/${panel.id}/preview`,
+        {
+          method: "POST",
+          token,
+        },
+      );
+      const previewPath = `/preview/datapanels/${encodeURIComponent(preview.slug)}`;
+
+      if (previewWindow) {
+        previewWindow.location.href = previewPath;
+      } else {
+        window.open(previewPath, "_blank", "noopener,noreferrer");
+      }
+    } catch (error) {
+      if (previewWindow && !previewWindow.closed) {
+        previewWindow.close();
+      }
+      toast.error(error instanceof Error ? error.message : t.dashboard.previewFailed);
+    } finally {
+      setIsOpeningPreview(false);
+    }
+  }, [isOpeningPreview, panel, t.dashboard.previewFailed, token]);
+
   return (
     <section className="mt-3 flex min-h-[calc(100vh-1.5rem)] min-w-0 flex-col overflow-hidden rounded-lg border bg-card text-card-foreground shadow-sm lg:mt-0 lg:h-[calc(100vh-1.5rem)]">
       <header className="flex shrink-0 flex-col gap-3 border-b px-4 py-3 xl:flex-row xl:items-center xl:justify-between">
@@ -395,6 +431,20 @@ export function DatapanelWorkspacePanel({
             type="button"
             variant="outline"
             size="sm"
+            disabled={!panel || isOpeningPreview}
+            onClick={() => void openPreview()}
+          >
+            {isOpeningPreview ? (
+              <Loader2 className="size-4 animate-spin" aria-hidden />
+            ) : (
+              <Eye className="size-4" aria-hidden />
+            )}
+            {t.dashboard.preview}
+          </Button>
+          <Button
+            type="button"
+            variant="outline"
+            size="sm"
             disabled={!panel}
             onClick={() => void exportPanel()}
           >
@@ -404,84 +454,197 @@ export function DatapanelWorkspacePanel({
         </div>
       </header>
 
-      <div
-        ref={containerRef}
-        className="min-h-0 flex-1 overflow-y-auto px-3 py-3"
-      >
-        {isLoading ? (
-          <div className="flex min-h-full items-center justify-center text-sm text-muted-foreground">
-            <Loader2 className="mr-2 size-4 animate-spin" aria-hidden />
-            {t.dashboard.loading}
-          </div>
-        ) : null}
-
-        {!isLoading && panel && panel.cards.length === 0 ? (
-          <BiEmptyState />
-        ) : null}
-
-        {!isLoading && panel && panel.cards.length > 0 && mounted && useStackedCards ? (
-          <div className="space-y-3">
-            {panel.cards.map((card) => (
-              <div key={card.id} className="h-[360px] min-h-0 min-w-0">
-                <DatapanelCard
-                  card={card}
-                  isRefreshing={refreshingCardId === card.id}
-                  isDeleting={deletingCardId === card.id}
-                  isStacked
-                  onUpdate={updateCard}
-                  onRefresh={() => void refreshCard(card.id)}
-                  onDelete={() => void deleteCard(card.id)}
-                />
-              </div>
-            ))}
-          </div>
-        ) : null}
-
-        {!isLoading && panel && panel.cards.length > 0 && mounted && !useStackedCards ? (
-          <ReactGridLayout
-            width={width}
-            layout={layout}
-            autoSize
-            gridConfig={{
-              cols: GRID_COLUMNS,
-              rowHeight: GRID_ROW_HEIGHT,
-              margin: [12, 12],
-              containerPadding: [0, 0],
-            }}
-            dragConfig={{
-              enabled: true,
-              handle: ".datapanel-card-drag-handle",
-              cancel: ".datapanel-card-no-drag",
-              bounded: true,
-            }}
-            resizeConfig={{
-              enabled: true,
-              handles: ["se"],
-            }}
-            compactor={verticalCompactor}
-            onLayoutChange={handleLayoutChange}
-          >
-            {panel.cards.map((card) => (
-              <div key={card.id} className="min-w-0">
-                <DatapanelCard
-                  card={card}
-                  isRefreshing={refreshingCardId === card.id}
-                  isDeleting={deletingCardId === card.id}
-                  isStacked={false}
-                  onUpdate={updateCard}
-                  onRefresh={() => void refreshCard(card.id)}
-                  onDelete={() => void deleteCard(card.id)}
-                />
-              </div>
-            ))}
-          </ReactGridLayout>
-        ) : null}
-      </div>
+      <DatapanelGrid
+        cards={panel?.cards.map(datapanelCardToDisplayCard) ?? []}
+        isLoading={isLoading}
+        showEmpty={Boolean(panel && panel.cards.length === 0)}
+        refreshingCardId={refreshingCardId}
+        deletingCardId={deletingCardId}
+        onLayoutChange={handleLayoutChange}
+        onUpdate={updateCard}
+        onRefresh={refreshCard}
+        onDelete={deleteCard}
+      />
     </section>
   );
 }
 
-function BiEmptyState() {
+export function DatapanelReadonlyPanel({
+  preview,
+  className,
+}: {
+  preview: DatapanelPreview;
+  className?: string;
+}) {
+  const { t } = useI18n();
+
+  return (
+    <section
+      className={cn(
+        "flex min-h-[calc(100vh-6.5rem)] min-w-0 flex-col overflow-hidden rounded-lg border bg-card text-card-foreground shadow-sm",
+        className,
+      )}
+    >
+      <header className="flex shrink-0 flex-col gap-2 border-b px-4 py-3">
+        <div className="flex min-w-0 items-center justify-between gap-3">
+          <div className="min-w-0">
+            <h2 className="truncate text-base font-semibold">{preview.title}</h2>
+            {preview.description ? (
+              <p className="mt-1 truncate text-xs text-muted-foreground">
+                {preview.description}
+              </p>
+            ) : null}
+          </div>
+          <Badge variant="secondary" className="shrink-0 rounded-md">
+            {t.dashboard.readOnlyPreview}
+          </Badge>
+        </div>
+      </header>
+      <DatapanelGrid
+        cards={preview.cards.map(datapanelPreviewCardToDisplayCard)}
+        isLoading={false}
+        showEmpty={preview.cards.length === 0}
+        readOnly
+        emptyTitle={t.dashboard.previewEmptyTitle}
+        emptyDescription={t.dashboard.previewEmptyDescription}
+      />
+    </section>
+  );
+}
+
+function DatapanelGrid({
+  cards,
+  isLoading,
+  showEmpty,
+  readOnly = false,
+  emptyTitle,
+  emptyDescription,
+  refreshingCardId = null,
+  deletingCardId = null,
+  onLayoutChange,
+  onUpdate,
+  onRefresh,
+  onDelete,
+}: {
+  cards: DatapanelDisplayCard[];
+  isLoading: boolean;
+  showEmpty: boolean;
+  readOnly?: boolean;
+  emptyTitle?: string;
+  emptyDescription?: string;
+  refreshingCardId?: string | null;
+  deletingCardId?: string | null;
+  onLayoutChange?: (layout: Layout) => void;
+  onUpdate?: (
+    cardId: string,
+    request: { title?: string; description?: string },
+  ) => void | Promise<void>;
+  onRefresh?: (cardId: string) => void;
+  onDelete?: (cardId: string) => void;
+}) {
+  const { t } = useI18n();
+  const { width, containerRef, mounted } = useContainerWidth();
+  const layout = useMemo<Layout>(
+    () =>
+      cards.map((card) => ({
+        i: card.renderId,
+        x: card.layout.x,
+        y: card.layout.y,
+        w: card.layout.w,
+        h: card.layout.h,
+        minW: card.kind === "table" ? 4 : 3,
+        minH: 3,
+      })),
+    [cards],
+  );
+  const useStackedCards = mounted && width < 640;
+
+  return (
+    <div
+      ref={containerRef}
+      className="min-h-0 flex-1 overflow-y-auto px-3 py-3"
+    >
+      {isLoading ? (
+        <div className="flex min-h-full items-center justify-center text-sm text-muted-foreground">
+          <Loader2 className="mr-2 size-4 animate-spin" aria-hidden />
+          {t.dashboard.loading}
+        </div>
+      ) : null}
+
+      {!isLoading && showEmpty ? (
+        <DatapanelEmptyState title={emptyTitle} description={emptyDescription} />
+      ) : null}
+
+      {!isLoading && cards.length > 0 && mounted && useStackedCards ? (
+        <div className="space-y-3">
+          {cards.map((card) => (
+            <div key={card.renderId} className="h-[360px] min-h-0 min-w-0">
+              <DatapanelCardView
+                card={card}
+                isRefreshing={refreshingCardId === card.renderId}
+                isDeleting={deletingCardId === card.renderId}
+                isStacked
+                readOnly={readOnly}
+                onUpdate={onUpdate}
+                onRefresh={onRefresh ? () => onRefresh(card.renderId) : undefined}
+                onDelete={onDelete ? () => onDelete(card.renderId) : undefined}
+              />
+            </div>
+          ))}
+        </div>
+      ) : null}
+
+      {!isLoading && cards.length > 0 && mounted && !useStackedCards ? (
+        <ReactGridLayout
+          width={width}
+          layout={layout}
+          autoSize
+          gridConfig={{
+            cols: GRID_COLUMNS,
+            rowHeight: GRID_ROW_HEIGHT,
+            margin: [12, 12],
+            containerPadding: [0, 0],
+          }}
+          dragConfig={{
+            enabled: !readOnly,
+            handle: ".datapanel-card-drag-handle",
+            cancel: ".datapanel-card-no-drag",
+            bounded: true,
+          }}
+          resizeConfig={{
+            enabled: !readOnly,
+            handles: ["se"],
+          }}
+          compactor={verticalCompactor}
+          onLayoutChange={readOnly ? undefined : onLayoutChange}
+        >
+          {cards.map((card) => (
+            <div key={card.renderId} className="min-w-0">
+              <DatapanelCardView
+                card={card}
+                isRefreshing={refreshingCardId === card.renderId}
+                isDeleting={deletingCardId === card.renderId}
+                isStacked={false}
+                readOnly={readOnly}
+                onUpdate={onUpdate}
+                onRefresh={onRefresh ? () => onRefresh(card.renderId) : undefined}
+                onDelete={onDelete ? () => onDelete(card.renderId) : undefined}
+              />
+            </div>
+          ))}
+        </ReactGridLayout>
+      ) : null}
+    </div>
+  );
+}
+
+function DatapanelEmptyState({
+  title,
+  description,
+}: {
+  title?: string;
+  description?: string;
+}) {
   const { t } = useI18n();
 
   return (
@@ -491,35 +654,37 @@ function BiEmptyState() {
           <Table2 className="size-5" aria-hidden />
         </div>
         <h2 className="mt-4 text-base font-semibold">
-          {t.dashboard.emptyTitle}
+          {title ?? t.dashboard.emptyTitle}
         </h2>
         <p className="mt-2 text-sm leading-6 text-muted-foreground">
-          {t.dashboard.emptyDescription}
+          {description ?? t.dashboard.emptyDescription}
         </p>
       </div>
     </div>
   );
 }
 
-function DatapanelCard({
+function DatapanelCardView({
   card,
   isRefreshing,
   isDeleting,
   isStacked,
+  readOnly,
   onUpdate,
   onRefresh,
   onDelete,
 }: {
-  card: DatapanelCard;
+  card: DatapanelDisplayCard;
   isRefreshing: boolean;
   isDeleting: boolean;
   isStacked: boolean;
-  onUpdate: (
+  readOnly: boolean;
+  onUpdate?: (
     cardId: string,
     request: { title?: string; description?: string },
   ) => void | Promise<void>;
-  onRefresh: () => void;
-  onDelete: () => void;
+  onRefresh?: () => void;
+  onDelete?: () => void;
 }) {
   const { t } = useI18n();
   const [isEditing, setIsEditing] = useState(false);
@@ -532,6 +697,10 @@ function DatapanelCard({
   }, [card.description, card.title]);
 
   const commit = useCallback(() => {
+    if (readOnly || !onUpdate) {
+      return;
+    }
+
     const title = titleInput.trim();
 
     if (!title) {
@@ -539,32 +708,39 @@ function DatapanelCard({
       return;
     }
 
-    void onUpdate(card.id, {
+    void onUpdate(card.renderId, {
       title,
       description: descriptionInput.trim(),
     });
     setIsEditing(false);
-  }, [card.id, card.title, descriptionInput, onUpdate, titleInput]);
+  }, [card.renderId, card.title, descriptionInput, onUpdate, readOnly, titleInput]);
 
   return (
     <article className="flex h-full min-h-0 min-w-0 flex-col overflow-hidden rounded-lg border bg-background shadow-xs">
       <header
         className={cn(
-          "datapanel-card-drag-handle flex shrink-0 items-start gap-2 border-b bg-muted/40 px-3 py-2",
-          isStacked ? "cursor-default" : "cursor-move",
+          "flex shrink-0 items-start gap-2 border-b bg-muted/40 px-3 py-2",
+          !readOnly && "datapanel-card-drag-handle",
+          readOnly || isStacked ? "cursor-default" : "cursor-move",
         )}
       >
-        <GripVertical className="mt-1 size-4 shrink-0 text-muted-foreground" aria-hidden />
+        {!readOnly ? (
+          <GripVertical className="mt-1 size-4 shrink-0 text-muted-foreground" aria-hidden />
+        ) : null}
         <div className="min-w-0 flex-1">
-          <input
-            className="datapanel-card-no-drag w-full truncate rounded-sm bg-transparent text-sm font-medium outline-none hover:bg-background/70 focus-visible:bg-background focus-visible:ring-[3px] focus-visible:ring-ring/50"
-            value={titleInput}
-            aria-label={t.dashboard.cardTitleLabel}
-            onChange={(event) => setTitleInput(event.target.value)}
-            onBlur={commit}
-            onKeyDown={(event) => handleCommitKey(event, commit)}
-          />
-          {isEditing ? (
+          {readOnly ? (
+            <h3 className="truncate text-sm font-medium">{card.title}</h3>
+          ) : (
+            <input
+              className="datapanel-card-no-drag w-full truncate rounded-sm bg-transparent text-sm font-medium outline-none hover:bg-background/70 focus-visible:bg-background focus-visible:ring-[3px] focus-visible:ring-ring/50"
+              value={titleInput}
+              aria-label={t.dashboard.cardTitleLabel}
+              onChange={(event) => setTitleInput(event.target.value)}
+              onBlur={commit}
+              onKeyDown={(event) => handleCommitKey(event, commit)}
+            />
+          )}
+          {!readOnly && isEditing ? (
             <textarea
               className="datapanel-card-no-drag mt-1 max-h-16 min-h-8 w-full resize-none rounded-sm bg-background px-2 py-1 text-xs leading-5 text-muted-foreground outline-none focus-visible:ring-[3px] focus-visible:ring-ring/50"
               value={descriptionInput}
@@ -582,39 +758,45 @@ function DatapanelCard({
           <Badge variant="outline" className="h-6 rounded-md">
             {t.dashboard.cardKinds[card.kind]}
           </Badge>
-          <IconButton
-            label={t.dashboard.refresh}
-            onClick={onRefresh}
-            disabled={isRefreshing}
-          >
-            {isRefreshing ? (
-              <Loader2 className="size-4 animate-spin" aria-hidden />
-            ) : (
-              <RefreshCw className="size-4" aria-hidden />
-            )}
-          </IconButton>
-          <IconButton
-            label={isEditing ? t.common.close : t.dashboard.editCard}
-            onClick={() => setIsEditing((current) => !current)}
-          >
-            {isEditing ? (
-              <X className="size-4" aria-hidden />
-            ) : (
-              <Pencil className="size-4" aria-hidden />
-            )}
-          </IconButton>
-          <IconButton
-            label={t.dashboard.deleteCard}
-            onClick={onDelete}
-            disabled={isDeleting}
-            destructive
-          >
-            {isDeleting ? (
-              <Loader2 className="size-4 animate-spin" aria-hidden />
-            ) : (
-              <Trash2 className="size-4" aria-hidden />
-            )}
-          </IconButton>
+          {!readOnly && onRefresh ? (
+            <IconButton
+              label={t.dashboard.refresh}
+              onClick={onRefresh}
+              disabled={isRefreshing}
+            >
+              {isRefreshing ? (
+                <Loader2 className="size-4 animate-spin" aria-hidden />
+              ) : (
+                <RefreshCw className="size-4" aria-hidden />
+              )}
+            </IconButton>
+          ) : null}
+          {!readOnly ? (
+            <IconButton
+              label={isEditing ? t.common.close : t.dashboard.editCard}
+              onClick={() => setIsEditing((current) => !current)}
+            >
+              {isEditing ? (
+                <X className="size-4" aria-hidden />
+              ) : (
+                <Pencil className="size-4" aria-hidden />
+              )}
+            </IconButton>
+          ) : null}
+          {!readOnly && onDelete ? (
+            <IconButton
+              label={t.dashboard.deleteCard}
+              onClick={onDelete}
+              disabled={isDeleting}
+              destructive
+            >
+              {isDeleting ? (
+                <Loader2 className="size-4 animate-spin" aria-hidden />
+              ) : (
+                <Trash2 className="size-4" aria-hidden />
+              )}
+            </IconButton>
+          ) : null}
         </div>
       </header>
       <div className="min-h-0 flex-1 overflow-hidden px-3 py-3">
@@ -660,7 +842,7 @@ function IconButton({
   );
 }
 
-function DatapanelTable({ card }: { card: DatapanelCard }) {
+function DatapanelTable({ card }: { card: DatapanelDisplayCard }) {
   const { t } = useI18n();
 
   return (
@@ -671,7 +853,7 @@ function DatapanelTable({ card }: { card: DatapanelCard }) {
   );
 }
 
-function DatapanelChart({ card }: { card: DatapanelCard }) {
+function DatapanelChart({ card }: { card: DatapanelDisplayCard }) {
   const { t } = useI18n();
   const chart = card.chart;
 
@@ -686,6 +868,33 @@ function DatapanelChart({ card }: { card: DatapanelCard }) {
       emptyLabel={t.dashboard.noRows}
     />
   );
+}
+
+function datapanelCardToDisplayCard(card: DatapanelCard): DatapanelDisplayCard {
+  return {
+    renderId: card.id,
+    title: card.title,
+    description: card.description,
+    kind: card.kind,
+    chart: card.chart,
+    layout: card.layout,
+    result: card.result,
+  };
+}
+
+function datapanelPreviewCardToDisplayCard(
+  card: DatapanelPreviewCard,
+  index: number,
+): DatapanelDisplayCard {
+  return {
+    renderId: `preview-card-${index}`,
+    title: card.title,
+    description: card.description,
+    kind: card.kind,
+    chart: card.chart,
+    layout: card.layout,
+    result: card.result,
+  };
 }
 
 function handleCommitKey(

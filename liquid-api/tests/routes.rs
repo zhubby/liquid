@@ -30,14 +30,15 @@ use liquid_core::{
     ApproveSqlAuditRequest, AuditSummary, AuthResponse, CreateAgentActionRequest,
     CreateAgentConversationRequest, CreateAgentTurnRequest, CreateDatapanelCardRequest,
     CreateManagedDatabaseRequest, Datapanel, DatapanelCard, DatapanelCardLayoutUpdate,
-    DatapanelExport, DatapanelQueryResult, LlmProviderSettings, LoginRequest, ManagedDatabase,
-    ManagedDatabaseConnectionLoader, ManagedDatabaseConnectionLoaderError,
-    ManagedDatabaseConnectionSpec, ManagedDatabaseEngine, ManagedDatabasePoolKey,
-    ManagedDatabasePoolPolicy, ManagedDatabaseSslMode, PublicUser, RegisterRequest,
-    RejectSqlAuditRequest, ResolvedLlmProviderSettings, SqlAuditExecutionResult, SqlAuditRecord,
-    SqlAuditReport, SqlAuditRequest, SqlAuditStatus, UpdateAgentConversationRequest,
-    UpdateCurrentUserRequest, UpdateDatapanelCardRequest, UpdateDatapanelRequest,
-    UpdateLlmProviderSettingsRequest, UpdateManagedDatabaseRequest, UpdatePasswordRequest,
+    DatapanelExport, DatapanelPreview, DatapanelPreviewLink, DatapanelQueryResult,
+    LlmProviderSettings, LoginRequest, ManagedDatabase, ManagedDatabaseConnectionLoader,
+    ManagedDatabaseConnectionLoaderError, ManagedDatabaseConnectionSpec, ManagedDatabaseEngine,
+    ManagedDatabasePoolKey, ManagedDatabasePoolPolicy, ManagedDatabaseSslMode, PublicUser,
+    RegisterRequest, RejectSqlAuditRequest, ResolvedLlmProviderSettings, SqlAuditExecutionResult,
+    SqlAuditRecord, SqlAuditReport, SqlAuditRequest, SqlAuditStatus,
+    UpdateAgentConversationRequest, UpdateCurrentUserRequest, UpdateDatapanelCardRequest,
+    UpdateDatapanelRequest, UpdateLlmProviderSettingsRequest, UpdateManagedDatabaseRequest,
+    UpdatePasswordRequest,
 };
 use liquid_sql::{PgSqlAnalysisRequest, PgSqlStatementKind, analyze_postgres_sql};
 use liquid_storage::{
@@ -69,8 +70,16 @@ struct TestStore {
     actions: Mutex<Vec<AgentAction>>,
     panels: Mutex<Vec<Datapanel>>,
     panel_cards: Mutex<Vec<DatapanelCard>>,
+    panel_previews: Mutex<Vec<TestDatapanelPreview>>,
     user: Mutex<PublicUser>,
     llm_settings: Mutex<Option<ResolvedLlmProviderSettings>>,
+}
+
+#[derive(Debug, Clone)]
+struct TestDatapanelPreview {
+    panel_id: String,
+    owner_user_id: String,
+    slug: String,
 }
 
 impl Default for TestStore {
@@ -87,6 +96,7 @@ impl Default for TestStore {
             actions: Mutex::new(Vec::new()),
             panels: Mutex::new(Vec::new()),
             panel_cards: Mutex::new(Vec::new()),
+            panel_previews: Mutex::new(Vec::new()),
             user: Mutex::new(test_user()),
             llm_settings: Mutex::new(None),
         }
@@ -1319,6 +1329,49 @@ impl LiquidStore for TestStore {
             exported_at: time::OffsetDateTime::UNIX_EPOCH,
             panel: attach_panel_cards(panel, &cards),
         })
+    }
+
+    async fn create_datapanel_preview(
+        &self,
+        owner_user_id: &str,
+        panel_id: &str,
+    ) -> Result<DatapanelPreviewLink, StorageError> {
+        self.get_panel_for_owner(owner_user_id, panel_id).await?;
+        let mut previews = self.panel_previews.lock().unwrap();
+
+        if let Some(preview) = previews
+            .iter()
+            .find(|preview| preview.panel_id == panel_id)
+            .cloned()
+        {
+            return Ok(DatapanelPreviewLink { slug: preview.slug });
+        }
+
+        let slug = format!("preview-{}", previews.len() + 1);
+        previews.push(TestDatapanelPreview {
+            panel_id: panel_id.to_owned(),
+            owner_user_id: owner_user_id.to_owned(),
+            slug: slug.clone(),
+        });
+
+        Ok(DatapanelPreviewLink { slug })
+    }
+
+    async fn get_datapanel_preview(&self, slug: &str) -> Result<DatapanelPreview, StorageError> {
+        let preview = self
+            .panel_previews
+            .lock()
+            .unwrap()
+            .iter()
+            .find(|preview| preview.slug == slug)
+            .cloned()
+            .ok_or(StorageError::NotFound)?;
+        let panel = self
+            .get_panel_for_owner(&preview.owner_user_id, &preview.panel_id)
+            .await?;
+        let cards = self.panel_cards.lock().unwrap();
+
+        Ok(attach_panel_cards(panel, &cards).into())
     }
 
     async fn fail_stale_agent_turns(&self, _stale_after_seconds: i64) -> Result<u64, StorageError> {
@@ -4083,6 +4136,158 @@ async fn saving_chat_query_result_rejects_non_select_sql() {
     assert_eq!(response.status(), StatusCode::BAD_REQUEST);
     let payload = response_json(response).await;
     assert!(payload["error"].as_str().unwrap().contains("SELECT"));
+}
+
+#[tokio::test]
+async fn creating_datapanel_preview_requires_bearer_token() {
+    let app = test_app();
+
+    let response = app
+        .oneshot(
+            Request::builder()
+                .method("POST")
+                .uri("/api/v1/datapanels/panel-1/preview")
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+
+    assert_eq!(response.status(), StatusCode::UNAUTHORIZED);
+}
+
+#[tokio::test]
+async fn datapanel_preview_reuses_slug_and_public_response_excludes_private_fields() {
+    let store = Arc::new(TestStore::default());
+    let app = test_app_with_agent_store_execution_and_executor(
+        Arc::new(MockSqlAuditAgent),
+        store.clone(),
+        PostgresToolExecutionMode::Readonly,
+        Arc::new(FakeApprovedSqlExecutor::default()),
+    );
+    let database = store
+        .create_managed_database(
+            "user-1",
+            CreateManagedDatabaseRequest {
+                name: "Warehouse".to_owned(),
+                engine: ManagedDatabaseEngine::Postgres,
+                host: "localhost".to_owned(),
+                port: 5432,
+                database: "warehouse".to_owned(),
+                username: "readonly".to_owned(),
+                password: "password123".to_owned(),
+                tags: None,
+                ssl_mode: ManagedDatabaseSslMode::Disable,
+            },
+        )
+        .await
+        .unwrap();
+    let conversation = store
+        .create_agent_conversation(
+            "user-1",
+            CreateAgentConversationRequest {
+                title: Some("datapanel workspace".to_owned()),
+                managed_database_id: Some(database.id.clone()),
+            },
+        )
+        .await
+        .unwrap();
+    let panel = store
+        .get_or_create_datapanel("user-1", &conversation.id)
+        .await
+        .unwrap();
+    store
+        .create_datapanel_card(
+            "user-1",
+            &panel.id,
+            CreateDatapanelCardRequest {
+                managed_database_id: database.id,
+                source_action_id: Some("action-1".to_owned()),
+                title: "Agent events".to_owned(),
+                description: Some("Recent agent events".to_owned()),
+                kind: liquid_core::DatapanelCardKind::Table,
+                sql: "select id, event_type from agent_events".to_owned(),
+                chart: None,
+                layout: liquid_core::DatapanelCardLayout {
+                    x: 0,
+                    y: 0,
+                    w: 12,
+                    h: 5,
+                },
+                result: DatapanelQueryResult {
+                    columns: vec!["id".to_owned(), "event_type".to_owned()],
+                    rows: vec![json!({ "id": 1, "event_type": "turn_started" })],
+                    row_count: 1,
+                    truncated: false,
+                    elapsed_ms: 3,
+                    refreshed_at: time::OffsetDateTime::UNIX_EPOCH,
+                },
+            },
+        )
+        .await
+        .unwrap();
+
+    let first_response = app
+        .clone()
+        .oneshot(auth_json_request(
+            "POST",
+            &format!("/api/v1/datapanels/{}/preview", panel.id),
+            json!({}),
+        ))
+        .await
+        .unwrap();
+    assert_eq!(first_response.status(), StatusCode::OK);
+    let first = response_json(first_response).await;
+
+    let second_response = app
+        .clone()
+        .oneshot(auth_json_request(
+            "POST",
+            &format!("/api/v1/datapanels/{}/preview", panel.id),
+            json!({}),
+        ))
+        .await
+        .unwrap();
+    assert_eq!(second_response.status(), StatusCode::OK);
+    let second = response_json(second_response).await;
+    assert_eq!(second["slug"], first["slug"]);
+
+    let slug = first["slug"].as_str().unwrap();
+    let public_response = app
+        .oneshot(
+            Request::builder()
+                .uri(format!("/api/v1/datapanel-previews/{slug}"))
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(public_response.status(), StatusCode::OK);
+    let preview = response_json(public_response).await;
+    assert_eq!(preview["title"], "datapanel workspace Datapanel");
+    assert_eq!(preview["cards"][0]["title"], "Agent events");
+    assert_eq!(preview["cards"][0]["result"]["row_count"], 1);
+    assert!(preview["cards"][0].get("sql").is_none());
+    assert!(preview["cards"][0].get("managed_database_id").is_none());
+    assert!(preview["cards"][0].get("source_action_id").is_none());
+    assert!(preview.get("owner_user_id").is_none());
+}
+
+#[tokio::test]
+async fn unknown_datapanel_preview_slug_returns_not_found() {
+    let app = test_app();
+
+    let response = app
+        .oneshot(
+            Request::builder()
+                .uri("/api/v1/datapanel-previews/missing")
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+
+    assert_eq!(response.status(), StatusCode::NOT_FOUND);
 }
 
 #[tokio::test]

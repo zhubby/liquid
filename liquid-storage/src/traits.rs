@@ -5,10 +5,10 @@ use liquid_core::{
     ApproveSqlAuditRequest, AuthResponse, CreateAgentActionRequest, CreateAgentConversationRequest,
     CreateAgentTurnRequest, CreateDatapanelCardRequest, CreateManagedDatabaseRequest,
     CreateSqlAuditRequest, Datapanel, DatapanelCard, DatapanelCardLayoutUpdate, DatapanelExport,
-    DatapanelQueryResult, LlmProviderSettings, LoginRequest, ManagedDatabase, PublicUser,
-    RegisterRequest, RejectSqlAuditRequest, ResolvedLlmProviderSettings, SqlAuditExecutionResult,
-    SqlAuditExecutionStatus, SqlAuditLifecycleStatus, SqlAuditRecord, SqlAuditReport,
-    SqlAuditStatus, SqlStatementKind,
+    DatapanelPreview, DatapanelPreviewLink, DatapanelQueryResult, LlmProviderSettings,
+    LoginRequest, ManagedDatabase, PublicUser, RegisterRequest, RejectSqlAuditRequest,
+    ResolvedLlmProviderSettings, SqlAuditExecutionResult, SqlAuditExecutionStatus,
+    SqlAuditLifecycleStatus, SqlAuditRecord, SqlAuditReport, SqlAuditStatus, SqlStatementKind,
     UpdateAgentConversationRequest, UpdateCurrentUserRequest, UpdateDatapanelCardRequest,
     UpdateDatapanelRequest, UpdateLlmProviderSettingsRequest, UpdateManagedDatabaseRequest,
     UpdatePasswordRequest,
@@ -311,5 +311,11 @@ pub trait LiquidStore: Send + Sync {
         owner_user_id: &str,
         panel_id: &str,
     ) -> Result<DatapanelExport, StorageError>;
+    async fn create_datapanel_preview(
+        &self,
+        owner_user_id: &str,
+        panel_id: &str,
+    ) -> Result<DatapanelPreviewLink, StorageError>;
+    async fn get_datapanel_preview(&self, slug: &str) -> Result<DatapanelPreview, StorageError>;
     async fn fail_stale_agent_turns(&self, stale_after_seconds: i64) -> Result<u64, StorageError>;
 }

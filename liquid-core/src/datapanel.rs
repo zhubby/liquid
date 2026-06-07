@@ -174,6 +174,43 @@ pub struct DatapanelQueryResult {
     pub refreshed_at: OffsetDateTime,
 }
 
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, TS)]
+#[ts(export)]
+pub struct DatapanelPreviewLink {
+    pub slug: String,
+}
+
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize, TS)]
+#[ts(export)]
+pub struct DatapanelPreview {
+    pub title: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[ts(optional)]
+    pub description: Option<String>,
+    pub cards: Vec<DatapanelPreviewCard>,
+    #[serde(with = "time::serde::rfc3339")]
+    #[ts(type = "string")]
+    pub updated_at: OffsetDateTime,
+}
+
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize, TS)]
+#[ts(export)]
+pub struct DatapanelPreviewCard {
+    pub title: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[ts(optional)]
+    pub description: Option<String>,
+    pub kind: DatapanelCardKind,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[ts(optional)]
+    pub chart: Option<DatapanelChartConfig>,
+    pub layout: DatapanelCardLayout,
+    pub result: DatapanelQueryResult,
+    #[serde(with = "time::serde::rfc3339")]
+    #[ts(type = "string")]
+    pub updated_at: OffsetDateTime,
+}
+
 #[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize, TS)]
 #[ts(export)]
 pub struct UpdateDatapanelRequest {
@@ -248,6 +285,35 @@ pub struct DatapanelExport {
     #[ts(type = "string")]
     pub exported_at: OffsetDateTime,
     pub panel: Datapanel,
+}
+
+impl From<Datapanel> for DatapanelPreview {
+    fn from(panel: Datapanel) -> Self {
+        Self {
+            title: panel.title,
+            description: panel.description,
+            cards: panel
+                .cards
+                .into_iter()
+                .map(DatapanelPreviewCard::from)
+                .collect(),
+            updated_at: panel.updated_at,
+        }
+    }
+}
+
+impl From<DatapanelCard> for DatapanelPreviewCard {
+    fn from(card: DatapanelCard) -> Self {
+        Self {
+            title: card.title,
+            description: card.description,
+            kind: card.kind,
+            chart: card.chart,
+            layout: card.layout,
+            result: card.result,
+            updated_at: card.updated_at,
+        }
+    }
 }
 
 #[cfg(test)]
