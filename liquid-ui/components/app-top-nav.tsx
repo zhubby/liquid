@@ -1,10 +1,10 @@
 "use client";
 
 import { type ReactNode } from "react";
-import Image from "next/image";
 import { useTheme } from "next-themes";
 import { Languages, Monitor, Moon, Sun } from "lucide-react";
 
+import { ThemedBrandImage } from "@/components/themed-brand-image";
 import { Button } from "@/components/ui/button";
 import { useI18n } from "@/lib/i18n";
 
@@ -50,8 +50,9 @@ export function AppTopNav({ title, children }: AppTopNavProps) {
     <header className="sticky top-0 z-30 border-b bg-background">
       <nav className="flex h-16 items-center justify-between gap-3 px-3 sm:px-4 lg:px-5">
         <div className="flex min-w-0 items-center">
-          <Image
+          <ThemedBrandImage
             src="/banner.png"
+            darkSrc="/banner-dark.png"
             alt="Liquid"
             width={217}
             height={72}

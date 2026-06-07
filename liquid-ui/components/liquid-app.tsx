@@ -1,22 +1,27 @@
 "use client";
 
 import { type FormEvent, type ReactNode, useEffect, useState } from "react";
-import Image from "next/image";
+import { useTheme } from "next-themes";
 import {
   Eye,
   EyeOff,
   KeyRound,
+  Languages,
   Loader2,
   LockKeyhole,
   Mail,
+  Monitor,
+  Moon,
+  Sun,
   type LucideIcon,
   UserRound,
 } from "lucide-react";
 import { toast } from "sonner";
 
 import { AuditDashboard } from "@/components/audit-dashboard";
+import { AuthSqlTerminal } from "@/components/auth-sql-terminal";
 import { ManagedDatabasePicker } from "@/components/managed-database-picker";
-import { Badge } from "@/components/ui/badge";
+import { ThemedBrandImage } from "@/components/themed-brand-image";
 import { Button } from "@/components/ui/button";
 import {
   Card,
@@ -38,6 +43,9 @@ const TOKEN_STORAGE_KEY = "liquid.auth.token";
 
 type AuthMode = "login" | "register";
 type AuthMessages = ReturnType<typeof useI18n>["t"]["auth"];
+type ThemeShortcut = "system" | "light" | "dark";
+
+const themeShortcutOrder: ThemeShortcut[] = ["system", "light", "dark"];
 
 export function LiquidApp() {
   const [token, setToken] = useState<string | null>(null);
@@ -182,7 +190,8 @@ function AuthScreen({
 }: {
   onAuthenticated: (response: AuthResponse) => void | Promise<void>;
 }) {
-  const { t } = useI18n();
+  const { locale, setLocale, t } = useI18n();
+  const { theme, setTheme } = useTheme();
   const [mode, setMode] = useState<AuthMode>("login");
   const [email, setEmail] = useState("");
   const [displayName, setDisplayName] = useState("");
@@ -192,6 +201,29 @@ function AuthScreen({
 
   const isRegister = mode === "register";
   const auth = t.auth;
+  const selectedTheme: ThemeShortcut =
+    theme === "light" || theme === "dark" || theme === "system"
+      ? theme
+      : "system";
+  const nextLocale = locale === "zh-CN" ? "en-US" : "zh-CN";
+  const nextLanguageLabel = nextLocale === "zh-CN" ? "中文" : "English";
+  const themeShortcutLabel = t.databasePicker.themeShortcutLabel(
+    t.settings.preferences.themeBadges[selectedTheme],
+  );
+  const languageShortcutLabel =
+    t.databasePicker.languageShortcutLabel(nextLanguageLabel);
+
+  const handleThemeShortcut = () => {
+    const currentIndex = themeShortcutOrder.indexOf(selectedTheme);
+    const nextTheme =
+      themeShortcutOrder[(currentIndex + 1) % themeShortcutOrder.length];
+
+    setTheme(nextTheme);
+  };
+
+  const handleLanguageShortcut = () => {
+    setLocale(nextLocale);
+  };
 
   const handleSubmit = async (event: FormEvent<HTMLFormElement>) => {
     event.preventDefault();
@@ -227,8 +259,9 @@ function AuthScreen({
     <main className="flex min-h-screen items-center overflow-x-hidden bg-muted/30 p-3 text-foreground sm:p-4">
       <div className="mx-auto flex w-full min-w-0 max-w-[calc(100vw-1.5rem)] flex-col gap-5 lg:max-w-6xl">
         <div className="flex justify-center">
-          <Image
+          <ThemedBrandImage
             src="/banner.png"
+            darkSrc="/banner-dark.png"
             alt="Liquid"
             width={420}
             height={140}
@@ -246,19 +279,18 @@ function AuthScreen({
           <Card className="flex h-full w-full min-w-0 max-w-full flex-col overflow-hidden rounded-lg py-5 shadow-xs">
             <CardHeader className="gap-4 px-5 sm:px-6">
               <div className="flex items-center justify-between gap-3">
-                <div className="min-w-0">
+                <div className="min-w-0 flex-1">
                   <CardTitle className="text-base">
                     {isRegister ? auth.registerTitle : auth.loginTitle}
                   </CardTitle>
-                  <p className="mt-1 text-sm leading-5 text-muted-foreground">
-                    {isRegister
-                      ? auth.registerDescription
-                      : auth.loginDescription}
-                  </p>
                 </div>
-                <Badge variant="secondary" className="rounded-md">
-                  {isRegister ? auth.registerBadge : auth.loginBadge}
-                </Badge>
+                <AuthPreferenceButtons
+                  theme={selectedTheme}
+                  themeLabel={themeShortcutLabel}
+                  languageLabel={languageShortcutLabel}
+                  onThemeClick={handleThemeShortcut}
+                  onLanguageClick={handleLanguageShortcut}
+                />
               </div>
               <div className="grid grid-cols-2 rounded-md border bg-muted/40 p-1">
                 <ModeButton
@@ -355,21 +387,56 @@ function AuthScreen({
   );
 }
 
+function AuthPreferenceButtons({
+  theme,
+  themeLabel,
+  languageLabel,
+  onThemeClick,
+  onLanguageClick,
+}: {
+  theme: ThemeShortcut;
+  themeLabel: string;
+  languageLabel: string;
+  onThemeClick: () => void;
+  onLanguageClick: () => void;
+}) {
+  const ThemeShortcutIcon =
+    theme === "dark" ? Moon : theme === "light" ? Sun : Monitor;
+
+  return (
+    <div className="flex shrink-0 items-center justify-end gap-2">
+      <Button
+        type="button"
+        variant="outline"
+        size="icon"
+        className="size-8 rounded-md"
+        title={themeLabel}
+        aria-label={themeLabel}
+        onClick={onThemeClick}
+      >
+        <ThemeShortcutIcon className="size-4" aria-hidden />
+      </Button>
+      <Button
+        type="button"
+        variant="outline"
+        size="icon"
+        className="size-8 rounded-md"
+        title={languageLabel}
+        aria-label={languageLabel}
+        onClick={onLanguageClick}
+      >
+        <Languages className="size-4" aria-hidden />
+      </Button>
+    </div>
+  );
+}
+
 function AuthWorkbench({ auth }: { auth: AuthMessages }) {
   return (
     <section className="flex h-full min-w-0 max-w-full overflow-hidden rounded-lg border bg-card text-card-foreground shadow-sm">
       <div className="flex w-full p-3 sm:p-4">
         <div className="flex w-full overflow-hidden rounded-lg border bg-background shadow-xs">
-          <Image
-            src="/auth-sql-ai-visual.png"
-            alt={auth.visualAlt}
-            width={1586}
-            height={992}
-            priority
-            draggable={false}
-            sizes="(min-width: 1024px) 720px, calc(100vw - 48px)"
-            className="h-auto w-full select-none object-cover lg:h-full"
-          />
+          <AuthSqlTerminal label={auth.visualAlt} />
         </div>
       </div>
     </section>

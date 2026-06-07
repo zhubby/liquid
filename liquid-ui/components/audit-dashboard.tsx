@@ -12,12 +12,12 @@ import {
   useRef,
   useState,
 } from "react";
-import Image from "next/image";
 import { ArrowLeft, Bot, Loader2, Plus } from "lucide-react";
 import { toast } from "sonner";
 
 import { DatapanelWorkspacePanel } from "@/components/datapanel";
 import { ChatPanel } from "@/components/chat-workspace";
+import { ThemedBrandImage } from "@/components/themed-brand-image";
 import { Button } from "@/components/ui/button";
 import {
   Tooltip,
@@ -407,8 +407,9 @@ function IconSidebar({
             className="flex size-10 items-center justify-center"
             title="Liquid"
           >
-            <Image
+            <ThemedBrandImage
               src="/logo.png"
+              darkSrc="/logo-dark.png"
               alt="Liquid"
               width={36}
               height={36}

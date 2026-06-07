@@ -32,7 +32,7 @@ const zhCN = {
     loadingDescription: "Liquid 正在校验本地令牌",
     workspaceBadge: "审计工作台入口",
     subtitle: "登录后进入托管数据库、SQL 风险审查与执行把关的统一工作区。",
-    visualAlt: "SQL 审计、数据图表和 AI 审查能力的抽象视觉图",
+    visualAlt: "psql 终端正在展示 SQL 审计示例",
     status: {
       session: "会话",
       credential: "凭据",
@@ -616,8 +616,7 @@ const enUS: Messages = {
     workspaceBadge: "Audit workspace entry",
     subtitle:
       "Sign in to enter one workspace for managed databases, SQL risk review, and execution gates.",
-    visualAlt:
-      "Abstract visual of SQL audit, datapanel charts, and AI-assisted review",
+    visualAlt: "psql terminal showing SQL audit examples",
     status: {
       session: "Session",
       credential: "Credential",
