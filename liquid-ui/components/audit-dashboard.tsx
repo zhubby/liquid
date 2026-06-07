@@ -63,6 +63,7 @@ export function AuditDashboard({
   const [isWorkspaceLoading, setIsWorkspaceLoading] = useState(true);
   const [isCreatingWorkspace, setIsCreatingWorkspace] = useState(false);
   const [isDeletingWorkspace, setIsDeletingWorkspace] = useState(false);
+  const [datapanelRefreshKey, setDatapanelRefreshKey] = useState(0);
 
   const workspaceStyle = useMemo(
     () =>
@@ -190,6 +191,10 @@ export function AuditDashboard({
     },
     [],
   );
+
+  const handleDatapanelChanged = useCallback(() => {
+    setDatapanelRefreshKey((current) => current + 1);
+  }, []);
 
   const handleDeleteWorkspace = useCallback(
     async (conversationId: string) => {
@@ -341,6 +346,7 @@ export function AuditDashboard({
                 conversation={activeConversation}
                 isDeletingWorkspace={isDeletingWorkspace}
                 onConversationUpdated={handleConversationUpdated}
+                onDatapanelChanged={handleDatapanelChanged}
                 onDeleteConversation={handleDeleteWorkspace}
               />
               <SplitHandle
@@ -353,6 +359,7 @@ export function AuditDashboard({
                 token={token}
                 conversationId={activeConversation.id}
                 selectedDatabase={selectedDatabase}
+                refreshKey={datapanelRefreshKey}
               />
             </>
           )}

@@ -60,6 +60,7 @@ type DatapanelWorkspacePanelProps = {
   token: string;
   conversationId: string;
   selectedDatabase: ManagedDatabase;
+  refreshKey: number;
 };
 
 type RowValue = Record<string, unknown>;
@@ -88,6 +89,7 @@ export function DatapanelWorkspacePanel({
   token,
   conversationId,
   selectedDatabase,
+  refreshKey,
 }: DatapanelWorkspacePanelProps) {
   const { t } = useI18n();
   const { width, containerRef, mounted } = useContainerWidth();
@@ -100,9 +102,14 @@ export function DatapanelWorkspacePanel({
   const [refreshingCardId, setRefreshingCardId] = useState<string | null>(null);
   const [deletingCardId, setDeletingCardId] = useState<string | null>(null);
   const layoutSaveRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const lastRefreshKeyRef = useRef(refreshKey);
 
-  const loadPanel = useCallback(async () => {
-    setIsLoading(true);
+  const loadPanel = useCallback(async (options?: { silent?: boolean }) => {
+    const silent = Boolean(options?.silent);
+
+    if (!silent) {
+      setIsLoading(true);
+    }
 
     try {
       const nextPanel = await apiRequest<Datapanel>(
@@ -115,7 +122,9 @@ export function DatapanelWorkspacePanel({
     } catch (error) {
       toast.error(error instanceof Error ? error.message : t.dashboard.loadFailed);
     } finally {
-      setIsLoading(false);
+      if (!silent) {
+        setIsLoading(false);
+      }
     }
   }, [conversationId, t.dashboard.loadFailed, token]);
 
@@ -128,6 +137,15 @@ export function DatapanelWorkspacePanel({
       }
     };
   }, [loadPanel]);
+
+  useEffect(() => {
+    if (refreshKey === lastRefreshKeyRef.current) {
+      return;
+    }
+
+    lastRefreshKeyRef.current = refreshKey;
+    void loadPanel({ silent: true });
+  }, [loadPanel, refreshKey]);
 
   const layout = useMemo<Layout>(
     () =>

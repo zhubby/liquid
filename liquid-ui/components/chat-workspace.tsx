@@ -117,6 +117,7 @@ type ChatPanelProps = {
   conversation: ChatConversation;
   isDeletingWorkspace: boolean;
   onConversationUpdated: (conversation: ChatConversation) => void;
+  onDatapanelChanged: () => void;
   onDeleteConversation: (conversationId: string) => void | Promise<void>;
 };
 
@@ -131,6 +132,7 @@ export function ChatPanel({
   conversation,
   isDeletingWorkspace,
   onConversationUpdated,
+  onDatapanelChanged,
   onDeleteConversation,
 }: ChatPanelProps) {
   const { t } = useI18n();
@@ -158,6 +160,7 @@ export function ChatPanel({
   const activeSendRef = useRef<string | null>(null);
   const activeActionStreamKeyRef = useRef<string | null>(null);
   const pendingActionIdsRef = useRef(new Set<string>());
+  const notifiedDatapanelActionIdsRef = useRef(new Set<string>());
   const loadVersionRef = useRef(0);
   const nearBottomRef = useRef(true);
 
@@ -215,6 +218,7 @@ export function ChatPanel({
     activeSendRef.current = null;
     activeActionStreamKeyRef.current = null;
     pendingActionIdsRef.current.clear();
+    notifiedDatapanelActionIdsRef.current.clear();
     nearBottomRef.current = true;
     setInput("");
     setMessages([]);
@@ -298,6 +302,22 @@ export function ChatPanel({
       return [...current, action];
     });
   }, []);
+
+  const notifyDatapanelActionApplied = useCallback(
+    (action: ChatAction) => {
+      if (
+        action.status !== "applied" ||
+        action.resource_kind !== "datapanel_card" ||
+        notifiedDatapanelActionIdsRef.current.has(action.id)
+      ) {
+        return;
+      }
+
+      notifiedDatapanelActionIdsRef.current.add(action.id);
+      onDatapanelChanged();
+    },
+    [onDatapanelChanged],
+  );
 
   const commitWorkspaceTitle = useCallback(async () => {
     const title = titleInput.trim();
@@ -424,6 +444,7 @@ export function ChatPanel({
             ]);
           }
           mergeAction(event.payload.action);
+          notifyDatapanelActionApplied(event.payload.action);
           return false;
         case "turn_waiting_for_user":
           setActiveTurn(event.payload.turn);
@@ -469,7 +490,7 @@ export function ChatPanel({
         }
       }
     },
-    [mergeAction, t],
+    [mergeAction, notifyDatapanelActionApplied, t],
   );
 
   const submitPrompt = useCallback(
@@ -776,6 +797,7 @@ export function ChatPanel({
       );
 
       mergeAction(updated);
+      notifyDatapanelActionApplied(updated);
 
       if (decision === "apply" && updated.status === "applying") {
         void streamActionTurn(updated);
@@ -861,6 +883,7 @@ export function ChatPanel({
           onPrompt={(prompt) => void submitPrompt(prompt)}
           onActionApply={(action) => void handleActionDecision(action, "apply")}
           onActionReject={(action) => void handleActionDecision(action, "reject")}
+          onDatapanelChanged={onDatapanelChanged}
         />
 
         <MessageComposer
@@ -1004,6 +1027,7 @@ const MessageList = ({
   onPrompt,
   onActionApply,
   onActionReject,
+  onDatapanelChanged,
 }: {
   token: string;
   conversationId: string;
@@ -1021,6 +1045,7 @@ const MessageList = ({
   onPrompt: (prompt: string) => void;
   onActionApply: (action: ChatAction) => void;
   onActionReject: (action: ChatAction) => void;
+  onDatapanelChanged: () => void;
 }) => {
   const { t } = useI18n();
   const actionAnchorMessageIds = useMemo(() => {
@@ -1084,6 +1109,7 @@ const MessageList = ({
               pendingActionDecisions={pendingActionDecisions}
               onActionApply={onActionApply}
               onActionReject={onActionReject}
+              onDatapanelChanged={onDatapanelChanged}
             />
           );
         })}
@@ -1174,6 +1200,7 @@ function MessageStack({
   pendingActionDecisions,
   onActionApply,
   onActionReject,
+  onDatapanelChanged,
 }: {
   token: string;
   conversationId: string;
@@ -1183,6 +1210,7 @@ function MessageStack({
   pendingActionDecisions: Record<string, PendingActionDecision>;
   onActionApply: (action: ChatAction) => void;
   onActionReject: (action: ChatAction) => void;
+  onDatapanelChanged: () => void;
 }) {
   return (
     <div className="space-y-2">
@@ -1190,6 +1218,7 @@ function MessageStack({
         token={token}
         conversationId={conversationId}
         message={message}
+        onDatapanelChanged={onDatapanelChanged}
       />
       {actions.length > 0 ? (
         <div className="ml-11 space-y-2">
@@ -1213,10 +1242,12 @@ function MessageBubble({
   token,
   conversationId,
   message,
+  onDatapanelChanged,
 }: {
   token: string;
   conversationId: string;
   message: DisplayMessage;
+  onDatapanelChanged: () => void;
 }) {
   const { locale, t } = useI18n();
   const isUser = message.role === "user";
@@ -1260,6 +1291,7 @@ function MessageBubble({
             token={token}
             conversationId={conversationId}
             message={message}
+            onDatapanelChanged={onDatapanelChanged}
           />
           {!isUser && copyText ? (
             <CopyButton
@@ -1291,10 +1323,12 @@ function MessageContent({
   token,
   conversationId,
   message,
+  onDatapanelChanged,
 }: {
   token: string;
   conversationId: string;
   message: DisplayMessage;
+  onDatapanelChanged: () => void;
 }) {
   const parts =
     message.parts.length > 0
@@ -1309,6 +1343,7 @@ function MessageContent({
           token={token}
           conversationId={conversationId}
           part={part}
+          onDatapanelChanged={onDatapanelChanged}
         />
       ))}
     </div>
@@ -1319,10 +1354,12 @@ function MessagePart({
   token,
   conversationId,
   part,
+  onDatapanelChanged,
 }: {
   token: string;
   conversationId: string;
   part: ChatMessagePart;
+  onDatapanelChanged: () => void;
 }) {
   const { t } = useI18n();
 
@@ -1339,6 +1376,7 @@ function MessagePart({
           token={token}
           conversationId={conversationId}
           part={part}
+          onDatapanelChanged={onDatapanelChanged}
         />
       );
     case "error":
@@ -1367,10 +1405,12 @@ function QueryResultTableCard({
   token,
   conversationId,
   part,
+  onDatapanelChanged,
 }: {
   token: string;
   conversationId: string;
   part: QueryResultTablePart;
+  onDatapanelChanged: () => void;
 }) {
   const { t } = useI18n();
   const [isSaving, setIsSaving] = useState(false);
@@ -1408,6 +1448,7 @@ function QueryResultTableCard({
       );
 
       setSavedCardId(card.id);
+      onDatapanelChanged();
       toast.success(t.workspace.queryResult.savedToast);
     } catch (error) {
       toast.error(
