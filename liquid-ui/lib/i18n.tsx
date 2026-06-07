@@ -32,6 +32,7 @@ const zhCN = {
     loadingDescription: "Liquid 正在校验本地令牌",
     workspaceBadge: "审计工作台入口",
     subtitle: "登录后进入托管数据库、SQL 风险审查与执行把关的统一工作区。",
+    visualAlt: "SQL 审计、数据图表和 AI 审查能力的抽象视觉图",
     status: {
       session: "会话",
       credential: "凭据",
@@ -109,6 +110,7 @@ const zhCN = {
     connectionAvailable: "连接可用",
     connectionIssue: "连接异常",
     enter: "进入",
+    enterDatabaseLabel: (name: string) => `进入 ${name}`,
     testConnection: "测试连接",
     testDatabaseLabel: (name: string) => `测试 ${name}`,
     editConnection: "编辑连接",
@@ -487,6 +489,8 @@ const enUS: Messages = {
     workspaceBadge: "Audit workspace entry",
     subtitle:
       "Sign in to enter one workspace for managed databases, SQL risk review, and execution gates.",
+    visualAlt:
+      "Abstract visual of SQL audit, datapanel charts, and AI-assisted review",
     status: {
       session: "Session",
       credential: "Credential",
@@ -568,6 +572,7 @@ const enUS: Messages = {
     connectionAvailable: "Connection available",
     connectionIssue: "Connection issue",
     enter: "Enter",
+    enterDatabaseLabel: (name: string) => `Enter ${name}`,
     testConnection: "Test connection",
     testDatabaseLabel: (name: string) => `Test ${name}`,
     editConnection: "Edit connection",

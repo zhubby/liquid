@@ -443,11 +443,11 @@ export function ManagedDatabasePicker({
                 aria-label={t.databasePicker.accountMenuLabel(user.display_name)}
                 onClick={() => setIsAccountMenuOpen((isOpen) => !isOpen)}
               >
-                <span className="max-w-36 truncate text-sm font-medium text-foreground">
-                  {user.display_name}
-                </span>
                 <span className="flex size-8 shrink-0 items-center justify-center rounded-full bg-primary text-xs font-semibold text-primary-foreground shadow-sm">
                   {userInitials}
+                </span>
+                <span className="max-w-36 truncate text-sm font-medium text-foreground">
+                  {user.display_name}
                 </span>
                 <ChevronDown
                   className={cn(
@@ -520,9 +520,6 @@ export function ManagedDatabasePicker({
                 <Plus className="size-4" aria-hidden />
                 {t.databasePicker.addConnection}
               </Button>
-              <Badge variant="outline" className="rounded-md">
-                Postgres
-              </Badge>
             </div>
           </CardHeader>
           <CardContent className="flex min-h-0 flex-1 flex-col px-4">
@@ -651,10 +648,13 @@ function DatabaseListItem({
           </div>
         </div>
 
-        <div className="grid grid-cols-[1fr_repeat(3,2.25rem)] items-center gap-2 md:w-auto md:grid-cols-[auto_repeat(3,2.25rem)]">
+        <div className="grid grid-cols-[repeat(4,2.25rem)] items-center justify-end gap-2 md:w-auto">
           <Button
             type="button"
-            className="h-9 px-4"
+            size="icon"
+            className="size-9"
+            title={t.databasePicker.enter}
+            aria-label={t.databasePicker.enterDatabaseLabel(database.name)}
             disabled={isBusy}
             onClick={onEnter}
           >
@@ -663,7 +663,6 @@ function DatabaseListItem({
             ) : (
               <LogIn className="size-4" aria-hidden />
             )}
-            {t.databasePicker.enter}
           </Button>
           <Button
             type="button"

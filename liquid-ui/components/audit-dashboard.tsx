@@ -12,7 +12,7 @@ import {
   useRef,
   useState,
 } from "react";
-import { Bot, Loader2, LogOut, Plus, Sparkles } from "lucide-react";
+import { ArrowLeft, Bot, Loader2, Plus, Sparkles } from "lucide-react";
 import { toast } from "sonner";
 
 import { DatapanelWorkspacePanel } from "@/components/datapanel";
@@ -315,7 +315,6 @@ export function AuditDashboard({
     <main className="min-h-screen bg-background text-foreground">
       <div className="flex min-h-screen">
         <IconSidebar
-          user={user}
           conversations={conversations}
           activeConversationId={activeConversation?.id ?? null}
           isCreatingWorkspace={isCreatingWorkspace}
@@ -384,7 +383,6 @@ function WorkspaceLoadingPanel() {
 }
 
 function IconSidebar({
-  user,
   conversations,
   activeConversationId,
   isCreatingWorkspace,
@@ -393,7 +391,6 @@ function IconSidebar({
   onSelectWorkspace,
   onDatabaseExit,
 }: {
-  user: PublicUser;
   conversations: ChatConversation[];
   activeConversationId: string | null;
   isCreatingWorkspace: boolean;
@@ -403,13 +400,6 @@ function IconSidebar({
   onDatabaseExit: () => void;
 }) {
   const { t } = useI18n();
-  const initials = user.display_name
-    .split(/\s+/)
-    .filter(Boolean)
-    .slice(0, 2)
-    .map((part) => part[0])
-    .join("")
-    .toUpperCase();
 
   return (
     <aside className="flex w-14 shrink-0 flex-col items-center border-r bg-sidebar text-sidebar-foreground">
@@ -447,13 +437,6 @@ function IconSidebar({
         />
       </nav>
       <div className="flex w-full flex-col items-center gap-2 border-t border-sidebar-border py-3">
-        <div
-          className="flex size-9 items-center justify-center rounded-md border bg-sidebar-accent text-xs font-semibold text-sidebar-accent-foreground"
-          title={user.email}
-          aria-label={user.email}
-        >
-          {initials || user.email.slice(0, 1).toUpperCase()}
-        </div>
         <Button
           type="button"
           variant="ghost"
@@ -463,7 +446,7 @@ function IconSidebar({
           title={t.workspace.returnToDatabases}
           onClick={onDatabaseExit}
         >
-          <LogOut className="size-5" aria-hidden />
+          <ArrowLeft className="size-5" aria-hidden />
         </Button>
       </div>
     </aside>

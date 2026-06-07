@@ -409,9 +409,6 @@ export function DatapanelWorkspacePanel({
               onBlur={() => void savePanelMetadata()}
               onKeyDown={(event) => handleCommitKey(event, savePanelMetadata)}
             />
-            <Badge variant="outline" className="h-6 rounded-md">
-              {selectedDatabase.name}
-            </Badge>
             {isSavingPanel || isSavingLayout ? (
               <Loader2 className="size-4 shrink-0 animate-spin text-muted-foreground" />
             ) : null}
@@ -427,9 +424,6 @@ export function DatapanelWorkspacePanel({
           />
         </div>
         <div className="flex flex-wrap items-center gap-2">
-          <Badge variant="secondary" className="h-8 rounded-md">
-            {panel ? t.dashboard.cardCount(panel.cards.length) : t.dashboard.loading}
-          </Badge>
           <Button
             type="button"
             variant="outline"
