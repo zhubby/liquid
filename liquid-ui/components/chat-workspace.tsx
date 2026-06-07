@@ -44,6 +44,12 @@ import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { Switch } from "@/components/ui/switch";
 import {
+  Tooltip,
+  TooltipContent,
+  TooltipProvider,
+  TooltipTrigger,
+} from "@/components/ui/tooltip";
+import {
   type AgentMessageRole,
   type DatapanelCard,
   type ChatAction,
@@ -2273,17 +2279,33 @@ const MessageComposer = ({
               {t.workspace.sqlExecuting}
             </Button>
           ) : (
-            <Button
-              type="submit"
-              size="sm"
-              className="h-8 rounded-md"
-              aria-label={t.workspace.sendQuestion}
-              title={t.workspace.send}
-              disabled={!canSubmit}
-            >
-              <Send className="size-4" aria-hidden />
-              {t.workspace.send}
-            </Button>
+            <TooltipProvider>
+              <Tooltip>
+                <TooltipTrigger asChild>
+                  <span className="inline-flex">
+                    <Button
+                      type="submit"
+                      size="sm"
+                      className="h-8 rounded-md"
+                      aria-label={
+                        isSqlMode
+                          ? t.workspace.sqlExecute
+                          : t.workspace.sendQuestion
+                      }
+                      disabled={!canSubmit}
+                    >
+                      <Send className="size-4" aria-hidden />
+                      {t.workspace.send}
+                    </Button>
+                  </span>
+                </TooltipTrigger>
+                <TooltipContent side="top">
+                  {isSqlMode
+                    ? t.workspace.sqlExecuteShortcut
+                    : t.workspace.chatSendShortcut}
+                </TooltipContent>
+              </Tooltip>
+            </TooltipProvider>
           )}
         </div>
       </form>
