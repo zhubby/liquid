@@ -1,8 +1,8 @@
 mod agent_workbench;
 mod auth;
-mod bi_panels;
 mod crypto;
 mod database_backups;
+mod datapanels;
 mod error;
 mod managed_databases;
 mod managed_pools;

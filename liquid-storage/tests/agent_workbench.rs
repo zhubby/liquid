@@ -1,9 +1,9 @@
 use liquid_core::{
     AgentActionKind, AgentActionStatus, AgentEventType, AgentMessageRole, AgentResourceKind,
-    AgentTurnStatus, BiCardKind, BiCardLayout, BiCardLayoutUpdate, BiQueryResult,
-    CreateAgentActionRequest, CreateAgentConversationRequest, CreateAgentTurnRequest,
-    CreateBiPanelCardRequest, CreateManagedDatabaseRequest, ManagedDatabaseEngine,
-    ManagedDatabaseSslMode, RegisterRequest,
+    AgentTurnStatus, CreateAgentActionRequest, CreateAgentConversationRequest,
+    CreateAgentTurnRequest, CreateDatapanelCardRequest, CreateManagedDatabaseRequest,
+    DatapanelCardKind, DatapanelCardLayout, DatapanelCardLayoutUpdate, DatapanelQueryResult,
+    ManagedDatabaseEngine, ManagedDatabaseSslMode, RegisterRequest,
 };
 use liquid_storage::{LiquidStore, Storage, StorageOptions};
 use serde_json::json;
@@ -116,15 +116,15 @@ async fn agent_workbench_store_persists_turn_events_and_actions() {
 }
 
 #[tokio::test]
-async fn bi_panel_store_persists_cards_layouts_and_export() {
+async fn datapanel_store_persists_cards_layouts_and_export() {
     let Some(storage) = test_storage().await else {
         return;
     };
 
     let auth = storage
         .register_user(RegisterRequest {
-            email: unique_email("bi-panel"),
-            display_name: "BI Panel Test".to_owned(),
+            email: unique_email("datapanel"),
+            display_name: "Datapanel Test".to_owned(),
             password: "password123".to_owned(),
         })
         .await
@@ -157,34 +157,34 @@ async fn bi_panel_store_persists_cards_layouts_and_export() {
         .unwrap();
 
     let panel = storage
-        .get_or_create_bi_panel(&auth.user.id, &conversation.id)
+        .get_or_create_datapanel(&auth.user.id, &conversation.id)
         .await
         .unwrap();
     let same_panel = storage
-        .get_or_create_bi_panel(&auth.user.id, &conversation.id)
+        .get_or_create_datapanel(&auth.user.id, &conversation.id)
         .await
         .unwrap();
     assert_eq!(panel.id, same_panel.id);
 
     let card = storage
-        .create_bi_panel_card(
+        .create_datapanel_card(
             &auth.user.id,
             &panel.id,
-            CreateBiPanelCardRequest {
+            CreateDatapanelCardRequest {
                 managed_database_id: database.id,
                 source_action_id: None,
                 title: "Daily revenue".to_owned(),
                 description: Some("Revenue by day".to_owned()),
-                kind: BiCardKind::Table,
+                kind: DatapanelCardKind::Table,
                 sql: "select '2026-06-06' as day, 42 as revenue".to_owned(),
                 chart: None,
-                layout: BiCardLayout {
+                layout: DatapanelCardLayout {
                     x: 0,
                     y: 0,
                     w: 6,
                     h: 4,
                 },
-                result: BiQueryResult {
+                result: DatapanelQueryResult {
                     columns: vec!["day".to_owned(), "revenue".to_owned()],
                     rows: vec![json!({ "day": "2026-06-06", "revenue": 42 })],
                     row_count: 1,
@@ -198,12 +198,12 @@ async fn bi_panel_store_persists_cards_layouts_and_export() {
         .unwrap();
 
     let updated = storage
-        .update_bi_panel_layout(
+        .update_datapanel_layout(
             &auth.user.id,
             &panel.id,
-            vec![BiCardLayoutUpdate {
+            vec![DatapanelCardLayoutUpdate {
                 card_id: card.id.clone(),
-                layout: BiCardLayout {
+                layout: DatapanelCardLayout {
                     x: 6,
                     y: 1,
                     w: 6,
@@ -219,7 +219,7 @@ async fn bi_panel_store_persists_cards_layouts_and_export() {
     assert_eq!(updated.cards[0].layout.h, 5);
 
     let export = storage
-        .export_bi_panel(&auth.user.id, &panel.id)
+        .export_datapanel(&auth.user.id, &panel.id)
         .await
         .unwrap();
     assert_eq!(export.panel.cards.len(), 1);

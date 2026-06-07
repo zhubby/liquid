@@ -2,14 +2,14 @@ use async_trait::async_trait;
 use liquid_core::{
     AgentAction, AgentActionStatus, AgentConversation, AgentEventRecord, AgentEventType,
     AgentMessage, AgentMessageRole, AgentResourceKind, AgentTurn, AgentTurnStatus,
-    ApproveSqlAuditRequest, AuthResponse, BiCardLayoutUpdate, BiPanel, BiPanelCard, BiPanelExport,
-    BiQueryResult, CreateAgentActionRequest, CreateAgentConversationRequest,
-    CreateAgentTurnRequest, CreateBiPanelCardRequest, CreateManagedDatabaseRequest,
-    CreateSqlAuditRequest, LlmProviderSettings, LoginRequest, ManagedDatabase, PublicUser,
+    ApproveSqlAuditRequest, AuthResponse, CreateAgentActionRequest, CreateAgentConversationRequest,
+    CreateAgentTurnRequest, CreateDatapanelCardRequest, CreateManagedDatabaseRequest,
+    CreateSqlAuditRequest, Datapanel, DatapanelCard, DatapanelCardLayoutUpdate, DatapanelExport,
+    DatapanelQueryResult, LlmProviderSettings, LoginRequest, ManagedDatabase, PublicUser,
     RegisterRequest, RejectSqlAuditRequest, ResolvedLlmProviderSettings, SqlAuditExecutionResult,
     SqlAuditRecord, SqlAuditReport, SqlAuditStatus, SqlStatementKind,
-    UpdateAgentConversationRequest, UpdateBiPanelCardRequest, UpdateBiPanelRequest,
-    UpdateCurrentUserRequest, UpdateLlmProviderSettingsRequest, UpdateManagedDatabaseRequest,
+    UpdateAgentConversationRequest, UpdateCurrentUserRequest, UpdateDatapanelCardRequest,
+    UpdateDatapanelRequest, UpdateLlmProviderSettingsRequest, UpdateManagedDatabaseRequest,
     UpdatePasswordRequest,
 };
 use serde_json::Value;
@@ -237,59 +237,59 @@ pub trait LiquidStore: Send + Sync {
         resource_kind: Option<AgentResourceKind>,
         resource_id: Option<String>,
     ) -> Result<AgentAction, StorageError>;
-    async fn get_or_create_bi_panel(
+    async fn get_or_create_datapanel(
         &self,
         owner_user_id: &str,
         conversation_id: &str,
-    ) -> Result<BiPanel, StorageError>;
-    async fn update_bi_panel(
+    ) -> Result<Datapanel, StorageError>;
+    async fn update_datapanel(
         &self,
         owner_user_id: &str,
         panel_id: &str,
-        request: UpdateBiPanelRequest,
-    ) -> Result<BiPanel, StorageError>;
-    async fn create_bi_panel_card(
+        request: UpdateDatapanelRequest,
+    ) -> Result<Datapanel, StorageError>;
+    async fn create_datapanel_card(
         &self,
         owner_user_id: &str,
         panel_id: &str,
-        request: CreateBiPanelCardRequest,
-    ) -> Result<BiPanelCard, StorageError>;
-    async fn get_bi_panel_card(
-        &self,
-        owner_user_id: &str,
-        panel_id: &str,
-        card_id: &str,
-    ) -> Result<BiPanelCard, StorageError>;
-    async fn update_bi_panel_card(
+        request: CreateDatapanelCardRequest,
+    ) -> Result<DatapanelCard, StorageError>;
+    async fn get_datapanel_card(
         &self,
         owner_user_id: &str,
         panel_id: &str,
         card_id: &str,
-        request: UpdateBiPanelCardRequest,
-    ) -> Result<BiPanelCard, StorageError>;
-    async fn update_bi_panel_layout(
-        &self,
-        owner_user_id: &str,
-        panel_id: &str,
-        layouts: Vec<BiCardLayoutUpdate>,
-    ) -> Result<BiPanel, StorageError>;
-    async fn update_bi_panel_card_result(
+    ) -> Result<DatapanelCard, StorageError>;
+    async fn update_datapanel_card(
         &self,
         owner_user_id: &str,
         panel_id: &str,
         card_id: &str,
-        result: BiQueryResult,
-    ) -> Result<BiPanelCard, StorageError>;
-    async fn delete_bi_panel_card(
+        request: UpdateDatapanelCardRequest,
+    ) -> Result<DatapanelCard, StorageError>;
+    async fn update_datapanel_layout(
+        &self,
+        owner_user_id: &str,
+        panel_id: &str,
+        layouts: Vec<DatapanelCardLayoutUpdate>,
+    ) -> Result<Datapanel, StorageError>;
+    async fn update_datapanel_card_result(
+        &self,
+        owner_user_id: &str,
+        panel_id: &str,
+        card_id: &str,
+        result: DatapanelQueryResult,
+    ) -> Result<DatapanelCard, StorageError>;
+    async fn delete_datapanel_card(
         &self,
         owner_user_id: &str,
         panel_id: &str,
         card_id: &str,
     ) -> Result<(), StorageError>;
-    async fn export_bi_panel(
+    async fn export_datapanel(
         &self,
         owner_user_id: &str,
         panel_id: &str,
-    ) -> Result<BiPanelExport, StorageError>;
+    ) -> Result<DatapanelExport, StorageError>;
     async fn fail_stale_agent_turns(&self, stale_after_seconds: i64) -> Result<u64, StorageError>;
 }

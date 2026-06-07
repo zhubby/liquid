@@ -3,8 +3,8 @@ use std::{sync::Arc, time::Instant};
 use anyhow::{Context, Result, bail};
 use async_trait::async_trait;
 use liquid_core::{
-    AgentAction, AgentActionKind, AgentMessage, AgentResourceKind, AuditSummary, BiCardKind,
-    BiChartConfig, BiChartType, ManagedDatabase, SqlAuditRecord,
+    AgentAction, AgentActionKind, AgentMessage, AgentResourceKind, AuditSummary, DatapanelCardKind,
+    DatapanelChartConfig, DatapanelChartType, ManagedDatabase, SqlAuditRecord,
 };
 use liquid_llm::{LlmClient, LlmMessage, LlmProtocol, LlmRequest, ToolCall, ToolDefinition};
 use serde::Deserialize;
@@ -34,7 +34,7 @@ Operating modes:
 Tool selection rules:
 - Read-only data retrieval, inspection, listing, reporting, or analytics: use automatic read-only PostgreSQL tools such as pg_list_schemas, pg_list_relations, pg_describe_relation, pg_explain_sql, and pg_execute_readonly_sql. This includes requests like "what databases are there", "list tables", "show sizes", "count rows", "trend", or "show me the result". After tool observations arrive, answer with the returned data.
 - When the user asks to query or show table data, execute a narrow read-only SELECT and return rows. Do not answer only with schema or field descriptions unless the user explicitly asks for table structure.
-- Saving, importing, pinning, or generating a persistent BI card/chart/panel: call propose_bi_card_action with one safe SELECT statement. Do this only when the user asks to save/import/create a dashboard card or chart, not for ordinary read questions.
+- Saving, importing, pinning, or generating a persistent Datapanel card/chart/panel: call propose_datapanel_card_action with one safe SELECT statement. Do this only when the user asks to save/import/create a dashboard card or chart, not for ordinary read questions.
 - SQL review, risk analysis, approval, rejection, or explicit audit requests: call propose_sql_operation without execution_purpose when the user wants review only.
 - Mutating work such as create, alter, drop, insert, update, delete, migrate, grant, revoke, or any DDL/DML execution: only call propose_sql_operation with execution_purpose when tool_capabilities.write_sql_execution is true. The server will audit and, after user confirmation, execute through the write-gated path. If write_sql_execution is false, do not create a confirmation proposal for the write; explain that the server must be started with LIQUID_SQL_EXECUTION=write_gated before Liquid can perform the operation.
 - Existing SQL audit lifecycle requests: call propose_sql_audit_decision only for SQL audit IDs that appear in the provided context.
@@ -280,7 +280,7 @@ impl LlmWorkbenchAgent {
 
 fn register_workbench_proposal_tools(tools: &mut ToolRegistry) {
     tools.register(ProposeSqlOperationTool);
-    tools.register(ProposeBiCardActionTool);
+    tools.register(ProposeDatapanelCardActionTool);
     tools.register(ProposeSqlAuditDecisionTool);
 }
 
@@ -354,7 +354,7 @@ fn elapsed_ms(started_at: Instant) -> u64 {
 fn is_workbench_proposal_tool(name: &str) -> bool {
     matches!(
         name,
-        "propose_sql_operation" | "propose_bi_card_action" | "propose_sql_audit_decision"
+        "propose_sql_operation" | "propose_datapanel_card_action" | "propose_sql_audit_decision"
     )
 }
 
@@ -415,14 +415,14 @@ impl AgentTool for ProposeSqlOperationTool {
 }
 
 #[derive(Debug, Default, Clone)]
-struct ProposeBiCardActionTool;
+struct ProposeDatapanelCardActionTool;
 
 #[async_trait]
-impl AgentTool for ProposeBiCardActionTool {
+impl AgentTool for ProposeDatapanelCardActionTool {
     fn definition(&self) -> ToolDefinition {
         ToolDefinition::new(
-            "propose_bi_card_action",
-            "Create a user-confirmed BI card proposal backed by one read-only SELECT statement. This does not save the card.",
+            "propose_datapanel_card_action",
+            "Create a user-confirmed Datapanel card proposal backed by one read-only SELECT statement. This does not save the card.",
             json!({
                 "type": "object",
                 "properties": {
@@ -435,7 +435,7 @@ impl AgentTool for ProposeBiCardActionTool {
                     },
                     "sql": {
                         "type": "string",
-                        "description": "One read-only SELECT statement used to populate the BI card."
+                        "description": "One read-only SELECT statement used to populate the Datapanel card."
                     },
                     "chart_type": {
                         "type": "string",
@@ -455,12 +455,12 @@ impl AgentTool for ProposeBiCardActionTool {
     }
 
     async fn execute(&self, arguments: Value) -> Result<ToolOutput> {
-        let args: ProposeBiCardActionArgs = serde_json::from_value(arguments)?;
+        let args: ProposeDatapanelCardActionArgs = serde_json::from_value(arguments)?;
 
         Ok(ToolOutput::json(json!({
             "ok": true,
             "type": "action_proposal",
-            "kind": "create_bi_card",
+            "kind": "create_datapanel_card",
             "title": args.title,
             "display": args.display,
         })))
@@ -526,14 +526,14 @@ struct ProposeSqlOperationArgs {
 
 #[derive(Debug, Deserialize)]
 #[serde(deny_unknown_fields)]
-struct ProposeBiCardActionArgs {
+struct ProposeDatapanelCardActionArgs {
     title: String,
     #[serde(default)]
     description: Option<String>,
-    display: BiCardKind,
+    display: DatapanelCardKind,
     sql: String,
     #[serde(default)]
-    chart_type: Option<BiChartType>,
+    chart_type: Option<DatapanelChartType>,
     #[serde(default)]
     x_key: Option<String>,
     #[serde(default)]
@@ -587,10 +587,10 @@ fn proposal_tool_call_to_suggestion(
                 args.execution_purpose,
             )
         }
-        "propose_bi_card_action" => {
-            let args: ProposeBiCardActionArgs = serde_json::from_str(&call.arguments)?;
+        "propose_datapanel_card_action" => {
+            let args: ProposeDatapanelCardActionArgs = serde_json::from_str(&call.arguments)?;
 
-            bi_card_suggestion(
+            datapanel_card_suggestion(
                 context,
                 args.title,
                 args.description,
@@ -879,14 +879,14 @@ enum LlmWorkbenchAction {
         #[serde(default)]
         execution_purpose: Option<String>,
     },
-    CreateBiCard {
+    CreateDatapanelCard {
         title: String,
         #[serde(default)]
         description: Option<String>,
-        display: BiCardKind,
+        display: DatapanelCardKind,
         sql: String,
         #[serde(default)]
-        chart_type: Option<BiChartType>,
+        chart_type: Option<DatapanelChartType>,
         #[serde(default)]
         x_key: Option<String>,
         #[serde(default)]
@@ -930,7 +930,7 @@ impl LlmWorkbenchAction {
                 schema,
                 execution_purpose,
             ),
-            Self::CreateBiCard {
+            Self::CreateDatapanelCard {
                 title,
                 description,
                 display,
@@ -939,7 +939,7 @@ impl LlmWorkbenchAction {
                 x_key,
                 y_keys,
                 limit,
-            } => bi_card_suggestion(
+            } => datapanel_card_suggestion(
                 context,
                 title,
                 description,
@@ -1032,13 +1032,13 @@ fn sql_operation_suggestion(
     })
 }
 
-fn bi_card_suggestion(
+fn datapanel_card_suggestion(
     context: &LlmWorkbenchContext,
     title: String,
     description: Option<String>,
-    display: BiCardKind,
+    display: DatapanelCardKind,
     sql: String,
-    chart_type: Option<BiChartType>,
+    chart_type: Option<DatapanelChartType>,
     x_key: Option<String>,
     y_keys: Vec<String>,
     limit: Option<usize>,
@@ -1048,14 +1048,14 @@ fn bi_card_suggestion(
         .as_ref()
         .map(|database| &database.id)
     else {
-        bail!("create_bi_card requires a selected managed database");
+        bail!("create_datapanel_card requires a selected managed database");
     };
     let sql = required_trimmed("sql", sql)?;
     let title = required_trimmed("title", title)?;
     let description = optional_trimmed(description);
     let chart = match display {
-        BiCardKind::Table => None,
-        BiCardKind::Chart => Some(BiChartConfig {
+        DatapanelCardKind::Table => None,
+        DatapanelCardKind::Chart => Some(DatapanelChartConfig {
             chart_type: chart_type.ok_or_else(|| anyhow::anyhow!("chart_type is required"))?,
             x_key: required_trimmed(
                 "x_key",
@@ -1066,11 +1066,11 @@ fn bi_card_suggestion(
     };
 
     Ok(WorkbenchActionSuggestion {
-        kind: AgentActionKind::CreateBiCard,
+        kind: AgentActionKind::CreateDatapanelCard,
         title: title.clone(),
         description: description
             .clone()
-            .unwrap_or_else(|| "Create a BI panel card from a read-only query.".to_owned()),
+            .unwrap_or_else(|| "Create a Datapanel card from a read-only query.".to_owned()),
         payload: json!({
             "managed_database_id": database_id,
             "title": title,
@@ -1080,7 +1080,7 @@ fn bi_card_suggestion(
             "chart": chart,
             "limit": limit,
         }),
-        resource_kind: Some(AgentResourceKind::BiPanelCard),
+        resource_kind: Some(AgentResourceKind::DatapanelCard),
         resource_id: None,
         requires_confirmation: true,
     })
@@ -1517,12 +1517,12 @@ mod tests {
     }
 
     #[test]
-    fn parses_llm_bi_card_action() {
+    fn parses_llm_datapanel_card_action() {
         let response = parse_llm_workbench_response(
             r#"{
                 "message": "I prepared a chart card.",
                 "actions": [{
-                    "kind": "create_bi_card",
+                    "kind": "create_datapanel_card",
                     "title": "Risk trend",
                     "description": "Risk count by day",
                     "display": "chart",
@@ -1538,10 +1538,13 @@ mod tests {
         .unwrap();
 
         assert_eq!(response.actions.len(), 1);
-        assert_eq!(response.actions[0].kind, AgentActionKind::CreateBiCard);
+        assert_eq!(
+            response.actions[0].kind,
+            AgentActionKind::CreateDatapanelCard
+        );
         assert_eq!(
             response.actions[0].resource_kind,
-            Some(AgentResourceKind::BiPanelCard)
+            Some(AgentResourceKind::DatapanelCard)
         );
         assert_eq!(response.actions[0].payload["managed_database_id"], "db-1");
         assert_eq!(response.actions[0].payload["kind"], "chart");
@@ -1560,7 +1563,7 @@ mod tests {
             r#"{
                 "message": "I prepared a chart card.",
                 "actions": [{
-                    "kind": "create_bi_card",
+                    "kind": "create_datapanel_card",
                     "title": "Risk trend",
                     "display": "chart",
                     "sql": "select day, risk_count from risk_daily",
@@ -1581,7 +1584,7 @@ mod tests {
             r#"{
                 "message": "I prepared a chart card.",
                 "actions": [{
-                    "kind": "create_bi_card",
+                    "kind": "create_datapanel_card",
                     "title": "Risk trend",
                     "display": "chart",
                     "sql": "select day, risk_count from risk_daily",
@@ -2098,7 +2101,7 @@ mod tests {
         assert!(system_prompt.contains("use automatic read-only PostgreSQL tools"));
         assert!(system_prompt.contains("tool_capabilities.write_sql_execution"));
         assert!(system_prompt.contains("LIQUID_SQL_EXECUTION=write_gated"));
-        assert!(system_prompt.contains("propose_bi_card_action"));
+        assert!(system_prompt.contains("propose_datapanel_card_action"));
         assert!(system_prompt.contains("not for ordinary read questions"));
         assert!(
             request.messages[1]

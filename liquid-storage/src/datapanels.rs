@@ -1,7 +1,7 @@
 use liquid_core::{
-    BiCardKind, BiCardLayout, BiCardLayoutUpdate, BiChartConfig, BiPanel, BiPanelCard,
-    BiPanelExport, BiQueryResult, CreateBiPanelCardRequest, UpdateBiPanelCardRequest,
-    UpdateBiPanelRequest,
+    CreateDatapanelCardRequest, Datapanel, DatapanelCard, DatapanelCardKind, DatapanelCardLayout,
+    DatapanelCardLayoutUpdate, DatapanelChartConfig, DatapanelExport, DatapanelQueryResult,
+    UpdateDatapanelCardRequest, UpdateDatapanelRequest,
 };
 use serde_json::Value;
 use time::OffsetDateTime;
@@ -12,7 +12,7 @@ use crate::{
     validation::required_string,
 };
 
-const BI_PANEL_COLUMNS: &str = r#"
+const DATAPANEL_COLUMNS: &str = r#"
 id::text,
 conversation_id::text,
 title,
@@ -21,7 +21,7 @@ created_at,
 updated_at
 "#;
 
-const BI_PANEL_CARD_COLUMNS: &str = r#"
+const DATAPANEL_CARD_COLUMNS: &str = r#"
 id::text,
 panel_id::text,
 managed_database_id::text,
@@ -37,21 +37,21 @@ created_at,
 updated_at
 "#;
 
-pub(crate) async fn get_or_create_bi_panel(
+pub(crate) async fn get_or_create_datapanel(
     storage: &Storage,
     owner_user_id: &str,
     conversation_id: &str,
-) -> Result<BiPanel, StorageError> {
-    let row = sqlx::query_as::<_, BiPanelRow>(&format!(
+) -> Result<Datapanel, StorageError> {
+    let row = sqlx::query_as::<_, DatapanelRow>(&format!(
         r#"
-        insert into bi_panels (conversation_id, owner_user_id, title)
-        select id, owner_user_id, title || ' BI Panel'
+        insert into datapanels (conversation_id, owner_user_id, title)
+        select id, owner_user_id, title || ' Datapanel'
         from agent_conversations
         where id = $2::uuid
           and owner_user_id = $1::uuid
         on conflict (conversation_id) do update
-        set updated_at = bi_panels.updated_at
-        returning {BI_PANEL_COLUMNS}
+        set updated_at = datapanels.updated_at
+        returning {DATAPANEL_COLUMNS}
         "#
     ))
     .bind(owner_user_id)
@@ -64,27 +64,27 @@ pub(crate) async fn get_or_create_bi_panel(
     panel_with_cards(storage, owner_user_id, panel).await
 }
 
-pub(crate) async fn update_bi_panel(
+pub(crate) async fn update_datapanel(
     storage: &Storage,
     owner_user_id: &str,
     panel_id: &str,
-    request: UpdateBiPanelRequest,
-) -> Result<BiPanel, StorageError> {
+    request: UpdateDatapanelRequest,
+) -> Result<Datapanel, StorageError> {
     let title = request
         .title
         .map(|value| required_string("title", &value))
         .transpose()?;
     let description_present = request.description.is_some();
     let description = blank_to_none(request.description);
-    let row = sqlx::query_as::<_, BiPanelRow>(&format!(
+    let row = sqlx::query_as::<_, DatapanelRow>(&format!(
         r#"
-        update bi_panels
+        update datapanels
         set title = coalesce($3, title),
             description = case when $4 then $5 else description end,
             updated_at = now()
         where id = $1::uuid
           and owner_user_id = $2::uuid
-        returning {BI_PANEL_COLUMNS}
+        returning {DATAPANEL_COLUMNS}
         "#
     ))
     .bind(panel_id)
@@ -100,21 +100,21 @@ pub(crate) async fn update_bi_panel(
     panel_with_cards(storage, owner_user_id, panel).await
 }
 
-pub(crate) async fn create_bi_panel_card(
+pub(crate) async fn create_datapanel_card(
     storage: &Storage,
     owner_user_id: &str,
     panel_id: &str,
-    request: CreateBiPanelCardRequest,
-) -> Result<BiPanelCard, StorageError> {
+    request: CreateDatapanelCardRequest,
+) -> Result<DatapanelCard, StorageError> {
     validate_card_request(&request)?;
     let title = required_string("title", &request.title)?;
     let description = blank_to_none(request.description);
     let layout = checked_json("layout", &request.layout)?;
     let chart = checked_optional_json("chart", &request.chart)?;
     let result = checked_json("result", &request.result)?;
-    let row = sqlx::query_as::<_, BiPanelCardRow>(&format!(
+    let row = sqlx::query_as::<_, DatapanelCardRow>(&format!(
         r#"
-        insert into bi_panel_cards (
+        insert into datapanel_cards (
             panel_id,
             owner_user_id,
             managed_database_id,
@@ -139,13 +139,13 @@ pub(crate) async fn create_bi_panel_card(
             $9,
             $10,
             $11
-        from bi_panels p
+        from datapanels p
         join managed_databases d
           on d.id = $3::uuid
          and d.owner_user_id = p.owner_user_id
         where p.id = $2::uuid
           and p.owner_user_id = $1::uuid
-        returning {BI_PANEL_CARD_COLUMNS}
+        returning {DATAPANEL_CARD_COLUMNS}
         "#
     ))
     .bind(owner_user_id)
@@ -166,38 +166,38 @@ pub(crate) async fn create_bi_panel_card(
     row.ok_or(StorageError::NotFound)?.try_into()
 }
 
-pub(crate) async fn get_bi_panel_card(
+pub(crate) async fn get_datapanel_card(
     storage: &Storage,
     owner_user_id: &str,
     panel_id: &str,
     card_id: &str,
-) -> Result<BiPanelCard, StorageError> {
+) -> Result<DatapanelCard, StorageError> {
     fetch_card(storage, owner_user_id, panel_id, card_id).await
 }
 
-pub(crate) async fn update_bi_panel_card(
+pub(crate) async fn update_datapanel_card(
     storage: &Storage,
     owner_user_id: &str,
     panel_id: &str,
     card_id: &str,
-    request: UpdateBiPanelCardRequest,
-) -> Result<BiPanelCard, StorageError> {
+    request: UpdateDatapanelCardRequest,
+) -> Result<DatapanelCard, StorageError> {
     let title = request
         .title
         .map(|value| required_string("title", &value))
         .transpose()?;
     let description_present = request.description.is_some();
     let description = blank_to_none(request.description);
-    let row = sqlx::query_as::<_, BiPanelCardRow>(&format!(
+    let row = sqlx::query_as::<_, DatapanelCardRow>(&format!(
         r#"
-        update bi_panel_cards
+        update datapanel_cards
         set title = coalesce($4, title),
             description = case when $5 then $6 else description end,
             updated_at = now()
         where id = $3::uuid
           and panel_id = $2::uuid
           and owner_user_id = $1::uuid
-        returning {BI_PANEL_CARD_COLUMNS}
+        returning {DATAPANEL_CARD_COLUMNS}
         "#
     ))
     .bind(owner_user_id)
@@ -213,12 +213,12 @@ pub(crate) async fn update_bi_panel_card(
     row.ok_or(StorageError::NotFound)?.try_into()
 }
 
-pub(crate) async fn update_bi_panel_layout(
+pub(crate) async fn update_datapanel_layout(
     storage: &Storage,
     owner_user_id: &str,
     panel_id: &str,
-    layouts: Vec<BiCardLayoutUpdate>,
-) -> Result<BiPanel, StorageError> {
+    layouts: Vec<DatapanelCardLayoutUpdate>,
+) -> Result<Datapanel, StorageError> {
     let mut transaction = storage.pool.begin().await.map_err(map_database_error)?;
 
     for update in layouts {
@@ -226,7 +226,7 @@ pub(crate) async fn update_bi_panel_layout(
         let layout = checked_json("layout", &update.layout)?;
         let result = sqlx::query(
             r#"
-            update bi_panel_cards
+            update datapanel_cards
             set layout = $4,
                 updated_at = now()
             where owner_user_id = $1::uuid
@@ -249,7 +249,7 @@ pub(crate) async fn update_bi_panel_layout(
 
     sqlx::query(
         r#"
-        update bi_panels
+        update datapanels
         set updated_at = now()
         where id = $2::uuid
           and owner_user_id = $1::uuid
@@ -265,23 +265,23 @@ pub(crate) async fn update_bi_panel_layout(
     fetch_panel(storage, owner_user_id, panel_id).await
 }
 
-pub(crate) async fn update_bi_panel_card_result(
+pub(crate) async fn update_datapanel_card_result(
     storage: &Storage,
     owner_user_id: &str,
     panel_id: &str,
     card_id: &str,
-    result: BiQueryResult,
-) -> Result<BiPanelCard, StorageError> {
+    result: DatapanelQueryResult,
+) -> Result<DatapanelCard, StorageError> {
     let result = checked_json("result", &result)?;
-    let row = sqlx::query_as::<_, BiPanelCardRow>(&format!(
+    let row = sqlx::query_as::<_, DatapanelCardRow>(&format!(
         r#"
-        update bi_panel_cards
+        update datapanel_cards
         set result = $4,
             updated_at = now()
         where id = $3::uuid
           and panel_id = $2::uuid
           and owner_user_id = $1::uuid
-        returning {BI_PANEL_CARD_COLUMNS}
+        returning {DATAPANEL_CARD_COLUMNS}
         "#
     ))
     .bind(owner_user_id)
@@ -295,7 +295,7 @@ pub(crate) async fn update_bi_panel_card_result(
     row.ok_or(StorageError::NotFound)?.try_into()
 }
 
-pub(crate) async fn delete_bi_panel_card(
+pub(crate) async fn delete_datapanel_card(
     storage: &Storage,
     owner_user_id: &str,
     panel_id: &str,
@@ -303,7 +303,7 @@ pub(crate) async fn delete_bi_panel_card(
 ) -> Result<(), StorageError> {
     let result = sqlx::query(
         r#"
-        delete from bi_panel_cards
+        delete from datapanel_cards
         where id = $3::uuid
           and panel_id = $2::uuid
           and owner_user_id = $1::uuid
@@ -323,12 +323,12 @@ pub(crate) async fn delete_bi_panel_card(
     Ok(())
 }
 
-pub(crate) async fn export_bi_panel(
+pub(crate) async fn export_datapanel(
     storage: &Storage,
     owner_user_id: &str,
     panel_id: &str,
-) -> Result<BiPanelExport, StorageError> {
-    Ok(BiPanelExport {
+) -> Result<DatapanelExport, StorageError> {
+    Ok(DatapanelExport {
         exported_at: OffsetDateTime::now_utc(),
         panel: fetch_panel(storage, owner_user_id, panel_id).await?,
     })
@@ -338,11 +338,11 @@ async fn fetch_panel(
     storage: &Storage,
     owner_user_id: &str,
     panel_id: &str,
-) -> Result<BiPanel, StorageError> {
-    let row = sqlx::query_as::<_, BiPanelRow>(&format!(
+) -> Result<Datapanel, StorageError> {
+    let row = sqlx::query_as::<_, DatapanelRow>(&format!(
         r#"
-        select {BI_PANEL_COLUMNS}
-        from bi_panels
+        select {DATAPANEL_COLUMNS}
+        from datapanels
         where id = $2::uuid
           and owner_user_id = $1::uuid
         "#
@@ -360,8 +360,8 @@ async fn fetch_panel(
 async fn panel_with_cards(
     storage: &Storage,
     owner_user_id: &str,
-    mut panel: BiPanel,
-) -> Result<BiPanel, StorageError> {
+    mut panel: Datapanel,
+) -> Result<Datapanel, StorageError> {
     panel.cards = list_cards(storage, owner_user_id, &panel.id).await?;
     Ok(panel)
 }
@@ -370,11 +370,11 @@ async fn list_cards(
     storage: &Storage,
     owner_user_id: &str,
     panel_id: &str,
-) -> Result<Vec<BiPanelCard>, StorageError> {
-    let rows = sqlx::query_as::<_, BiPanelCardRow>(&format!(
+) -> Result<Vec<DatapanelCard>, StorageError> {
+    let rows = sqlx::query_as::<_, DatapanelCardRow>(&format!(
         r#"
-        select {BI_PANEL_CARD_COLUMNS}
-        from bi_panel_cards
+        select {DATAPANEL_CARD_COLUMNS}
+        from datapanel_cards
         where owner_user_id = $1::uuid
           and panel_id = $2::uuid
         order by (layout->>'y')::int, (layout->>'x')::int, created_at
@@ -386,7 +386,7 @@ async fn list_cards(
     .await
     .map_err(map_database_error)?;
 
-    rows.into_iter().map(BiPanelCard::try_from).collect()
+    rows.into_iter().map(DatapanelCard::try_from).collect()
 }
 
 async fn fetch_card(
@@ -394,11 +394,11 @@ async fn fetch_card(
     owner_user_id: &str,
     panel_id: &str,
     card_id: &str,
-) -> Result<BiPanelCard, StorageError> {
-    let row = sqlx::query_as::<_, BiPanelCardRow>(&format!(
+) -> Result<DatapanelCard, StorageError> {
+    let row = sqlx::query_as::<_, DatapanelCardRow>(&format!(
         r#"
-        select {BI_PANEL_CARD_COLUMNS}
-        from bi_panel_cards
+        select {DATAPANEL_CARD_COLUMNS}
+        from datapanel_cards
         where owner_user_id = $1::uuid
           and panel_id = $2::uuid
           and id = $3::uuid
@@ -414,11 +414,11 @@ async fn fetch_card(
     row.ok_or(StorageError::NotFound)?.try_into()
 }
 
-fn validate_card_request(request: &CreateBiPanelCardRequest) -> Result<(), StorageError> {
+fn validate_card_request(request: &CreateDatapanelCardRequest) -> Result<(), StorageError> {
     required_string("sql", &request.sql)?;
     validate_layout(&request.layout)?;
 
-    if request.kind == BiCardKind::Chart {
+    if request.kind == DatapanelCardKind::Chart {
         let chart = request.chart.as_ref().ok_or_else(|| {
             StorageError::Validation("chart cards require chart configuration".to_owned())
         })?;
@@ -428,17 +428,17 @@ fn validate_card_request(request: &CreateBiPanelCardRequest) -> Result<(), Stora
     Ok(())
 }
 
-fn validate_layout(layout: &BiCardLayout) -> Result<(), StorageError> {
+fn validate_layout(layout: &DatapanelCardLayout) -> Result<(), StorageError> {
     if layout.x < 0 || layout.y < 0 || layout.w <= 0 || layout.h <= 0 || layout.w > 12 {
         return Err(StorageError::Validation(
-            "invalid BI card layout".to_owned(),
+            "invalid Datapanel card layout".to_owned(),
         ));
     }
 
     Ok(())
 }
 
-fn validate_chart(chart: &BiChartConfig) -> Result<(), StorageError> {
+fn validate_chart(chart: &DatapanelChartConfig) -> Result<(), StorageError> {
     required_string("x_key", &chart.x_key)?;
 
     if chart.y_keys.is_empty() {
@@ -476,7 +476,7 @@ fn blank_to_none(value: Option<String>) -> Option<String> {
 }
 
 #[derive(sqlx::FromRow)]
-struct BiPanelRow {
+struct DatapanelRow {
     id: String,
     conversation_id: String,
     title: String,
@@ -486,7 +486,7 @@ struct BiPanelRow {
 }
 
 #[derive(sqlx::FromRow)]
-struct BiPanelCardRow {
+struct DatapanelCardRow {
     id: String,
     panel_id: String,
     managed_database_id: String,
@@ -502,10 +502,10 @@ struct BiPanelCardRow {
     updated_at: OffsetDateTime,
 }
 
-impl TryFrom<BiPanelRow> for BiPanel {
+impl TryFrom<DatapanelRow> for Datapanel {
     type Error = StorageError;
 
-    fn try_from(row: BiPanelRow) -> Result<Self, Self::Error> {
+    fn try_from(row: DatapanelRow) -> Result<Self, Self::Error> {
         Ok(Self {
             id: row.id,
             conversation_id: row.conversation_id,
@@ -518,10 +518,10 @@ impl TryFrom<BiPanelRow> for BiPanel {
     }
 }
 
-impl TryFrom<BiPanelCardRow> for BiPanelCard {
+impl TryFrom<DatapanelCardRow> for DatapanelCard {
     type Error = StorageError;
 
-    fn try_from(row: BiPanelCardRow) -> Result<Self, Self::Error> {
+    fn try_from(row: DatapanelCardRow) -> Result<Self, Self::Error> {
         Ok(Self {
             id: row.id,
             panel_id: row.panel_id,
@@ -544,12 +544,12 @@ impl TryFrom<BiPanelCardRow> for BiPanelCard {
     }
 }
 
-fn parse_card_kind(value: &str) -> Result<BiCardKind, StorageError> {
+fn parse_card_kind(value: &str) -> Result<DatapanelCardKind, StorageError> {
     match value {
-        "table" => Ok(BiCardKind::Table),
-        "chart" => Ok(BiCardKind::Chart),
+        "table" => Ok(DatapanelCardKind::Table),
+        "chart" => Ok(DatapanelCardKind::Chart),
         other => Err(StorageError::Validation(format!(
-            "unsupported BI card kind: {other}"
+            "unsupported Datapanel card kind: {other}"
         ))),
     }
 }

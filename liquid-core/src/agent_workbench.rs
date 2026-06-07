@@ -97,7 +97,7 @@ pub struct AgentDashboardContext {
 #[ts(export)]
 pub enum AgentActiveView {
     Ai,
-    Bi,
+    Datapanel,
     Databases,
     SqlAudits,
 }
@@ -251,7 +251,7 @@ pub struct AgentEventRecord {
 #[ts(export)]
 pub enum AgentActionKind {
     CreateSqlAudit,
-    CreateBiCard,
+    CreateDatapanelCard,
     ApproveSqlAudit,
     RejectSqlAudit,
     ExecuteSqlAudit,
@@ -266,7 +266,7 @@ impl AgentActionKind {
     pub fn as_str(self) -> &'static str {
         match self {
             Self::CreateSqlAudit => "create_sql_audit",
-            Self::CreateBiCard => "create_bi_card",
+            Self::CreateDatapanelCard => "create_datapanel_card",
             Self::ApproveSqlAudit => "approve_sql_audit",
             Self::RejectSqlAudit => "reject_sql_audit",
             Self::ExecuteSqlAudit => "execute_sql_audit",
@@ -309,7 +309,7 @@ impl AgentActionStatus {
 #[ts(export)]
 pub enum AgentResourceKind {
     SqlAudit,
-    BiPanelCard,
+    DatapanelCard,
     ManagedDatabase,
     DatabaseBackup,
     DatabaseRestore,
@@ -319,7 +319,7 @@ impl AgentResourceKind {
     pub fn as_str(self) -> &'static str {
         match self {
             Self::SqlAudit => "sql_audit",
-            Self::BiPanelCard => "bi_panel_card",
+            Self::DatapanelCard => "datapanel_card",
             Self::ManagedDatabase => "managed_database",
             Self::DatabaseBackup => "database_backup",
             Self::DatabaseRestore => "database_restore",

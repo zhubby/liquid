@@ -14,13 +14,13 @@ use axum::{
 use futures_util::Stream;
 use liquid_core::{
     AgentAction, AgentActionStatus, AgentConversation, AgentEventRecord, AgentEventType,
-    AgentMessage, AgentMessageRole, AgentTurn, AgentTurnStatus, BiQueryResult, ChatAction,
+    AgentMessage, AgentMessageRole, AgentTurn, AgentTurnStatus, ChatAction,
     ChatActionDecisionRequest, ChatActionPreview, ChatConversation, ChatErrorCode,
     ChatManagedDatabaseSummary, ChatMessage, ChatMessagePart, ChatMessageStatus, ChatStreamEvent,
     ChatStreamStage, ChatToolStatus, ChatTurn, ChatTurnDashboardContext,
     CreateAgentConversationRequest, CreateAgentTurnRequest, CreateChatConversationRequest,
-    CreateChatTurnRequest, ManagedDatabase, SqlAuditRecord, UpdateAgentConversationRequest,
-    UpdateChatConversationRequest,
+    CreateChatTurnRequest, DatapanelQueryResult, ManagedDatabase, SqlAuditRecord,
+    UpdateAgentConversationRequest, UpdateChatConversationRequest,
 };
 use liquid_storage::StorageError;
 use serde::Deserialize;
@@ -28,7 +28,7 @@ use serde_json::Value;
 use tokio::{spawn, time::sleep};
 
 use crate::{
-    agent_workbench::CreateBiCardActionPayload,
+    agent_workbench::CreateDatapanelCardActionPayload,
     agent_workbench::{
         append_event, apply_agent_action, run_agent_turn, synthesize_action_observation,
     },
@@ -931,8 +931,8 @@ fn action_result_message(
                         resource_id.unwrap_or("unknown")
                     )
                 }),
-            Some(liquid_core::AgentResourceKind::BiPanelCard) => format!(
-                "BI panel card created. Card ID: {}.",
+            Some(liquid_core::AgentResourceKind::DatapanelCard) => format!(
+                "Datapanel card created. Card ID: {}.",
                 resource_id.unwrap_or("unknown")
             ),
             Some(kind) => format!(
@@ -960,17 +960,19 @@ fn sql_audit_record_from_result_payload(payload: &Value) -> Option<SqlAuditRecor
         .and_then(|record| serde_json::from_value::<SqlAuditRecord>(record).ok())
 }
 
-fn sql_audit_query_result_from_payload(payload: &Value) -> Option<BiQueryResult> {
+fn sql_audit_query_result_from_payload(payload: &Value) -> Option<DatapanelQueryResult> {
     payload
         .get("query_result")
         .cloned()
-        .and_then(|query_result| serde_json::from_value::<Option<BiQueryResult>>(query_result).ok())
+        .and_then(|query_result| {
+            serde_json::from_value::<Option<DatapanelQueryResult>>(query_result).ok()
+        })
         .flatten()
 }
 
 fn sql_audit_action_result_message(
     record: &SqlAuditRecord,
-    query_result: Option<&BiQueryResult>,
+    query_result: Option<&DatapanelQueryResult>,
 ) -> String {
     if let Some(query_result) = query_result {
         let mut message = sql_action_reference_message("SQL query result", record);
@@ -1005,7 +1007,7 @@ fn sql_audit_action_result_message(
         .is_some_and(|kind| kind == liquid_core::SqlStatementKind::Select)
     {
         message.push_str(
-            "\n\n_This action created an audit report; it does not return SELECT rows. Use a BI card action when you want query result rows in the workspace._",
+            "\n\n_This action created an audit report; it does not return SELECT rows. Use a Datapanel card action when you want query result rows in the workspace._",
         );
     }
 
@@ -1050,7 +1052,7 @@ fn sql_action_reference_message(title: &str, record: &SqlAuditRecord) -> String 
     message
 }
 
-fn query_result_markdown(result: &BiQueryResult) -> String {
+fn query_result_markdown(result: &DatapanelQueryResult) -> String {
     let mut message = format!(
         "{} row{} returned in {}ms{}.",
         result.row_count,
@@ -1355,7 +1357,7 @@ fn default_tool_title(name: &str) -> String {
         "sql_audit" => "Audit SQL".to_owned(),
         "sql_execute" => "Execute SQL".to_owned(),
         "apply_agent_action" => "Apply action".to_owned(),
-        "create_bi_card" => "Create BI card".to_owned(),
+        "create_datapanel_card" => "Create Datapanel card".to_owned(),
         _ => name.replace('_', " "),
     }
 }
@@ -1478,7 +1480,7 @@ struct QueryResultTablePartMetadata {
     description: Option<String>,
     managed_database_id: String,
     sql: String,
-    result: BiQueryResult,
+    result: DatapanelQueryResult,
 }
 
 fn query_result_table_parts(metadata: Option<&Value>) -> Vec<ChatMessagePart> {
@@ -1558,7 +1560,7 @@ fn chat_action_with_stream_after_seq(
 fn chat_action_preview(action: &AgentAction) -> Option<ChatActionPreview> {
     match action.kind {
         liquid_core::AgentActionKind::CreateSqlAudit => chat_sql_audit_preview(action),
-        liquid_core::AgentActionKind::CreateBiCard => chat_bi_card_preview(action),
+        liquid_core::AgentActionKind::CreateDatapanelCard => chat_datapanel_card_preview(action),
         _ => None,
     }
 }
@@ -1583,12 +1585,12 @@ fn chat_sql_audit_preview(action: &AgentAction) -> Option<ChatActionPreview> {
     })
 }
 
-fn chat_bi_card_preview(action: &AgentAction) -> Option<ChatActionPreview> {
+fn chat_datapanel_card_preview(action: &AgentAction) -> Option<ChatActionPreview> {
     let payload =
-        serde_json::from_value::<CreateBiCardActionPayload>(action.payload.clone()).ok()?;
+        serde_json::from_value::<CreateDatapanelCardActionPayload>(action.payload.clone()).ok()?;
     let result = payload.result?;
 
-    Some(ChatActionPreview::BiCard {
+    Some(ChatActionPreview::DatapanelCard {
         title: payload.title,
         description: payload.description,
         card_kind: payload.kind,
@@ -1669,7 +1671,7 @@ fn agent_dashboard_context(
 
 #[cfg(test)]
 mod tests {
-    use liquid_core::BiQueryResult;
+    use liquid_core::DatapanelQueryResult;
     use serde_json::json;
     use time::OffsetDateTime;
 
@@ -1677,7 +1679,7 @@ mod tests {
 
     #[test]
     fn query_result_markdown_renders_result_table() {
-        let result = BiQueryResult {
+        let result = DatapanelQueryResult {
             columns: vec!["datname".to_owned(), "size".to_owned()],
             rows: vec![
                 json!({ "datname": "postgres", "size": "7 MB" }),

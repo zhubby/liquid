@@ -5,14 +5,14 @@ use ts_rs::TS;
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize, TS)]
 #[ts(export)]
-pub struct BiPanel {
+pub struct Datapanel {
     pub id: String,
     pub conversation_id: String,
     pub title: String,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     #[ts(optional)]
     pub description: Option<String>,
-    pub cards: Vec<BiPanelCard>,
+    pub cards: Vec<DatapanelCard>,
     #[serde(with = "time::serde::rfc3339")]
     #[ts(type = "string")]
     pub created_at: OffsetDateTime,
@@ -23,7 +23,7 @@ pub struct BiPanel {
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize, TS)]
 #[ts(export)]
-pub struct BiPanelCard {
+pub struct DatapanelCard {
     pub id: String,
     pub panel_id: String,
     pub managed_database_id: String,
@@ -34,13 +34,13 @@ pub struct BiPanelCard {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     #[ts(optional)]
     pub description: Option<String>,
-    pub kind: BiCardKind,
+    pub kind: DatapanelCardKind,
     pub sql: String,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     #[ts(optional)]
-    pub chart: Option<BiChartConfig>,
-    pub layout: BiCardLayout,
-    pub result: BiQueryResult,
+    pub chart: Option<DatapanelChartConfig>,
+    pub layout: DatapanelCardLayout,
+    pub result: DatapanelQueryResult,
     #[serde(with = "time::serde::rfc3339")]
     #[ts(type = "string")]
     pub created_at: OffsetDateTime,
@@ -52,12 +52,12 @@ pub struct BiPanelCard {
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, TS)]
 #[serde(rename_all = "snake_case")]
 #[ts(export)]
-pub enum BiCardKind {
+pub enum DatapanelCardKind {
     Table,
     Chart,
 }
 
-impl BiCardKind {
+impl DatapanelCardKind {
     pub fn as_str(self) -> &'static str {
         match self {
             Self::Table => "table",
@@ -69,14 +69,14 @@ impl BiCardKind {
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, TS)]
 #[serde(rename_all = "snake_case")]
 #[ts(export)]
-pub enum BiChartType {
+pub enum DatapanelChartType {
     Line,
     Bar,
     Area,
     Pie,
 }
 
-impl BiChartType {
+impl DatapanelChartType {
     pub fn as_str(self) -> &'static str {
         match self {
             Self::Line => "line",
@@ -89,15 +89,15 @@ impl BiChartType {
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, TS)]
 #[ts(export)]
-pub struct BiChartConfig {
-    pub chart_type: BiChartType,
+pub struct DatapanelChartConfig {
+    pub chart_type: DatapanelChartType,
     pub x_key: String,
     pub y_keys: Vec<String>,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, TS)]
 #[ts(export)]
-pub struct BiCardLayout {
+pub struct DatapanelCardLayout {
     pub x: i32,
     pub y: i32,
     pub w: i32,
@@ -106,7 +106,7 @@ pub struct BiCardLayout {
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize, TS)]
 #[ts(export)]
-pub struct BiQueryResult {
+pub struct DatapanelQueryResult {
     pub columns: Vec<String>,
     #[ts(type = "Array<Record<string, unknown>>")]
     pub rows: Vec<Value>,
@@ -120,7 +120,7 @@ pub struct BiQueryResult {
 
 #[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize, TS)]
 #[ts(export)]
-pub struct UpdateBiPanelRequest {
+pub struct UpdateDatapanelRequest {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     #[ts(optional)]
     pub title: Option<String>,
@@ -131,7 +131,7 @@ pub struct UpdateBiPanelRequest {
 
 #[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize, TS)]
 #[ts(export)]
-pub struct UpdateBiPanelCardRequest {
+pub struct UpdateDatapanelCardRequest {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     #[ts(optional)]
     pub title: Option<String>,
@@ -142,20 +142,20 @@ pub struct UpdateBiPanelCardRequest {
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, TS)]
 #[ts(export)]
-pub struct UpdateBiPanelLayoutRequest {
-    pub cards: Vec<BiCardLayoutUpdate>,
+pub struct UpdateDatapanelLayoutRequest {
+    pub cards: Vec<DatapanelCardLayoutUpdate>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, TS)]
 #[ts(export)]
-pub struct BiCardLayoutUpdate {
+pub struct DatapanelCardLayoutUpdate {
     pub card_id: String,
-    pub layout: BiCardLayout,
+    pub layout: DatapanelCardLayout,
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize, TS)]
 #[ts(export)]
-pub struct CreateBiPanelCardRequest {
+pub struct CreateDatapanelCardRequest {
     pub managed_database_id: String,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     #[ts(optional)]
@@ -164,32 +164,32 @@ pub struct CreateBiPanelCardRequest {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     #[ts(optional)]
     pub description: Option<String>,
-    pub kind: BiCardKind,
+    pub kind: DatapanelCardKind,
     pub sql: String,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     #[ts(optional)]
-    pub chart: Option<BiChartConfig>,
-    pub layout: BiCardLayout,
-    pub result: BiQueryResult,
+    pub chart: Option<DatapanelChartConfig>,
+    pub layout: DatapanelCardLayout,
+    pub result: DatapanelQueryResult,
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize, TS)]
 #[ts(export)]
-pub struct SaveBiPanelTableCardRequest {
+pub struct SaveDatapanelTableCardRequest {
     pub managed_database_id: String,
     pub title: String,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     #[ts(optional)]
     pub description: Option<String>,
     pub sql: String,
-    pub result: BiQueryResult,
+    pub result: DatapanelQueryResult,
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize, TS)]
 #[ts(export)]
-pub struct BiPanelExport {
+pub struct DatapanelExport {
     #[serde(with = "time::serde::rfc3339")]
     #[ts(type = "string")]
     pub exported_at: OffsetDateTime,
-    pub panel: BiPanel,
+    pub panel: Datapanel,
 }

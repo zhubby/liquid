@@ -1,8 +1,8 @@
-import type { BiQueryResult } from "@/lib/api";
+import type { DatapanelQueryResult } from "@/lib/api";
 import { cn } from "@/lib/utils";
 
 type QueryResultTableProps = {
-  result: BiQueryResult;
+  result: DatapanelQueryResult;
   emptyLabel: string;
   className?: string;
   maxRows?: number;

@@ -46,7 +46,6 @@ doc-valid-idents = [
     "API",
     "APIs",
     "Axum",
-    "BI",
     "Bun",
     "CLI",
     "CORS",

@@ -2,7 +2,7 @@
 
 ## Project Structure & Module Organization
 
-This repository is a Rust workspace with a Next.js BI dashboard and mdBook docs.
+This repository is a Rust workspace with a Next.js datapanel dashboard and mdBook docs.
 Keep code in the crate or package that owns the concern:
 
 - `liquid-cli`: process startup and CLI binary (`liquid`).
@@ -79,11 +79,11 @@ For docs:
 
 ## Frontend Guidelines
 
-- Build the actual BI dashboard experience as the first screen; do not add a
+- Build the actual datapanel dashboard experience as the first screen; do not add a
   marketing landing page unless explicitly requested.
 - Use shadcn/ui-style primitives in `components/ui` and keep dashboard-specific
   composition in feature components.
-- Use Recharts for BI charts and lucide-react for icons.
+- Use Recharts for datapanel charts and lucide-react for icons.
 - Keep UI dense, readable, and operational: prioritize scan-friendly metrics,
   predictable controls, and restrained visual styling.
 - Keep API URLs behind `NEXT_PUBLIC_API_BASE_URL`; do not hardcode production hosts.

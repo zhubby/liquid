@@ -6,7 +6,7 @@ use axum::{
 };
 use liquid_agent::{PostgresToolConfig, SqlAuditAgent, ToolCallingSqlAuditAgent};
 use liquid_core::{
-    ApproveSqlAuditRequest, BiQueryResult, CreateSqlAuditRequest, ManagedDatabase,
+    ApproveSqlAuditRequest, CreateSqlAuditRequest, DatapanelQueryResult, ManagedDatabase,
     ManagedDatabasePoolKey, RejectSqlAuditRequest, SqlAuditExecutionResult, SqlAuditRecord,
     SqlAuditStatus, SqlStatementKind,
 };
@@ -19,13 +19,13 @@ use serde::Deserialize;
 use std::{sync::Arc, time::Instant};
 
 use crate::{auth::authenticated_user, error::ApiError, state::ApiState};
-use crate::{bi_panels::materialize_bi_query, llm_provider::user_llm_provider_for_user};
+use crate::{datapanels::materialize_datapanel_query, llm_provider::user_llm_provider_for_user};
 
 const SQL_AUDIT_READONLY_RESULT_LIMIT: usize = 100;
 
 pub(crate) struct SqlAuditExecutionOutcome {
     pub(crate) record: SqlAuditRecord,
-    pub(crate) query_result: Option<BiQueryResult>,
+    pub(crate) query_result: Option<DatapanelQueryResult>,
 }
 
 pub(crate) fn routes() -> Router<ApiState> {
@@ -330,7 +330,7 @@ async fn execute_readonly_sql_audit(
         }
     }
 
-    let query_result = materialize_bi_query(
+    let query_result = materialize_datapanel_query(
         state,
         owner_user_id,
         &record.managed_database_id,

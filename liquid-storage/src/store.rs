@@ -2,25 +2,25 @@ use async_trait::async_trait;
 use liquid_core::{
     AgentAction, AgentActionStatus, AgentConversation, AgentEventRecord, AgentEventType,
     AgentMessage, AgentMessageRole, AgentResourceKind, AgentTurn, AgentTurnStatus,
-    ApproveSqlAuditRequest, AuthResponse, BiCardLayoutUpdate, BiPanel, BiPanelCard, BiPanelExport,
-    BiQueryResult, CompleteDatabaseBackup, CreateAgentActionRequest,
-    CreateAgentConversationRequest, CreateAgentTurnRequest, CreateBiPanelCardRequest,
+    ApproveSqlAuditRequest, AuthResponse, CompleteDatabaseBackup, CreateAgentActionRequest,
+    CreateAgentConversationRequest, CreateAgentTurnRequest, CreateDatapanelCardRequest,
     CreateManagedDatabaseRequest, DatabaseBackupMetadataStore, DatabaseBackupMetadataStoreError,
-    DatabaseBackupRecord, DatabaseBackupStatus, DatabaseRestoreRecord, LlmProviderSettings,
+    DatabaseBackupRecord, DatabaseBackupStatus, DatabaseRestoreRecord, Datapanel, DatapanelCard,
+    DatapanelCardLayoutUpdate, DatapanelExport, DatapanelQueryResult, LlmProviderSettings,
     LoginRequest, ManagedDatabase, ManagedDatabaseConnectionLoader,
     ManagedDatabaseConnectionLoaderError, ManagedDatabaseConnectionSpec, ManagedDatabasePoolKey,
     PublicUser, RegisterRequest, RejectSqlAuditRequest, ResolvedLlmProviderSettings,
     SqlAuditExecutionResult, SqlAuditRecord, SqlAuditStatus, UpdateAgentConversationRequest,
-    UpdateBiPanelCardRequest, UpdateBiPanelRequest, UpdateCurrentUserRequest,
+    UpdateCurrentUserRequest, UpdateDatapanelCardRequest, UpdateDatapanelRequest,
     UpdateLlmProviderSettingsRequest, UpdateManagedDatabaseRequest, UpdatePasswordRequest,
 };
 use serde_json::Value;
 use sqlx::{PgPool, postgres::PgPoolOptions};
 
 use crate::{
-    agent_workbench, auth, bi_panels,
+    agent_workbench, auth,
     crypto::PasswordCipher,
-    database_backups,
+    database_backups, datapanels,
     error::StorageError,
     managed_databases,
     options::StorageOptions,
@@ -644,85 +644,86 @@ impl LiquidStore for Storage {
         .await
     }
 
-    async fn get_or_create_bi_panel(
+    async fn get_or_create_datapanel(
         &self,
         owner_user_id: &str,
         conversation_id: &str,
-    ) -> Result<BiPanel, StorageError> {
-        bi_panels::get_or_create_bi_panel(self, owner_user_id, conversation_id).await
+    ) -> Result<Datapanel, StorageError> {
+        datapanels::get_or_create_datapanel(self, owner_user_id, conversation_id).await
     }
 
-    async fn update_bi_panel(
+    async fn update_datapanel(
         &self,
         owner_user_id: &str,
         panel_id: &str,
-        request: UpdateBiPanelRequest,
-    ) -> Result<BiPanel, StorageError> {
-        bi_panels::update_bi_panel(self, owner_user_id, panel_id, request).await
+        request: UpdateDatapanelRequest,
+    ) -> Result<Datapanel, StorageError> {
+        datapanels::update_datapanel(self, owner_user_id, panel_id, request).await
     }
 
-    async fn create_bi_panel_card(
+    async fn create_datapanel_card(
         &self,
         owner_user_id: &str,
         panel_id: &str,
-        request: CreateBiPanelCardRequest,
-    ) -> Result<BiPanelCard, StorageError> {
-        bi_panels::create_bi_panel_card(self, owner_user_id, panel_id, request).await
+        request: CreateDatapanelCardRequest,
+    ) -> Result<DatapanelCard, StorageError> {
+        datapanels::create_datapanel_card(self, owner_user_id, panel_id, request).await
     }
 
-    async fn get_bi_panel_card(
-        &self,
-        owner_user_id: &str,
-        panel_id: &str,
-        card_id: &str,
-    ) -> Result<BiPanelCard, StorageError> {
-        bi_panels::get_bi_panel_card(self, owner_user_id, panel_id, card_id).await
-    }
-
-    async fn update_bi_panel_card(
+    async fn get_datapanel_card(
         &self,
         owner_user_id: &str,
         panel_id: &str,
         card_id: &str,
-        request: UpdateBiPanelCardRequest,
-    ) -> Result<BiPanelCard, StorageError> {
-        bi_panels::update_bi_panel_card(self, owner_user_id, panel_id, card_id, request).await
+    ) -> Result<DatapanelCard, StorageError> {
+        datapanels::get_datapanel_card(self, owner_user_id, panel_id, card_id).await
     }
 
-    async fn update_bi_panel_layout(
-        &self,
-        owner_user_id: &str,
-        panel_id: &str,
-        layouts: Vec<BiCardLayoutUpdate>,
-    ) -> Result<BiPanel, StorageError> {
-        bi_panels::update_bi_panel_layout(self, owner_user_id, panel_id, layouts).await
-    }
-
-    async fn update_bi_panel_card_result(
+    async fn update_datapanel_card(
         &self,
         owner_user_id: &str,
         panel_id: &str,
         card_id: &str,
-        result: BiQueryResult,
-    ) -> Result<BiPanelCard, StorageError> {
-        bi_panels::update_bi_panel_card_result(self, owner_user_id, panel_id, card_id, result).await
+        request: UpdateDatapanelCardRequest,
+    ) -> Result<DatapanelCard, StorageError> {
+        datapanels::update_datapanel_card(self, owner_user_id, panel_id, card_id, request).await
     }
 
-    async fn delete_bi_panel_card(
+    async fn update_datapanel_layout(
+        &self,
+        owner_user_id: &str,
+        panel_id: &str,
+        layouts: Vec<DatapanelCardLayoutUpdate>,
+    ) -> Result<Datapanel, StorageError> {
+        datapanels::update_datapanel_layout(self, owner_user_id, panel_id, layouts).await
+    }
+
+    async fn update_datapanel_card_result(
+        &self,
+        owner_user_id: &str,
+        panel_id: &str,
+        card_id: &str,
+        result: DatapanelQueryResult,
+    ) -> Result<DatapanelCard, StorageError> {
+        datapanels::update_datapanel_card_result(self, owner_user_id, panel_id, card_id, result)
+            .await
+    }
+
+    async fn delete_datapanel_card(
         &self,
         owner_user_id: &str,
         panel_id: &str,
         card_id: &str,
     ) -> Result<(), StorageError> {
-        bi_panels::delete_bi_panel_card(self, owner_user_id, panel_id, card_id).await
+        datapanels::delete_datapanel_card(self, owner_user_id, panel_id, card_id).await
     }
 
-    async fn export_bi_panel(
+    async fn export_datapanel(
         &self,
         owner_user_id: &str,
         panel_id: &str,
-    ) -> Result<BiPanelExport, StorageError> {
-        bi_panels::export_bi_panel(self, owner_user_id, panel_id).await
+    ) -> Result<DatapanelExport, StorageError> {
+        datapanels::export_datapanel(self, owner_user_id, panel_id).await
     }
 
     async fn fail_stale_agent_turns(&self, stale_after_seconds: i64) -> Result<u64, StorageError> {

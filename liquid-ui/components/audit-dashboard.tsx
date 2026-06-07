@@ -15,7 +15,7 @@ import {
 import { Bot, Loader2, LogOut, Plus, Sparkles } from "lucide-react";
 import { toast } from "sonner";
 
-import { BiWorkspacePanel } from "@/components/bi-panel";
+import { DatapanelWorkspacePanel } from "@/components/datapanel";
 import { ChatPanel } from "@/components/chat-workspace";
 import { Button } from "@/components/ui/button";
 import {
@@ -348,8 +348,8 @@ export function AuditDashboard({
                 onPointerDown={handleDividerPointerDown}
                 onDoubleClick={handleDividerDoubleClick}
               />
-              <BiWorkspacePanel
-                key={`bi-${selectedDatabase.id}-${activeConversation.id}`}
+              <DatapanelWorkspacePanel
+                key={`datapanel-${selectedDatabase.id}-${activeConversation.id}`}
                 token={token}
                 conversationId={activeConversation.id}
                 selectedDatabase={selectedDatabase}

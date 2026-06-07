@@ -1126,7 +1126,7 @@ fn parse_event_type(value: &str) -> Result<AgentEventType, StorageError> {
 fn parse_action_kind(value: &str) -> Result<AgentActionKind, StorageError> {
     match value {
         "create_sql_audit" => Ok(AgentActionKind::CreateSqlAudit),
-        "create_bi_card" => Ok(AgentActionKind::CreateBiCard),
+        "create_datapanel_card" => Ok(AgentActionKind::CreateDatapanelCard),
         "approve_sql_audit" => Ok(AgentActionKind::ApproveSqlAudit),
         "reject_sql_audit" => Ok(AgentActionKind::RejectSqlAudit),
         "execute_sql_audit" => Ok(AgentActionKind::ExecuteSqlAudit),
@@ -1158,7 +1158,7 @@ fn parse_action_status(value: &str) -> Result<AgentActionStatus, StorageError> {
 fn parse_resource_kind(value: &str) -> Result<AgentResourceKind, StorageError> {
     match value {
         "sql_audit" => Ok(AgentResourceKind::SqlAudit),
-        "bi_panel_card" => Ok(AgentResourceKind::BiPanelCard),
+        "datapanel_card" => Ok(AgentResourceKind::DatapanelCard),
         "managed_database" => Ok(AgentResourceKind::ManagedDatabase),
         "database_backup" => Ok(AgentResourceKind::DatabaseBackup),
         "database_restore" => Ok(AgentResourceKind::DatabaseRestore),

@@ -57,7 +57,7 @@ import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import {
   type AgentMessageRole,
-  type BiPanelCard,
+  type DatapanelCard,
   type ChatAction,
   type ChatConversation,
   type ChatErrorCode,
@@ -68,7 +68,7 @@ import {
   type ChatTurn,
   type LlmProviderSettingsResponse,
   type ManagedDatabase,
-  type SaveBiPanelTableCardRequest,
+  type SaveDatapanelTableCardRequest,
   apiRequest,
   apiStream,
 } from "@/lib/api";
@@ -1383,7 +1383,7 @@ function QueryResultTableCard({
     part.result.truncated,
   );
 
-  const saveToBiPanel = async () => {
+  const saveToDatapanel = async () => {
     if (isSaving || savedCardId) {
       return;
     }
@@ -1391,15 +1391,15 @@ function QueryResultTableCard({
     setIsSaving(true);
 
     try {
-      const body: SaveBiPanelTableCardRequest = {
+      const body: SaveDatapanelTableCardRequest = {
         managed_database_id: part.managed_database_id,
         title,
         description,
         sql: part.sql,
         result: part.result,
       };
-      const card = await apiRequest<BiPanelCard>(
-        `/api/v1/chat/conversations/${conversationId}/bi-panel/cards`,
+      const card = await apiRequest<DatapanelCard>(
+        `/api/v1/chat/conversations/${conversationId}/datapanel/cards`,
         {
           method: "POST",
           token,
@@ -1439,7 +1439,7 @@ function QueryResultTableCard({
           size="sm"
           className="h-8 shrink-0 rounded-md"
           disabled={isSaving || Boolean(savedCardId)}
-          onClick={() => void saveToBiPanel()}
+          onClick={() => void saveToDatapanel()}
         >
           {isSaving ? (
             <Loader2 className="size-4 animate-spin" aria-hidden />
@@ -1596,12 +1596,12 @@ function ActionCard({
   const applyLabel =
     action.status === "failed"
       ? t.workspace.retry
-      : action.preview?.kind === "bi_card"
-        ? t.workspace.importToBiPanel
+      : action.preview?.kind === "datapanel_card"
+        ? t.workspace.importToDatapanel
         : t.workspace.confirm;
   const applyingLabel =
-    action.preview?.kind === "bi_card"
-      ? t.workspace.importingToBiPanel
+    action.preview?.kind === "datapanel_card"
+      ? t.workspace.importingToDatapanel
       : t.workspace.confirming;
 
   return (
@@ -1653,8 +1653,8 @@ function ActionCard({
         </div>
       ) : null}
 
-      {action.preview?.kind === "bi_card" ? (
-        <BiActionPreview action={action} />
+      {action.preview?.kind === "datapanel_card" ? (
+        <DatapanelActionPreview action={action} />
       ) : null}
 
       <div className="mt-3 flex flex-wrap gap-2">
@@ -1668,7 +1668,7 @@ function ActionCard({
             >
               {pendingDecision === "apply" ? (
                 <Loader2 className="size-4 animate-spin" aria-hidden />
-              ) : action.preview?.kind === "bi_card" ? (
+              ) : action.preview?.kind === "datapanel_card" ? (
                 <PanelRightOpen className="size-4" aria-hidden />
               ) : (
                 <CheckCircle2 className="size-4" aria-hidden />
@@ -1712,10 +1712,10 @@ function ActionCard({
   );
 }
 
-function BiActionPreview({ action }: { action: ChatAction }) {
+function DatapanelActionPreview({ action }: { action: ChatAction }) {
   const { t } = useI18n();
 
-  if (action.preview?.kind !== "bi_card") {
+  if (action.preview?.kind !== "datapanel_card") {
     return null;
   }
 
@@ -1729,10 +1729,10 @@ function BiActionPreview({ action }: { action: ChatAction }) {
         ) : (
           <Table2 className="size-3.5" aria-hidden />
         )}
-        <span>{t.workspace.biPreview}</span>
+        <span>{t.workspace.datapanelPreview}</span>
         <span className="text-foreground">{preview.title}</span>
         <Badge variant="outline" className="h-5 rounded-md px-1.5 text-[11px]">
-          {t.workspace.biRows(preview.result.row_count)}
+          {t.workspace.datapanelRows(preview.result.row_count)}
         </Badge>
       </div>
       {preview.description ? (
@@ -1743,9 +1743,9 @@ function BiActionPreview({ action }: { action: ChatAction }) {
       <div className="overflow-hidden rounded-md border bg-background">
         <div className="h-44 p-2">
           {preview.card_kind === "chart" && preview.chart ? (
-            <MiniBiChart preview={preview} />
+            <MiniDatapanelChart preview={preview} />
           ) : (
-            <MiniBiTable preview={preview} />
+            <MiniDatapanelTable preview={preview} />
           )}
         </div>
       </div>
@@ -1754,10 +1754,10 @@ function BiActionPreview({ action }: { action: ChatAction }) {
   );
 }
 
-function MiniBiTable({
+function MiniDatapanelTable({
   preview,
 }: {
-  preview: Extract<NonNullable<ChatAction["preview"]>, { kind: "bi_card" }>;
+  preview: Extract<NonNullable<ChatAction["preview"]>, { kind: "datapanel_card" }>;
 }) {
   const { t } = useI18n();
 
@@ -1772,16 +1772,16 @@ function MiniBiTable({
   );
 }
 
-function MiniBiChart({
+function MiniDatapanelChart({
   preview,
 }: {
-  preview: Extract<NonNullable<ChatAction["preview"]>, { kind: "bi_card" }>;
+  preview: Extract<NonNullable<ChatAction["preview"]>, { kind: "datapanel_card" }>;
 }) {
   const rows = preview.result.rows as Record<string, unknown>[];
   const chart = preview.chart;
 
   if (!chart) {
-    return <MiniBiTable preview={preview} />;
+    return <MiniDatapanelTable preview={preview} />;
   }
 
   const colors = [

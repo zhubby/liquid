@@ -8,7 +8,7 @@ Tailwind CSS v4 variables from `app/globals.css`.
 
 - Build the operational dashboard first; do not add a marketing landing page.
 - Use shadcn/ui primitives before adding project-specific styling.
-- Keep the interface dense, readable, and predictable for repeated BI work.
+- Keep the interface dense, readable, and predictable for repeated datapanel work.
 - Prefer neutral surfaces, subtle borders, and default shadows.
 - Do not add translucent blur layers, refraction effects, or decorative
   background gradients.

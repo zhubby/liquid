@@ -45,10 +45,10 @@ import { toast } from "sonner";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import {
-  type BiCardLayoutUpdate,
-  type BiPanel,
-  type BiPanelCard,
-  type BiPanelExport,
+  type DatapanelCardLayoutUpdate,
+  type Datapanel,
+  type DatapanelCard,
+  type DatapanelExport,
   type ManagedDatabase,
   apiRequest,
 } from "@/lib/api";
@@ -56,7 +56,7 @@ import { QueryResultTable } from "@/components/query-result-table";
 import { useI18n } from "@/lib/i18n";
 import { cn } from "@/lib/utils";
 
-type BiWorkspacePanelProps = {
+type DatapanelWorkspacePanelProps = {
   token: string;
   conversationId: string;
   selectedDatabase: ManagedDatabase;
@@ -84,14 +84,14 @@ const chartBase = {
   tooltipText: "var(--popover-foreground)",
 };
 
-export function BiWorkspacePanel({
+export function DatapanelWorkspacePanel({
   token,
   conversationId,
   selectedDatabase,
-}: BiWorkspacePanelProps) {
+}: DatapanelWorkspacePanelProps) {
   const { t } = useI18n();
   const { width, containerRef, mounted } = useContainerWidth();
-  const [panel, setPanel] = useState<BiPanel | null>(null);
+  const [panel, setPanel] = useState<Datapanel | null>(null);
   const [titleInput, setTitleInput] = useState("");
   const [descriptionInput, setDescriptionInput] = useState("");
   const [isLoading, setIsLoading] = useState(true);
@@ -105,8 +105,8 @@ export function BiWorkspacePanel({
     setIsLoading(true);
 
     try {
-      const nextPanel = await apiRequest<BiPanel>(
-        `/api/v1/chat/conversations/${conversationId}/bi-panel`,
+      const nextPanel = await apiRequest<Datapanel>(
+        `/api/v1/chat/conversations/${conversationId}/datapanel`,
         { token },
       );
       setPanel(nextPanel);
@@ -164,8 +164,8 @@ export function BiWorkspacePanel({
     setIsSavingPanel(true);
 
     try {
-      const updated = await apiRequest<BiPanel>(
-        `/api/v1/chat/conversations/${conversationId}/bi-panel`,
+      const updated = await apiRequest<Datapanel>(
+        `/api/v1/chat/conversations/${conversationId}/datapanel`,
         {
           method: "PATCH",
           token,
@@ -203,7 +203,7 @@ export function BiWorkspacePanel({
         return;
       }
 
-      const updates = nextLayout.map<BiCardLayoutUpdate>((item) => ({
+      const updates = nextLayout.map<DatapanelCardLayoutUpdate>((item) => ({
         card_id: item.i,
         layout: {
           x: item.x,
@@ -232,7 +232,7 @@ export function BiWorkspacePanel({
 
       setIsSavingLayout(true);
       layoutSaveRef.current = setTimeout(() => {
-        void apiRequest<BiPanel>(`/api/v1/bi-panels/${panel.id}/layout`, {
+        void apiRequest<Datapanel>(`/api/v1/datapanels/${panel.id}/layout`, {
           method: "PATCH",
           token,
           body: { cards: updates },
@@ -264,8 +264,8 @@ export function BiWorkspacePanel({
       }
 
       try {
-        const updated = await apiRequest<BiPanelCard>(
-          `/api/v1/bi-panels/${panel.id}/cards/${cardId}`,
+        const updated = await apiRequest<DatapanelCard>(
+          `/api/v1/datapanels/${panel.id}/cards/${cardId}`,
           {
             method: "PATCH",
             token,
@@ -300,8 +300,8 @@ export function BiWorkspacePanel({
       setRefreshingCardId(cardId);
 
       try {
-        const updated = await apiRequest<BiPanelCard>(
-          `/api/v1/bi-panels/${panel.id}/cards/${cardId}/refresh`,
+        const updated = await apiRequest<DatapanelCard>(
+          `/api/v1/datapanels/${panel.id}/cards/${cardId}/refresh`,
           {
             method: "POST",
             token,
@@ -338,7 +338,7 @@ export function BiWorkspacePanel({
       setDeletingCardId(cardId);
 
       try {
-        await apiRequest<void>(`/api/v1/bi-panels/${panel.id}/cards/${cardId}`, {
+        await apiRequest<void>(`/api/v1/datapanels/${panel.id}/cards/${cardId}`, {
           method: "DELETE",
           token,
         });
@@ -366,8 +366,8 @@ export function BiWorkspacePanel({
     }
 
     try {
-      const exported = await apiRequest<BiPanelExport>(
-        `/api/v1/bi-panels/${panel.id}/export`,
+      const exported = await apiRequest<DatapanelExport>(
+        `/api/v1/datapanels/${panel.id}/export`,
         { token },
       );
       downloadJson(`${safeFileName(panel.title)}.json`, exported);
@@ -444,7 +444,7 @@ export function BiWorkspacePanel({
           <div className="space-y-3">
             {panel.cards.map((card) => (
               <div key={card.id} className="h-[360px] min-h-0 min-w-0">
-                <BiCard
+                <DatapanelCard
                   card={card}
                   isRefreshing={refreshingCardId === card.id}
                   isDeleting={deletingCardId === card.id}
@@ -471,8 +471,8 @@ export function BiWorkspacePanel({
             }}
             dragConfig={{
               enabled: true,
-              handle: ".bi-card-drag-handle",
-              cancel: ".bi-card-no-drag",
+              handle: ".datapanel-card-drag-handle",
+              cancel: ".datapanel-card-no-drag",
               bounded: true,
             }}
             resizeConfig={{
@@ -484,7 +484,7 @@ export function BiWorkspacePanel({
           >
             {panel.cards.map((card) => (
               <div key={card.id} className="min-w-0">
-                <BiCard
+                <DatapanelCard
                   card={card}
                   isRefreshing={refreshingCardId === card.id}
                   isDeleting={deletingCardId === card.id}
@@ -522,7 +522,7 @@ function BiEmptyState() {
   );
 }
 
-function BiCard({
+function DatapanelCard({
   card,
   isRefreshing,
   isDeleting,
@@ -531,7 +531,7 @@ function BiCard({
   onRefresh,
   onDelete,
 }: {
-  card: BiPanelCard;
+  card: DatapanelCard;
   isRefreshing: boolean;
   isDeleting: boolean;
   isStacked: boolean;
@@ -571,14 +571,14 @@ function BiCard({
     <article className="flex h-full min-h-0 min-w-0 flex-col overflow-hidden rounded-lg border bg-background shadow-xs">
       <header
         className={cn(
-          "bi-card-drag-handle flex shrink-0 items-start gap-2 border-b bg-muted/40 px-3 py-2",
+          "datapanel-card-drag-handle flex shrink-0 items-start gap-2 border-b bg-muted/40 px-3 py-2",
           isStacked ? "cursor-default" : "cursor-move",
         )}
       >
         <GripVertical className="mt-1 size-4 shrink-0 text-muted-foreground" aria-hidden />
         <div className="min-w-0 flex-1">
           <input
-            className="bi-card-no-drag w-full truncate rounded-sm bg-transparent text-sm font-medium outline-none hover:bg-background/70 focus-visible:bg-background focus-visible:ring-[3px] focus-visible:ring-ring/50"
+            className="datapanel-card-no-drag w-full truncate rounded-sm bg-transparent text-sm font-medium outline-none hover:bg-background/70 focus-visible:bg-background focus-visible:ring-[3px] focus-visible:ring-ring/50"
             value={titleInput}
             aria-label={t.dashboard.cardTitleLabel}
             onChange={(event) => setTitleInput(event.target.value)}
@@ -587,7 +587,7 @@ function BiCard({
           />
           {isEditing ? (
             <textarea
-              className="bi-card-no-drag mt-1 max-h-16 min-h-8 w-full resize-none rounded-sm bg-background px-2 py-1 text-xs leading-5 text-muted-foreground outline-none focus-visible:ring-[3px] focus-visible:ring-ring/50"
+              className="datapanel-card-no-drag mt-1 max-h-16 min-h-8 w-full resize-none rounded-sm bg-background px-2 py-1 text-xs leading-5 text-muted-foreground outline-none focus-visible:ring-[3px] focus-visible:ring-ring/50"
               value={descriptionInput}
               aria-label={t.dashboard.cardDescriptionLabel}
               onChange={(event) => setDescriptionInput(event.target.value)}
@@ -599,7 +599,7 @@ function BiCard({
             </p>
           )}
         </div>
-        <div className="bi-card-no-drag flex shrink-0 items-center gap-1">
+        <div className="datapanel-card-no-drag flex shrink-0 items-center gap-1">
           <Badge variant="outline" className="h-6 rounded-md">
             {t.dashboard.cardKinds[card.kind]}
           </Badge>
@@ -640,9 +640,9 @@ function BiCard({
       </header>
       <div className="min-h-0 flex-1 overflow-hidden px-3 py-3">
         {card.kind === "chart" && card.chart ? (
-          <BiChart card={card} />
+          <DatapanelChart card={card} />
         ) : (
-          <BiTable card={card} />
+          <DatapanelTable card={card} />
         )}
       </div>
     </article>
@@ -681,7 +681,7 @@ function IconButton({
   );
 }
 
-function BiTable({ card }: { card: BiPanelCard }) {
+function DatapanelTable({ card }: { card: DatapanelCard }) {
   const { t } = useI18n();
 
   return (
@@ -692,12 +692,12 @@ function BiTable({ card }: { card: BiPanelCard }) {
   );
 }
 
-function BiChart({ card }: { card: BiPanelCard }) {
+function DatapanelChart({ card }: { card: DatapanelCard }) {
   const rows = card.result.rows as RowValue[];
   const chart = card.chart;
 
   if (!chart) {
-    return <BiTable card={card} />;
+    return <DatapanelTable card={card} />;
   }
 
   if (chart.chart_type === "pie") {
@@ -857,7 +857,7 @@ function handleCommitKey(
   }
 }
 
-function sameLayout(panel: BiPanel, layout: Layout) {
+function sameLayout(panel: Datapanel, layout: Layout) {
   return panel.cards.every((card) => {
     const item = layout.find((item) => item.i === card.id);
 
@@ -872,7 +872,7 @@ function sameLayout(panel: BiPanel, layout: Layout) {
 }
 
 function safeFileName(value: string) {
-  return value.trim().replace(/[^a-z0-9-_]+/gi, "-").replace(/^-|-$/g, "") || "bi-panel";
+  return value.trim().replace(/[^a-z0-9-_]+/gi, "-").replace(/^-|-$/g, "") || "datapanel";
 }
 
 function downloadJson(fileName: string, value: unknown) {

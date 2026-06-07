@@ -23,7 +23,7 @@ const SQLX_LOGS_ENV: &str = "LIQUID_SQLX_LOGS";
 #[command(
     name = "liquid",
     version,
-    about = "Liquid SQL AI audit and BI dashboard"
+    about = "Liquid SQL AI audit and datapanel dashboard"
 )]
 struct Cli {
     #[command(subcommand)]

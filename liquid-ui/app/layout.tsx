@@ -10,7 +10,7 @@ import "./globals.css";
 
 export const metadata: Metadata = {
   title: "Liquid",
-  description: "SQL AI audit and BI dashboard",
+  description: "SQL AI audit and datapanel dashboard",
 };
 
 export default function RootLayout({
