@@ -73,6 +73,10 @@ pub(crate) fn parse_audit_report(content: &str) -> Result<SqlAuditReport> {
         return Ok(report);
     }
 
+    if let Some(report) = embedded_json_report(trimmed) {
+        return Ok(report);
+    }
+
     bail!("LLM audit report was not valid JSON")
 }
 
@@ -87,6 +91,20 @@ fn fenced_json(content: &str) -> Option<&str> {
     let end = json_start.find("```")?;
 
     Some(json_start[..end].trim())
+}
+
+fn embedded_json_report(content: &str) -> Option<SqlAuditReport> {
+    content
+        .char_indices()
+        .filter(|(_, character)| *character == '{')
+        .find_map(|(index, _)| json_report_prefix(&content[index..]))
+}
+
+fn json_report_prefix(content: &str) -> Option<SqlAuditReport> {
+    serde_json::Deserializer::from_str(content)
+        .into_iter::<SqlAuditReport>()
+        .next()
+        .and_then(|result| result.ok())
 }
 
 #[cfg(test)]
@@ -107,5 +125,21 @@ mod tests {
         .unwrap();
 
         assert_eq!(report.risk_score, 12);
+    }
+
+    #[test]
+    fn parses_embedded_json_report() {
+        let report = parse_audit_report(
+            r#"Audit complete:
+            {
+                "summary": "ok",
+                "risk_score": 7,
+                "findings": []
+            }
+            Use the approval flow before execution."#,
+        )
+        .unwrap();
+
+        assert_eq!(report.risk_score, 7);
     }
 }

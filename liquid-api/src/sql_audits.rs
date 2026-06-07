@@ -7,9 +7,9 @@ use axum::{
 use liquid_agent::{PostgresToolConfig, SqlAuditAgent, ToolCallingSqlAuditAgent};
 use liquid_core::{
     ApproveSqlAuditRequest, CreateSqlAuditRequest, DatapanelQueryResult, ManagedDatabase,
-    ManagedDatabasePoolKey, RejectSqlAuditRequest, SqlAuditExecutionResult,
-    SqlAuditExecutionStatus, SqlAuditLifecycleStatus, SqlAuditRecord, SqlAuditStatus,
-    SqlStatementKind,
+    ManagedDatabasePoolKey, RejectSqlAuditRequest, RiskSeverity, SqlAuditExecutionResult,
+    SqlAuditExecutionStatus, SqlAuditFinding, SqlAuditLifecycleStatus, SqlAuditRecord,
+    SqlAuditReport, SqlAuditStatus, SqlStatementKind,
 };
 use liquid_sql::{
     PgSqlAnalysis, PgSqlAnalysisRequest, PgSqlRiskSeverity, PgSqlStatementKind,
@@ -96,10 +96,24 @@ pub(crate) async fn create_sql_audit_for_user(
     ));
     let agent = sql_audit_agent_for_user(state, owner_user_id).await?;
     let agent_started_at = Instant::now();
-    let report = agent
+    let report = match agent
         .audit_sql_with_tools(request.clone().into_audit_request(), tools)
         .await
-        .map_err(ApiError::internal)?;
+    {
+        Ok(report) => report,
+        Err(error) if invalid_llm_audit_report(&error) => {
+            let message = error.to_string();
+            tracing::warn!(
+                managed_database_id,
+                statement_kind = ?statement_kind.as_ref(),
+                error = %message,
+                elapsed_ms = agent_started_at.elapsed().as_millis(),
+                "SQL audit agent returned an invalid report; using deterministic analysis fallback"
+            );
+            deterministic_audit_report(&analysis, &message)
+        }
+        Err(error) => return Err(ApiError::internal(error)),
+    };
     tracing::info!(
         managed_database_id,
         statement_kind = ?statement_kind.as_ref(),
@@ -503,6 +517,71 @@ fn has_critical_finding(analysis: &PgSqlAnalysis) -> bool {
         .findings
         .iter()
         .any(|finding| matches!(finding.severity, PgSqlRiskSeverity::Critical))
+}
+
+fn invalid_llm_audit_report(error: &anyhow::Error) -> bool {
+    error.chain().any(|cause| {
+        cause
+            .to_string()
+            .contains("LLM audit report was not valid JSON")
+    })
+}
+
+fn deterministic_audit_report(analysis: &PgSqlAnalysis, llm_error: &str) -> SqlAuditReport {
+    let mut findings = analysis
+        .findings
+        .iter()
+        .map(sql_audit_finding_from_pg)
+        .collect::<Vec<_>>();
+
+    findings.push(SqlAuditFinding {
+        title: "LLM audit report unavailable".to_owned(),
+        severity: RiskSeverity::Low,
+        explanation: format!(
+            "Liquid could not parse the model-generated audit report ({llm_error}), so this audit uses deterministic PostgreSQL parser and rule findings."
+        ),
+        recommendation:
+            "Review the deterministic findings before approval, or rerun the audit for model-level review."
+                .to_owned(),
+    });
+
+    SqlAuditReport {
+        summary:
+            "SQL audit completed from deterministic PostgreSQL parser and rule checks because the model audit report was unavailable."
+                .to_owned(),
+        risk_score: analysis.risk_floor().max(25),
+        findings,
+    }
+}
+
+fn sql_audit_finding_from_pg(finding: &liquid_sql::PgSqlFinding) -> SqlAuditFinding {
+    SqlAuditFinding {
+        title: finding.title.clone(),
+        severity: risk_severity_from_pg(&finding.severity),
+        explanation: finding.detail.clone(),
+        recommendation: deterministic_recommendation(finding),
+    }
+}
+
+fn risk_severity_from_pg(severity: &PgSqlRiskSeverity) -> RiskSeverity {
+    match severity {
+        PgSqlRiskSeverity::Low => RiskSeverity::Low,
+        PgSqlRiskSeverity::Medium => RiskSeverity::Medium,
+        PgSqlRiskSeverity::High => RiskSeverity::High,
+        PgSqlRiskSeverity::Critical => RiskSeverity::Critical,
+    }
+}
+
+fn deterministic_recommendation(finding: &liquid_sql::PgSqlFinding) -> String {
+    let mut recommendation =
+        "Address this deterministic SQL safety finding before approval.".to_owned();
+
+    if let Some(evidence) = finding.evidence.as_deref() {
+        recommendation.push_str(" Evidence: ");
+        recommendation.push_str(evidence);
+    }
+
+    recommendation
 }
 
 fn sql_statement_kind_from_pg(kind: PgSqlStatementKind) -> SqlStatementKind {

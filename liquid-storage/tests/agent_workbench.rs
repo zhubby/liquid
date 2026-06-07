@@ -103,6 +103,22 @@ async fn agent_workbench_store_persists_turn_events_and_actions() {
         .await
         .unwrap();
     assert_eq!(action.status, AgentActionStatus::Proposed);
+    let second_action = storage
+        .create_agent_action(
+            &auth.user.id,
+            &turn.id,
+            CreateAgentActionRequest {
+                kind: AgentActionKind::CreateSqlAudit,
+                title: "Create follow-up SQL audit".to_owned(),
+                description: "Create a follow-up SQL audit record.".to_owned(),
+                payload: json!({ "sql": "insert into users (id) values (1)" }),
+                resource_kind: Some(AgentResourceKind::SqlAudit),
+                resource_id: None,
+                requires_confirmation: true,
+            },
+        )
+        .await
+        .unwrap();
 
     let listed = storage
         .list_agent_actions(
@@ -112,7 +128,13 @@ async fn agent_workbench_store_persists_turn_events_and_actions() {
         )
         .await
         .unwrap();
-    assert_eq!(listed.len(), 1);
+    assert_eq!(
+        listed
+            .iter()
+            .map(|action| action.id.as_str())
+            .collect::<Vec<_>>(),
+        vec![action.id.as_str(), second_action.id.as_str()]
+    );
 }
 
 #[tokio::test]

@@ -603,7 +603,7 @@ pub(crate) async fn list_agent_actions(
         where agent_actions.owner_user_id = $1::uuid
           and ($2::uuid is null or agent_actions.conversation_id = $2::uuid)
           and ($3::text is null or agent_actions.status = $3)
-        order by agent_actions.created_at desc
+        order by agent_actions.created_at asc, agent_actions.id asc
         limit 100
         "#
     ))

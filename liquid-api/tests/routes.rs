@@ -1483,6 +1483,31 @@ impl SqlAuditAgent for CapturingSqlAuditAgent {
     }
 }
 
+struct InvalidJsonSqlAuditAgent;
+
+#[async_trait]
+impl SqlAuditAgent for InvalidJsonSqlAuditAgent {
+    async fn audit_summary(&self) -> anyhow::Result<AuditSummary> {
+        Ok(AuditSummary::sample())
+    }
+
+    async fn audit_sql(&self, _request: SqlAuditRequest) -> anyhow::Result<SqlAuditReport> {
+        Err(anyhow::anyhow!("LLM audit report was not valid JSON"))
+    }
+
+    async fn audit_sql_with_tools(
+        &self,
+        _request: SqlAuditRequest,
+        _tools: ToolRegistry,
+    ) -> anyhow::Result<SqlAuditReport> {
+        Err(anyhow::anyhow!("LLM audit report was not valid JSON"))
+    }
+
+    async fn audit_sql_stream(&self, _request: SqlAuditRequest) -> anyhow::Result<AgentStream> {
+        Err(anyhow::anyhow!("streaming is not supported in route tests"))
+    }
+}
+
 #[derive(Default)]
 struct FakeApprovedSqlExecutor {
     fail_with: Mutex<Option<String>>,
@@ -1511,6 +1536,21 @@ impl ApprovedSqlExecutor for FakeApprovedSqlExecutor {
                 risk_floor: analysis.risk_floor(),
                 analysis,
             })
+        })
+    }
+}
+
+struct PendingApprovedSqlExecutor;
+
+impl ApprovedSqlExecutor for PendingApprovedSqlExecutor {
+    fn execute<'a>(
+        &'a self,
+        _config: PostgresToolConfig,
+        _sql: &'a str,
+    ) -> ApprovedSqlExecutionFuture<'a> {
+        Box::pin(async move {
+            tokio::time::sleep(std::time::Duration::from_secs(60)).await;
+            Err(anyhow::anyhow!("pending test executor should not complete"))
         })
     }
 }
@@ -4096,6 +4136,63 @@ async fn applying_terminal_chat_action_returns_diagnostic_details() {
 }
 
 #[tokio::test]
+async fn applying_sql_action_requires_earlier_same_turn_sql_actions_first() {
+    let store = Arc::new(TestStore::default());
+    let app = test_app_with_agent_store_execution_and_executor(
+        Arc::new(CapturingSqlAuditAgent::default()),
+        store.clone(),
+        PostgresToolExecutionMode::WriteGated,
+        Arc::new(PendingApprovedSqlExecutor),
+    );
+    let (_conversation, create_action, insert_action) =
+        create_dependent_sql_actions_fixture(&store).await;
+
+    let blocked_response = app
+        .clone()
+        .oneshot(auth_json_request(
+            "POST",
+            &format!("/api/v1/chat/actions/{}/apply", insert_action.id),
+            json!({}),
+        ))
+        .await
+        .unwrap();
+    assert_eq!(blocked_response.status(), StatusCode::CONFLICT);
+    let payload = response_json(blocked_response).await;
+    assert_eq!(
+        payload["error"],
+        "earlier SQL action from this turn must be applied before this action"
+    );
+    assert_eq!(payload["details"]["action_id"], insert_action.id);
+    assert_eq!(payload["details"]["blocked_by_action_id"], create_action.id);
+    assert_eq!(payload["details"]["blocked_by_action_status"], "proposed");
+
+    let apply_create_response = app
+        .clone()
+        .oneshot(auth_json_request(
+            "POST",
+            &format!("/api/v1/chat/actions/{}/apply", create_action.id),
+            json!({}),
+        ))
+        .await
+        .unwrap();
+    assert_eq!(apply_create_response.status(), StatusCode::OK);
+    let applying_create = response_json(apply_create_response).await;
+    assert_eq!(applying_create["status"], "applying");
+
+    let still_blocked_response = app
+        .oneshot(auth_json_request(
+            "POST",
+            &format!("/api/v1/chat/actions/{}/apply", insert_action.id),
+            json!({}),
+        ))
+        .await
+        .unwrap();
+    assert_eq!(still_blocked_response.status(), StatusCode::CONFLICT);
+    let payload = response_json(still_blocked_response).await;
+    assert_eq!(payload["details"]["blocked_by_action_status"], "applying");
+}
+
+#[tokio::test]
 async fn applying_failed_chat_action_retries_action() {
     let store = Arc::new(TestStore::default());
     let app = test_app_with_agent_store_execution_and_executor(
@@ -4287,6 +4384,97 @@ async fn create_datapanel_card_action_fixture(
         .unwrap();
 
     (conversation, action)
+}
+
+async fn create_dependent_sql_actions_fixture(
+    store: &Arc<TestStore>,
+) -> (AgentConversation, AgentAction, AgentAction) {
+    let database = store
+        .create_managed_database(
+            "user-1",
+            CreateManagedDatabaseRequest {
+                name: "Warehouse".to_owned(),
+                engine: ManagedDatabaseEngine::Postgres,
+                host: "localhost".to_owned(),
+                port: 5432,
+                database: "warehouse".to_owned(),
+                username: "readonly".to_owned(),
+                password: "password123".to_owned(),
+                tags: None,
+                ssl_mode: ManagedDatabaseSslMode::Disable,
+            },
+        )
+        .await
+        .unwrap();
+    let conversation = store
+        .create_agent_conversation(
+            "user-1",
+            CreateAgentConversationRequest {
+                title: Some("dependent sql workspace".to_owned()),
+                managed_database_id: Some(database.id.clone()),
+            },
+        )
+        .await
+        .unwrap();
+    let turn = store
+        .create_agent_turn(
+            "user-1",
+            &conversation.id,
+            CreateAgentTurnRequest {
+                message: "create test table and insert data".to_owned(),
+                managed_database_id: Some(database.id.clone()),
+                dashboard_context: None,
+                client_request_id: None,
+            },
+        )
+        .await
+        .unwrap();
+    let create_action = store
+        .create_agent_action(
+            "user-1",
+            &turn.id,
+            CreateAgentActionRequest {
+                kind: AgentActionKind::CreateSqlAudit,
+                title: "Create test table".to_owned(),
+                description: "Create the table before inserting rows.".to_owned(),
+                payload: json!({
+                    "managed_database_id": database.id,
+                    "request": {
+                        "sql": "create table test (id integer primary key)",
+                        "execution_purpose": "Create test table"
+                    }
+                }),
+                resource_kind: Some(AgentResourceKind::SqlAudit),
+                resource_id: None,
+                requires_confirmation: true,
+            },
+        )
+        .await
+        .unwrap();
+    let insert_action = store
+        .create_agent_action(
+            "user-1",
+            &turn.id,
+            CreateAgentActionRequest {
+                kind: AgentActionKind::CreateSqlAudit,
+                title: "Insert test rows".to_owned(),
+                description: "Insert rows after the test table exists.".to_owned(),
+                payload: json!({
+                    "managed_database_id": database.id,
+                    "request": {
+                        "sql": "insert into test (id) values (1)",
+                        "execution_purpose": "Insert test rows"
+                    }
+                }),
+                resource_kind: Some(AgentResourceKind::SqlAudit),
+                resource_id: None,
+                requires_confirmation: true,
+            },
+        )
+        .await
+        .unwrap();
+
+    (conversation, create_action, insert_action)
 }
 
 #[tokio::test]
@@ -5323,6 +5511,48 @@ async fn sql_audit_uses_user_llm_provider_settings_when_configured() {
 
     let captured = captured_body.lock().unwrap().clone().unwrap();
     assert_eq!(captured["model"], "user-model");
+}
+
+#[tokio::test]
+async fn sql_audit_falls_back_to_deterministic_report_when_llm_report_is_invalid_json() {
+    let app = test_app_with_agent_and_execution(
+        Arc::new(InvalidJsonSqlAuditAgent),
+        PostgresToolExecutionMode::WriteGated,
+    );
+    create_test_database(&app).await;
+
+    let response = app
+        .clone()
+        .oneshot(auth_json_request(
+            "POST",
+            "/api/v1/managed-databases/db-1/sql-audits",
+            json!({
+                "sql": "create table test (id integer primary key)",
+                "execution_purpose": "Create test table from chat"
+            }),
+        ))
+        .await
+        .unwrap();
+
+    assert_eq!(response.status(), StatusCode::CREATED);
+    let payload = response_json(response).await;
+    assert_eq!(payload["status"], "pending_approval");
+    assert_eq!(payload["statement_kind"], "create");
+    assert_eq!(payload["risk_score"], 25);
+    assert_eq!(payload["report"]["risk_score"], 25);
+    assert!(
+        payload["report"]["summary"]
+            .as_str()
+            .unwrap()
+            .contains("deterministic PostgreSQL parser")
+    );
+    assert!(
+        payload["report"]["findings"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .any(|finding| finding["title"] == "LLM audit report unavailable")
+    );
 }
 
 #[tokio::test]

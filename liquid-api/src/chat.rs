@@ -13,8 +13,8 @@ use axum::{
 };
 use futures_util::Stream;
 use liquid_core::{
-    AgentAction, AgentActionStatus, AgentConversation, AgentEventRecord, AgentEventType,
-    AgentMessage, AgentMessageRole, AgentTurn, AgentTurnStatus, ChatAction,
+    AgentAction, AgentActionKind, AgentActionStatus, AgentConversation, AgentEventRecord,
+    AgentEventType, AgentMessage, AgentMessageRole, AgentTurn, AgentTurnStatus, ChatAction,
     ChatActionDecisionRequest, ChatActionPreview, ChatConversation, ChatErrorCode,
     ChatManagedDatabaseSummary, ChatMessage, ChatMessagePart, ChatMessageStatus,
     ChatSqlExecutionResponse, ChatStreamEvent, ChatStreamStage, ChatToolStatus, ChatTurn,
@@ -648,6 +648,7 @@ async fn apply_action(
             details,
         ));
     }
+    ensure_action_dependencies_ready(&state, &user.id, &action).await?;
 
     let apply_started_at = Instant::now();
     tracing::info!(
@@ -700,6 +701,55 @@ async fn apply_action(
         applying,
         stream_after_seq,
     )))
+}
+
+async fn ensure_action_dependencies_ready(
+    state: &ApiState,
+    owner_user_id: &str,
+    action: &AgentAction,
+) -> Result<(), ApiError> {
+    if !matches!(action.kind, AgentActionKind::CreateSqlAudit) {
+        return Ok(());
+    }
+
+    let actions = state
+        .store
+        .list_agent_actions(owner_user_id, Some(&action.conversation_id), None)
+        .await?;
+    let mut same_turn_sql_actions = actions
+        .into_iter()
+        .filter(|candidate| {
+            candidate.turn_id == action.turn_id
+                && matches!(candidate.kind, AgentActionKind::CreateSqlAudit)
+        })
+        .collect::<Vec<_>>();
+
+    same_turn_sql_actions.sort_by(|left, right| {
+        left.created_at
+            .cmp(&right.created_at)
+            .then_with(|| left.id.cmp(&right.id))
+    });
+
+    for candidate in same_turn_sql_actions {
+        if candidate.id == action.id {
+            return Ok(());
+        }
+
+        if candidate.status != AgentActionStatus::Applied {
+            return Err(ApiError::conflict_with_details(
+                "earlier SQL action from this turn must be applied before this action",
+                serde_json::json!({
+                    "action_id": action.id,
+                    "blocked_by_action_id": candidate.id,
+                    "blocked_by_action_status": candidate.status.as_str(),
+                    "turn_id": action.turn_id,
+                    "conversation_id": action.conversation_id,
+                }),
+            ));
+        }
+    }
+
+    Ok(())
 }
 
 fn action_error_details(action: &AgentAction) -> Value {
