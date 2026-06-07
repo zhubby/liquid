@@ -1,7 +1,22 @@
 "use client";
 
-import { type FormEvent, useEffect, useState } from "react";
-import { Database, Loader2, LockKeyhole, ShieldCheck } from "lucide-react";
+import { type FormEvent, type ReactNode, useEffect, useState } from "react";
+import {
+  Activity,
+  CheckCircle2,
+  Database,
+  Eye,
+  EyeOff,
+  KeyRound,
+  Loader2,
+  LockKeyhole,
+  Mail,
+  Server,
+  ShieldCheck,
+  TerminalSquare,
+  type LucideIcon,
+  UserRound,
+} from "lucide-react";
 import { toast } from "sonner";
 
 import { AuditDashboard } from "@/components/audit-dashboard";
@@ -27,6 +42,7 @@ import { cn } from "@/lib/utils";
 const TOKEN_STORAGE_KEY = "liquid.auth.token";
 
 type AuthMode = "login" | "register";
+type AuthMessages = ReturnType<typeof useI18n>["t"]["auth"];
 
 export function LiquidApp() {
   const [token, setToken] = useState<string | null>(null);
@@ -176,9 +192,11 @@ function AuthScreen({
   const [email, setEmail] = useState("");
   const [displayName, setDisplayName] = useState("");
   const [password, setPassword] = useState("");
+  const [showPassword, setShowPassword] = useState(false);
   const [isSubmitting, setIsSubmitting] = useState(false);
 
   const isRegister = mode === "register";
+  const auth = t.auth;
 
   const handleSubmit = async (event: FormEvent<HTMLFormElement>) => {
     event.preventDefault();
@@ -211,103 +229,110 @@ function AuthScreen({
   };
 
   return (
-    <main className="min-h-screen overflow-x-hidden bg-muted/30 p-3 text-foreground">
-      <div className="mx-auto grid min-h-[calc(100vh-1.5rem)] w-full min-w-0 max-w-[calc(100vw-1.5rem)] gap-3 lg:max-w-5xl lg:grid-cols-[1fr_420px]">
-        <section className="flex min-h-[320px] min-w-0 max-w-full flex-col justify-between overflow-hidden rounded-lg border bg-card p-5 text-card-foreground shadow-sm">
-          <div>
-            <div className="flex items-center gap-2">
-              <div className="flex size-10 items-center justify-center rounded-md bg-primary text-primary-foreground">
-                <ShieldCheck className="size-5" aria-hidden />
-              </div>
-              <div>
-                <h1 className="text-lg font-semibold">Liquid SQL Audit</h1>
-                <p className="mt-1 text-xs text-muted-foreground">
-                  {t.auth.subtitle}
+    <main className="min-h-screen overflow-x-hidden bg-muted/30 p-3 text-foreground sm:p-4">
+      <div className="mx-auto grid w-full min-w-0 max-w-[calc(100vw-1.5rem)] gap-4 lg:min-h-[calc(100vh-2rem)] lg:max-w-6xl lg:grid-cols-[minmax(0,1fr)_minmax(360px,420px)] lg:items-center">
+        <AuthWorkbench auth={auth} />
+
+        <Card className="w-full min-w-0 max-w-full self-start overflow-hidden rounded-lg py-5 shadow-xs lg:self-center">
+          <CardHeader className="gap-4 px-5 sm:px-6">
+            <div className="flex items-center justify-between gap-3">
+              <div className="min-w-0">
+                <CardTitle className="text-base">
+                  {isRegister ? auth.registerTitle : auth.loginTitle}
+                </CardTitle>
+                <p className="mt-1 text-sm leading-5 text-muted-foreground">
+                  {isRegister
+                    ? auth.registerDescription
+                    : auth.loginDescription}
                 </p>
               </div>
-            </div>
-            <div className="mt-6 grid gap-3 sm:grid-cols-3">
-              <StatusItem label={t.auth.status.session} value="Bearer token" />
-              <StatusItem
-                label={t.auth.status.credential}
-                value={t.auth.status.encryptedStorage}
-              />
-              <StatusItem label={t.auth.status.database} value="Postgres" />
-            </div>
-          </div>
-
-          <div className="mt-6 rounded-lg border bg-background p-4">
-            <div className="flex items-center gap-2 text-sm font-medium">
-              <Database className="size-4 text-muted-foreground" aria-hidden />
-              {t.auth.managedByLiquid}
-            </div>
-            <p className="mt-2 max-w-2xl text-sm leading-6 text-muted-foreground">
-              {t.auth.managedDescription}
-            </p>
-          </div>
-        </section>
-
-        <Card className="w-full min-w-0 max-w-full self-center overflow-hidden rounded-lg py-5 shadow-xs">
-          <CardHeader className="gap-3 px-5">
-            <div className="flex items-center justify-between gap-3">
-              <CardTitle className="text-base">
-                {isRegister ? t.auth.registerTitle : t.auth.loginTitle}
-              </CardTitle>
               <Badge variant="secondary" className="rounded-md">
-                {isRegister ? t.auth.registerBadge : t.auth.loginBadge}
+                {isRegister ? auth.registerBadge : auth.loginBadge}
               </Badge>
             </div>
             <div className="grid grid-cols-2 rounded-md border bg-muted/40 p-1">
               <ModeButton
                 active={mode === "login"}
-                label={t.auth.loginTab}
+                disabled={isSubmitting}
+                label={auth.loginTab}
                 onClick={() => setMode("login")}
               />
               <ModeButton
                 active={mode === "register"}
-                label={t.auth.registerTab}
+                disabled={isSubmitting}
+                label={auth.registerTab}
                 onClick={() => setMode("register")}
               />
             </div>
           </CardHeader>
-          <CardContent className="px-5">
-            <form className="space-y-3" onSubmit={handleSubmit}>
+          <CardContent className="px-5 sm:px-6">
+            <form className="space-y-4" onSubmit={handleSubmit}>
               <Field
                 id="email"
-                label={t.auth.email}
+                autoComplete="email"
+                disabled={isSubmitting}
+                icon={Mail}
+                label={auth.email}
+                placeholder={auth.emailPlaceholder}
+                required
                 type="email"
                 value={email}
                 onChange={setEmail}
-                autoComplete="email"
-                required
               />
               {isRegister ? (
                 <Field
                   id="display-name"
-                  label={t.auth.displayName}
+                  autoComplete="name"
+                  disabled={isSubmitting}
+                  icon={UserRound}
+                  label={auth.displayName}
+                  placeholder={auth.displayNamePlaceholder}
+                  required
                   value={displayName}
                   onChange={setDisplayName}
-                  autoComplete="name"
-                  required
                 />
               ) : null}
               <Field
                 id="password"
-                label={t.auth.password}
-                type="password"
+                autoComplete={isRegister ? "new-password" : "current-password"}
+                disabled={isSubmitting}
+                icon={KeyRound}
+                label={auth.password}
+                placeholder={auth.passwordPlaceholder}
                 value={password}
                 onChange={setPassword}
-                autoComplete={isRegister ? "new-password" : "current-password"}
+                type={showPassword ? "text" : "password"}
                 required
+                trailing={
+                  <button
+                    type="button"
+                    aria-label={
+                      showPassword ? auth.hidePassword : auth.showPassword
+                    }
+                    className="absolute right-1.5 top-1/2 flex size-7 -translate-y-1/2 items-center justify-center rounded-md text-muted-foreground outline-none transition-colors hover:bg-accent hover:text-foreground focus-visible:ring-[3px] focus-visible:ring-ring/50 disabled:pointer-events-none disabled:opacity-50"
+                    disabled={isSubmitting}
+                    onClick={() => setShowPassword((visible) => !visible)}
+                  >
+                    {showPassword ? (
+                      <EyeOff className="size-4" aria-hidden />
+                    ) : (
+                      <Eye className="size-4" aria-hidden />
+                    )}
+                  </button>
+                }
               />
 
-              <Button type="submit" className="w-full" disabled={isSubmitting}>
+              <Button
+                type="submit"
+                className="h-10 w-full"
+                disabled={isSubmitting}
+              >
                 {isSubmitting ? (
                   <Loader2 className="size-4 animate-spin" aria-hidden />
                 ) : (
                   <LockKeyhole className="size-4" aria-hidden />
                 )}
-                {isRegister ? t.auth.createAccount : t.auth.login}
+                {isRegister ? auth.createAccount : auth.login}
               </Button>
             </form>
           </CardContent>
@@ -317,21 +342,211 @@ function AuthScreen({
   );
 }
 
-function StatusItem({ label, value }: { label: string; value: string }) {
+function AuthWorkbench({ auth }: { auth: AuthMessages }) {
   return (
-    <div className="rounded-lg border bg-background p-3">
-      <div className="text-xs text-muted-foreground">{label}</div>
-      <div className="mt-1 text-sm font-medium">{value}</div>
+    <section className="min-w-0 max-w-full overflow-hidden rounded-lg border bg-card text-card-foreground shadow-sm">
+      <div className="border-b p-5 sm:p-6">
+        <div className="flex flex-col gap-4 sm:flex-row sm:items-start sm:justify-between">
+          <div className="flex min-w-0 items-start gap-3">
+            <div className="flex size-11 shrink-0 items-center justify-center rounded-lg bg-primary text-primary-foreground shadow-sm">
+              <ShieldCheck className="size-5" aria-hidden />
+            </div>
+            <div className="min-w-0">
+              <Badge variant="outline" className="mb-2 rounded-md">
+                {auth.workspaceBadge}
+              </Badge>
+              <h1 className="text-balance text-xl font-semibold tracking-normal sm:text-2xl">
+                Liquid SQL Audit
+              </h1>
+              <p className="mt-2 max-w-2xl text-sm leading-6 text-muted-foreground">
+                {auth.subtitle}
+              </p>
+            </div>
+          </div>
+        </div>
+      </div>
+
+      <div className="hidden gap-4 p-5 sm:p-6 md:grid xl:grid-cols-[minmax(0,0.85fr)_minmax(0,1.15fr)]">
+        <div className="min-w-0 space-y-3">
+          <StatusItem
+            icon={ShieldCheck}
+            label={auth.status.session}
+            value={auth.status.tokenSession}
+          />
+          <StatusItem
+            icon={LockKeyhole}
+            label={auth.status.credential}
+            value={auth.status.encryptedStorage}
+          />
+          <StatusItem
+            icon={Database}
+            label={auth.status.database}
+            value={auth.status.postgresConnections}
+          />
+
+          <div className="min-w-0 rounded-lg border bg-background p-4">
+            <div className="flex items-center gap-2 text-sm font-medium">
+              <Server className="size-4 text-muted-foreground" aria-hidden />
+              {auth.managedByLiquid}
+            </div>
+            <p className="mt-2 text-sm leading-6 text-muted-foreground">
+              {auth.managedDescription}
+            </p>
+          </div>
+        </div>
+
+        <div className="min-w-0 overflow-hidden rounded-lg border bg-background shadow-xs">
+          <div className="flex flex-col gap-2 border-b p-4 sm:flex-row sm:items-start sm:justify-between">
+            <div className="min-w-0">
+              <div className="flex items-center gap-2 text-sm font-medium">
+                <TerminalSquare
+                  className="size-4 text-muted-foreground"
+                  aria-hidden
+                />
+                {auth.preview.title}
+              </div>
+              <p className="mt-1 text-xs leading-5 text-muted-foreground">
+                {auth.preview.description}
+              </p>
+            </div>
+            <Badge variant="secondary" className="shrink-0 rounded-md">
+              {auth.preview.badge}
+            </Badge>
+          </div>
+
+          <div className="space-y-4 p-4">
+            <div className="max-w-full overflow-hidden rounded-md border bg-muted/40">
+              <div className="flex items-center justify-between border-b px-3 py-2">
+                <span className="text-xs font-medium text-muted-foreground">
+                  {auth.preview.queryLabel}
+                </span>
+                <RiskPill label={auth.preview.reviewRequired} />
+              </div>
+              <pre className="overflow-x-auto p-3 text-xs leading-6 text-foreground">
+                <code>{`update invoices
+set status = 'void'
+where approved_by is null;`}</code>
+              </pre>
+            </div>
+
+            <div className="grid gap-2">
+              <RiskRow
+                label={auth.preview.policyFinding}
+                status={auth.preview.requiresReview}
+                tone="critical"
+              />
+              <RiskRow
+                label={auth.preview.credentialFinding}
+                status={auth.preview.protected}
+                tone="watch"
+              />
+              <RiskRow
+                label={auth.preview.databaseFinding}
+                status={auth.preview.ready}
+                tone="ok"
+              />
+            </div>
+
+            <div className="grid gap-2 rounded-md border bg-card p-3">
+              <div className="flex items-center gap-2 text-xs font-medium text-muted-foreground">
+                <Activity className="size-3.5" aria-hidden />
+                {auth.preview.flowTitle}
+              </div>
+              <div className="grid gap-2 sm:grid-cols-3">
+                <FlowStep label={auth.preview.flowConnect} />
+                <FlowStep label={auth.preview.flowAudit} />
+                <FlowStep label={auth.preview.flowGate} />
+              </div>
+            </div>
+          </div>
+        </div>
+      </div>
+    </section>
+  );
+}
+
+function StatusItem({
+  icon: Icon,
+  label,
+  value,
+}: {
+  icon: LucideIcon;
+  label: string;
+  value: string;
+}) {
+  return (
+    <div className="flex items-center gap-3 rounded-lg border bg-background p-3 shadow-xs">
+      <div className="flex size-9 shrink-0 items-center justify-center rounded-md border bg-muted/40 text-muted-foreground">
+        <Icon className="size-4" aria-hidden />
+      </div>
+      <div className="min-w-0">
+        <div className="text-xs text-muted-foreground">{label}</div>
+        <div className="mt-1 truncate text-sm font-medium">{value}</div>
+      </div>
+    </div>
+  );
+}
+
+function RiskPill({ label }: { label: string }) {
+  return (
+    <span className="inline-flex shrink-0 items-center gap-1.5 rounded-md border border-destructive/30 bg-destructive/10 px-2 py-0.5 text-xs font-medium text-destructive">
+      <span className="size-1.5 rounded-full bg-destructive" />
+      {label}
+    </span>
+  );
+}
+
+function RiskRow({
+  label,
+  status,
+  tone,
+}: {
+  label: string;
+  status: string;
+  tone: "critical" | "watch" | "ok";
+}) {
+  const markerColor =
+    tone === "critical"
+      ? "var(--destructive)"
+      : tone === "watch"
+        ? "var(--chart-4)"
+        : "var(--chart-2)";
+
+  return (
+    <div className="flex min-w-0 items-center justify-between gap-3 rounded-md border bg-card px-3 py-2 text-sm">
+      <div className="flex min-w-0 items-center gap-2">
+        <span
+          className="size-2 shrink-0 rounded-full"
+          style={{ backgroundColor: markerColor }}
+        />
+        <span className="truncate">{label}</span>
+      </div>
+      <span className="shrink-0 text-xs text-muted-foreground">{status}</span>
+    </div>
+  );
+}
+
+function FlowStep({ label }: { label: string }) {
+  return (
+    <div className="flex items-center gap-1.5 rounded-md bg-muted/50 px-2 py-1.5 text-xs font-medium">
+      <CheckCircle2
+        className="size-3.5 shrink-0"
+        style={{ color: "var(--chart-2)" }}
+        aria-hidden
+      />
+      <span className="min-w-0 truncate">{label}</span>
     </div>
   );
 }
 
 function ModeButton({
   active,
+  disabled = false,
   label,
   onClick,
 }: {
   active: boolean;
+  disabled?: boolean;
   label: string;
   onClick: () => void;
 }) {
@@ -339,11 +554,13 @@ function ModeButton({
     <button
       type="button"
       className={cn(
-        "h-8 rounded-sm text-sm font-medium transition-colors",
+        "h-8 rounded-sm text-sm font-medium outline-none transition-colors focus-visible:ring-[3px] focus-visible:ring-ring/50 disabled:pointer-events-none disabled:opacity-50",
         active
           ? "bg-background text-foreground shadow-xs"
           : "text-muted-foreground hover:text-foreground",
       )}
+      aria-pressed={active}
+      disabled={disabled}
       onClick={onClick}
     >
       {label}
@@ -354,34 +571,54 @@ function ModeButton({
 function Field({
   id,
   label,
+  icon: Icon,
+  placeholder,
   value,
   onChange,
   type = "text",
   autoComplete,
+  disabled = false,
   required = false,
+  trailing,
 }: {
   id: string;
   label: string;
+  icon: LucideIcon;
+  placeholder?: string;
   value: string;
   onChange: (value: string) => void;
   type?: string;
   autoComplete?: string;
+  disabled?: boolean;
   required?: boolean;
+  trailing?: ReactNode;
 }) {
   return (
     <div className="space-y-1.5">
       <label className="text-xs font-medium text-muted-foreground" htmlFor={id}>
         {label}
       </label>
-      <input
-        id={id}
-        type={type}
-        value={value}
-        onChange={(event) => onChange(event.target.value)}
-        autoComplete={autoComplete}
-        required={required}
-        className="h-9 w-full rounded-md border bg-background px-3 text-sm outline-none transition-shadow placeholder:text-muted-foreground focus-visible:ring-[3px] focus-visible:ring-ring/50"
-      />
+      <div className="relative">
+        <Icon
+          className="pointer-events-none absolute left-3 top-1/2 size-4 -translate-y-1/2 text-muted-foreground"
+          aria-hidden
+        />
+        <input
+          id={id}
+          type={type}
+          value={value}
+          onChange={(event) => onChange(event.target.value)}
+          autoComplete={autoComplete}
+          disabled={disabled}
+          placeholder={placeholder}
+          required={required}
+          className={cn(
+            "h-10 w-full rounded-md border bg-background py-2 pl-9 text-sm shadow-xs outline-none transition-shadow placeholder:text-muted-foreground focus-visible:ring-[3px] focus-visible:ring-ring/50 disabled:cursor-not-allowed disabled:opacity-50",
+            trailing ? "pr-10" : "pr-3",
+          )}
+        />
+        {trailing}
+      </div>
     </div>
   );
 }
