@@ -1384,6 +1384,20 @@ fn datapanel_card_result(
     )
 }
 
+pub(crate) async fn append_event(
+    state: &ApiState,
+    owner_user_id: &str,
+    turn_id: &str,
+    event_type: AgentEventType,
+    payload: Value,
+) -> Result<AgentEventRecord, ApiError> {
+    state
+        .store
+        .append_agent_turn_event(owner_user_id, turn_id, event_type, payload)
+        .await
+        .map_err(ApiError::from)
+}
+
 #[cfg(test)]
 mod tests {
     use liquid_agent::ToolOutput;
@@ -1537,18 +1551,4 @@ mod tests {
             refreshed_at: OffsetDateTime::UNIX_EPOCH,
         }
     }
-}
-
-pub(crate) async fn append_event(
-    state: &ApiState,
-    owner_user_id: &str,
-    turn_id: &str,
-    event_type: AgentEventType,
-    payload: Value,
-) -> Result<AgentEventRecord, ApiError> {
-    state
-        .store
-        .append_agent_turn_event(owner_user_id, turn_id, event_type, payload)
-        .await
-        .map_err(ApiError::from)
 }

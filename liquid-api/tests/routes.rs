@@ -3012,6 +3012,56 @@ async fn chat_sql_execution_marks_returning_results_not_saveable() {
 }
 
 #[tokio::test]
+async fn chat_sql_execution_persists_executor_failure() {
+    let store = Arc::new(TestStore::default());
+    let executor = Arc::new(FakeChatSqlExecutor::with_outcomes(vec![
+        FakeChatSqlOutcome::Err("database rejected statement".to_owned()),
+    ]));
+    let app = test_app_with_agent_store_executors(
+        Arc::new(MockSqlAuditAgent),
+        store.clone(),
+        PostgresToolExecutionMode::Readonly,
+        Arc::new(FakeApprovedSqlExecutor::default()),
+        executor.clone(),
+    );
+    let (_database, conversation) = create_sql_mode_workspace(&store).await;
+
+    let response = app
+        .oneshot(auth_json_request(
+            "POST",
+            &format!(
+                "/api/v1/chat/conversations/{}/sql-executions",
+                conversation.id
+            ),
+            json!({ "sql": "select * from missing_table" }),
+        ))
+        .await
+        .unwrap();
+
+    assert_eq!(response.status(), StatusCode::OK);
+    let payload = response_json(response).await;
+    assert_eq!(payload["turn"]["status"], "failed");
+    assert!(
+        payload["assistant_message"]["content"]
+            .as_str()
+            .unwrap()
+            .contains("database rejected statement")
+    );
+    assert_eq!(payload["assistant_message"]["parts"][0]["kind"], "markdown");
+    assert_eq!(
+        payload["assistant_message"]["parts"]
+            .as_array()
+            .unwrap()
+            .len(),
+        1
+    );
+    assert_eq!(
+        executor.sql.lock().unwrap().as_slice(),
+        &["select * from missing_table".to_owned()]
+    );
+}
+
+#[tokio::test]
 async fn chat_sql_execution_persists_validation_failure_for_multiple_statements() {
     let store = Arc::new(TestStore::default());
     let app = test_app_with_agent_store_execution_and_executor(

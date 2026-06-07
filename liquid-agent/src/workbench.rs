@@ -501,7 +501,7 @@ impl AgentTool for ProposeDatapanelCardActionTool {
     }
 
     async fn execute(&self, arguments: Value) -> Result<ToolOutput> {
-        let args: ProposeDatapanelCardActionArgs = serde_json::from_value(arguments)?;
+        let args: DatapanelCardSuggestionInput = serde_json::from_value(arguments)?;
 
         Ok(ToolOutput::json(json!({
             "ok": true,
@@ -572,7 +572,7 @@ struct ProposeSqlOperationArgs {
 
 #[derive(Debug, Deserialize)]
 #[serde(deny_unknown_fields)]
-struct ProposeDatapanelCardActionArgs {
+struct DatapanelCardSuggestionInput {
     title: String,
     #[serde(default)]
     description: Option<String>,
@@ -642,23 +642,9 @@ fn proposal_tool_call_to_suggestion(
             )
         }
         "propose_datapanel_card_action" => {
-            let args: ProposeDatapanelCardActionArgs = serde_json::from_str(&call.arguments)?;
+            let args: DatapanelCardSuggestionInput = serde_json::from_str(&call.arguments)?;
 
-            datapanel_card_suggestion(
-                context,
-                args.title,
-                args.description,
-                args.display,
-                args.sql,
-                args.chart_type,
-                args.x_key,
-                args.y_keys,
-                args.z_key,
-                args.series,
-                args.group_keys,
-                args.value_key,
-                args.limit,
-            )
+            datapanel_card_suggestion(context, args)
         }
         "propose_sql_audit_decision" => {
             let args: ProposeSqlAuditDecisionArgs = serde_json::from_str(&call.arguments)?;
@@ -1011,18 +997,20 @@ impl LlmWorkbenchAction {
                 limit,
             } => datapanel_card_suggestion(
                 context,
-                title,
-                description,
-                display,
-                sql,
-                chart_type,
-                x_key,
-                y_keys,
-                z_key,
-                series,
-                group_keys,
-                value_key,
-                limit,
+                DatapanelCardSuggestionInput {
+                    title,
+                    description,
+                    display,
+                    sql,
+                    chart_type,
+                    x_key,
+                    y_keys,
+                    z_key,
+                    series,
+                    group_keys,
+                    value_key,
+                    limit,
+                },
             ),
             Self::ApproveSqlAudit {
                 title,
@@ -1108,18 +1096,7 @@ fn sql_operation_suggestion(
 
 fn datapanel_card_suggestion(
     context: &LlmWorkbenchContext,
-    title: String,
-    description: Option<String>,
-    display: DatapanelCardKind,
-    sql: String,
-    chart_type: Option<DatapanelChartType>,
-    x_key: Option<String>,
-    y_keys: Vec<String>,
-    z_key: Option<String>,
-    series: Vec<DatapanelChartSeries>,
-    group_keys: Vec<String>,
-    value_key: Option<String>,
-    limit: Option<usize>,
+    input: DatapanelCardSuggestionInput,
 ) -> Result<WorkbenchActionSuggestion> {
     let Some(database_id) = context
         .managed_database
@@ -1128,6 +1105,20 @@ fn datapanel_card_suggestion(
     else {
         bail!("create_datapanel_card requires a selected managed database");
     };
+    let DatapanelCardSuggestionInput {
+        title,
+        description,
+        display,
+        sql,
+        chart_type,
+        x_key,
+        y_keys,
+        z_key,
+        series,
+        group_keys,
+        value_key,
+        limit,
+    } = input;
     let sql = required_trimmed("sql", sql)?;
     let title = required_trimmed("title", title)?;
     let description = optional_trimmed(description);
