@@ -177,4 +177,33 @@
   .liquid-code-highlight .hljs-punctuation {
     color: color-mix(in oklch, var(--foreground) 70%, var(--muted-foreground));
   }
+
+  .liquid-user-sql-highlight {
+    background: transparent;
+    color: var(--primary-foreground);
+  }
+
+  .liquid-user-sql-highlight code {
+    font-family: ui-monospace, SFMono-Regular, SFMono, Consolas, "Liberation Mono",
+      Menlo, monospace;
+  }
+
+  .liquid-user-sql-highlight .hljs-keyword,
+  .liquid-user-sql-highlight .hljs-built_in,
+  .liquid-user-sql-highlight .hljs-name {
+    color: color-mix(in oklch, var(--primary-foreground) 88%, var(--chart-4));
+    font-weight: 700;
+  }
+
+  .liquid-user-sql-highlight .hljs-string,
+  .liquid-user-sql-highlight .hljs-number,
+  .liquid-user-sql-highlight .hljs-literal {
+    color: color-mix(in oklch, var(--primary-foreground) 82%, var(--chart-2));
+  }
+
+  .liquid-user-sql-highlight .hljs-comment,
+  .liquid-user-sql-highlight .hljs-quote {
+    color: color-mix(in oklch, var(--primary-foreground) 68%, transparent);
+    font-style: italic;
+  }
 }

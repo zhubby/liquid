@@ -214,7 +214,7 @@ async fn list_messages(
     Query(query): Query<ListMessagesQuery>,
 ) -> Result<Json<Vec<ChatMessage>>, ApiError> {
     let user = authenticated_user(&state, &headers).await?;
-    let messages = state
+    let agent_messages = state
         .store
         .list_agent_messages(
             &user.id,
@@ -222,11 +222,17 @@ async fn list_messages(
             query.limit.unwrap_or(100),
             query.before.as_deref(),
         )
-        .await?
-        .into_iter()
-        .filter(|message| !is_timeline_only_message(message))
-        .map(chat_message)
-        .collect();
+        .await?;
+    let mut messages = Vec::new();
+
+    for message in agent_messages {
+        if is_timeline_only_message(&message) {
+            continue;
+        }
+
+        let is_sql_mode = is_sql_mode_user_message(&state, &user.id, &message).await;
+        messages.push(chat_message_with_sql_mode(message, is_sql_mode));
+    }
 
     Ok(Json(messages))
 }
@@ -489,7 +495,7 @@ async fn create_sql_execution(
 
     Ok(Json(ChatSqlExecutionResponse {
         turn: chat_turn(turn),
-        user_message: chat_message(user_message),
+        user_message: chat_message_with_sql_mode(user_message, true),
         assistant_message: chat_message(assistant_message),
     }))
 }
@@ -1663,18 +1669,55 @@ fn chat_database_summary(database: &ManagedDatabase) -> ChatManagedDatabaseSumma
     }
 }
 
+async fn is_sql_mode_user_message(
+    state: &ApiState,
+    owner_user_id: &str,
+    message: &AgentMessage,
+) -> bool {
+    if message.role != AgentMessageRole::User {
+        return false;
+    }
+
+    let Some(turn_id) = message.turn_id.as_deref() else {
+        return false;
+    };
+
+    state
+        .store
+        .get_agent_turn(owner_user_id, turn_id)
+        .await
+        .ok()
+        .and_then(|turn| turn.client_request_id)
+        .is_some_and(|client_request_id| is_sql_mode_client_request_id(&client_request_id))
+}
+
+fn is_sql_mode_client_request_id(client_request_id: &str) -> bool {
+    client_request_id.starts_with("sql-mode-") || client_request_id.starts_with("local-sql-")
+}
+
 fn chat_message(message: AgentMessage) -> ChatMessage {
+    chat_message_with_sql_mode(message, false)
+}
+
+fn chat_message_with_sql_mode(
+    message: AgentMessage,
+    is_sql_mode_user_message: bool,
+) -> ChatMessage {
     let status = ChatMessageStatus::Complete;
-    let mut parts =
-        if message.role == AgentMessageRole::Assistant || is_action_result_message(&message) {
-            vec![ChatMessagePart::Markdown {
-                markdown: message.content.clone(),
-            }]
-        } else {
-            vec![ChatMessagePart::Text {
-                text: message.content.clone(),
-            }]
-        };
+    let mut parts = if message.role == AgentMessageRole::User && is_sql_mode_user_message {
+        vec![ChatMessagePart::Code {
+            language: Some("sql".to_owned()),
+            code: message.content.clone(),
+        }]
+    } else if message.role == AgentMessageRole::Assistant || is_action_result_message(&message) {
+        vec![ChatMessagePart::Markdown {
+            markdown: message.content.clone(),
+        }]
+    } else {
+        vec![ChatMessagePart::Text {
+            text: message.content.clone(),
+        }]
+    };
 
     if message.role == AgentMessageRole::Assistant {
         parts.extend(query_result_table_parts(message.metadata.as_ref()));

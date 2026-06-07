@@ -643,7 +643,7 @@ export function ChatPanel({
       }
 
       const conversationId = conversation.id;
-      const localUserId = `local-sql-${Date.now()}`;
+      const localUserId = `sql-mode-${Date.now()}`;
       const sendKey = `${conversationId}:${localUserId}`;
       const localUserMessage: DisplayMessage = {
         id: localUserId,
@@ -1379,6 +1379,7 @@ function MessageBubble({
   const isFailed = message.status === "failed";
   const copyText = message.content.trim();
   const senderLabel = isUser ? user.display_name : roleLabel(message.role, t);
+  const isUserSqlMessage = isUser && messageHasSqlCodePart(message);
 
   return (
     <article
@@ -1406,7 +1407,9 @@ function MessageBubble({
         <div
           className={cn(
             "relative min-w-0 text-sm leading-6",
+            isUserSqlMessage && "text-left",
             isUser &&
+              !isUserSqlMessage &&
               "rounded-lg bg-primary px-3 py-2 text-primary-foreground shadow-xs",
             !isUser && "pr-9 text-foreground",
             isFailed &&
@@ -1478,6 +1481,7 @@ function MessageContent({
           token={token}
           conversationId={conversationId}
           part={part}
+          role={message.role}
           onDatapanelChanged={onDatapanelChanged}
         />
       ))}
@@ -1489,11 +1493,13 @@ function MessagePart({
   token,
   conversationId,
   part,
+  role,
   onDatapanelChanged,
 }: {
   token: string;
   conversationId: string;
   part: ChatMessagePart;
+  role: AgentMessageRole;
   onDatapanelChanged: () => void;
 }) {
   const { t } = useI18n();
@@ -1504,6 +1510,10 @@ function MessagePart({
     case "markdown":
       return <MarkdownContent markdown={part.markdown} />;
     case "code":
+      if (role === "user" && normalizeCodeLanguage(part.language) === "sql") {
+        return <UserSqlCodeBubble code={part.code} />;
+      }
+
       return <CodeBlock code={part.code} language={part.language} />;
     case "query_result_table":
       return (
@@ -1809,6 +1819,28 @@ function CodeBlock({
   );
 }
 
+function UserSqlCodeBubble({ code }: { code: string }) {
+  return (
+    <div className="overflow-hidden rounded-lg bg-primary text-left text-primary-foreground shadow-xs">
+      <SyntaxHighlighter
+        language="sql"
+        useInlineStyles={false}
+        className="liquid-user-sql-highlight max-h-72 overflow-auto px-3 py-2 text-sm leading-6"
+        codeTagProps={{
+          className: "font-mono whitespace-pre-wrap break-words",
+        }}
+        customStyle={{
+          margin: 0,
+          background: "transparent",
+          whiteSpace: "pre-wrap",
+        }}
+      >
+        {code}
+      </SyntaxHighlighter>
+    </div>
+  );
+}
+
 function normalizeCodeLanguage(language: string | null) {
   const normalized = language?.trim().toLowerCase();
 
@@ -1817,6 +1849,12 @@ function normalizeCodeLanguage(language: string | null) {
   }
 
   return SQL_CODE_LANGUAGES.has(normalized) ? "sql" : normalized;
+}
+
+function messageHasSqlCodePart(message: DisplayMessage) {
+  return message.parts.some(
+    (part) => part.kind === "code" && normalizeCodeLanguage(part.language) === "sql",
+  );
 }
 
 function ActionCard({
