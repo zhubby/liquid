@@ -20,4 +20,4 @@ pub use managed_pools::{
 };
 pub use options::StorageOptions;
 pub use store::Storage;
-pub use traits::{CreateSqlAuditRecord, LiquidStore};
+pub use traits::{CreateSqlAuditRecord, LiquidStore, SqlAuditListFilters, SqlAuditListPage};

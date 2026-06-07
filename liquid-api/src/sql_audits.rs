@@ -1,22 +1,23 @@
 use axum::{
     Json, Router,
     extract::{Path, Query, State},
-    http::{HeaderMap, StatusCode},
+    http::{HeaderMap, HeaderValue, StatusCode},
     routing::{get, post},
 };
 use liquid_agent::{PostgresToolConfig, SqlAuditAgent, ToolCallingSqlAuditAgent};
 use liquid_core::{
     ApproveSqlAuditRequest, CreateSqlAuditRequest, DatapanelQueryResult, ManagedDatabase,
     ManagedDatabasePoolKey, RejectSqlAuditRequest, SqlAuditExecutionResult, SqlAuditRecord,
-    SqlAuditStatus, SqlStatementKind,
+    SqlAuditExecutionStatus, SqlAuditLifecycleStatus, SqlAuditStatus, SqlStatementKind,
 };
 use liquid_sql::{
     PgSqlAnalysis, PgSqlAnalysisRequest, PgSqlRiskSeverity, PgSqlStatementKind,
     analyze_postgres_sql,
 };
-use liquid_storage::CreateSqlAuditRecord;
+use liquid_storage::{CreateSqlAuditRecord, SqlAuditListFilters};
 use serde::Deserialize;
 use std::{sync::Arc, time::Instant};
+use time::{OffsetDateTime, format_description::well_known::Rfc3339};
 
 use crate::{auth::authenticated_user, error::ApiError, state::ApiState};
 use crate::{datapanels::materialize_datapanel_query, llm_provider::user_llm_provider_for_user};
@@ -45,6 +46,12 @@ pub(crate) fn routes() -> Router<ApiState> {
 struct ListSqlAuditsQuery {
     managed_database_id: Option<String>,
     status: Option<SqlAuditStatus>,
+    audit_status: Option<SqlAuditLifecycleStatus>,
+    execution_status: Option<SqlAuditExecutionStatus>,
+    created_from: Option<String>,
+    created_to: Option<String>,
+    page: Option<i64>,
+    page_size: Option<i64>,
     limit: Option<i64>,
 }
 
@@ -143,19 +150,82 @@ async fn list_sql_audits(
     State(state): State<ApiState>,
     headers: HeaderMap,
     Query(query): Query<ListSqlAuditsQuery>,
-) -> Result<Json<Vec<SqlAuditRecord>>, ApiError> {
+) -> Result<(HeaderMap, Json<Vec<SqlAuditRecord>>), ApiError> {
     let user = authenticated_user(&state, &headers).await?;
-    let records = state
+    let page = query.page.unwrap_or(1);
+    if page < 1 {
+        return Err(ApiError::bad_request("page must be greater than or equal to 1"));
+    }
+    let page_size = list_page_size(query.page_size, query.limit)?;
+    let created_from = parse_query_datetime("created_from", query.created_from.as_deref())?;
+    let created_to = parse_query_datetime("created_to", query.created_to.as_deref())?;
+
+    if let (Some(created_from), Some(created_to)) = (created_from, created_to)
+        && created_to <= created_from
+    {
+        return Err(ApiError::bad_request("created_to must be after created_from"));
+    }
+
+    let result = state
         .store
         .list_sql_audits(
             &user.id,
-            query.managed_database_id.as_deref(),
-            query.status,
-            query.limit.unwrap_or(50),
+            SqlAuditListFilters {
+                managed_database_id: query.managed_database_id.as_deref(),
+                status: query.status,
+                audit_status: query.audit_status,
+                execution_status: query.execution_status,
+                created_from,
+                created_to,
+                page,
+                page_size,
+            },
         )
         .await?;
+    let mut response_headers = HeaderMap::new();
+    response_headers.insert(
+        "x-total-count",
+        header_value(result.total_count, "X-Total-Count")?,
+    );
+    response_headers.insert("x-page", header_value(result.page, "X-Page")?);
+    response_headers.insert(
+        "x-page-size",
+        header_value(result.page_size, "X-Page-Size")?,
+    );
 
-    Ok(Json(records))
+    Ok((response_headers, Json(result.records)))
+}
+
+fn list_page_size(page_size: Option<i64>, limit: Option<i64>) -> Result<i64, ApiError> {
+    let Some(page_size) = page_size else {
+        return Ok(limit.unwrap_or(50).clamp(1, 100));
+    };
+
+    if matches!(page_size, 10 | 20 | 50 | 100) {
+        return Ok(page_size);
+    }
+
+    Err(ApiError::bad_request(
+        "page_size must be one of 10, 20, 50, or 100",
+    ))
+}
+
+fn parse_query_datetime(
+    field: &str,
+    value: Option<&str>,
+) -> Result<Option<OffsetDateTime>, ApiError> {
+    let Some(value) = value else {
+        return Ok(None);
+    };
+
+    OffsetDateTime::parse(value, &Rfc3339)
+        .map(Some)
+        .map_err(|_| ApiError::bad_request(format!("{field} must be an RFC3339 timestamp")))
+}
+
+fn header_value(value: i64, name: &str) -> Result<HeaderValue, ApiError> {
+    HeaderValue::from_str(&value.to_string())
+        .map_err(|error| ApiError::internal(anyhow::anyhow!("invalid {name} header: {error}")))
 }
 
 async fn get_sql_audit(

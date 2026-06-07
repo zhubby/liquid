@@ -1,8 +1,12 @@
 use axum::http::{
-    HeaderValue, Method,
+    HeaderName, HeaderValue, Method,
     header::{AUTHORIZATION, CONTENT_TYPE},
 };
 use tower_http::cors::{Any, CorsLayer};
+
+const SQL_AUDIT_TOTAL_COUNT_HEADER: HeaderName = HeaderName::from_static("x-total-count");
+const SQL_AUDIT_PAGE_HEADER: HeaderName = HeaderName::from_static("x-page");
+const SQL_AUDIT_PAGE_SIZE_HEADER: HeaderName = HeaderName::from_static("x-page-size");
 
 pub(crate) fn layer(cors_origin: &str) -> anyhow::Result<CorsLayer> {
     let cors = CorsLayer::new()
@@ -13,7 +17,12 @@ pub(crate) fn layer(cors_origin: &str) -> anyhow::Result<CorsLayer> {
             Method::PATCH,
             Method::DELETE,
         ])
-        .allow_headers([AUTHORIZATION, CONTENT_TYPE]);
+        .allow_headers([AUTHORIZATION, CONTENT_TYPE])
+        .expose_headers([
+            SQL_AUDIT_TOTAL_COUNT_HEADER,
+            SQL_AUDIT_PAGE_HEADER,
+            SQL_AUDIT_PAGE_SIZE_HEADER,
+        ]);
 
     if cors_origin.trim() == "*" {
         return Ok(cors.allow_origin(Any));

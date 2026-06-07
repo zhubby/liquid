@@ -10,7 +10,7 @@ use crate::{
     error::{StorageError, map_database_error},
     managed_databases,
     store::Storage,
-    traits::CreateSqlAuditRecord,
+    traits::{CreateSqlAuditRecord, SqlAuditListFilters, SqlAuditListPage},
     validation::{optional_string, required_string},
 };
 
@@ -186,12 +186,42 @@ pub(crate) async fn create_sql_audit(
 pub(crate) async fn list_sql_audits(
     storage: &Storage,
     owner_user_id: &str,
-    managed_database_id: Option<&str>,
-    status: Option<SqlAuditStatus>,
-    limit: i64,
-) -> Result<Vec<SqlAuditRecord>, StorageError> {
-    let limit = limit.clamp(1, 100);
-    let status = status.map(SqlAuditStatus::as_str);
+    filters: SqlAuditListFilters<'_>,
+) -> Result<SqlAuditListPage, StorageError> {
+    let page = filters.page.max(1);
+    let page_size = filters.page_size.clamp(1, 100);
+    let offset = (page - 1) * page_size;
+    let status = filters.status.map(SqlAuditStatus::as_str);
+    let audit_status = filters.audit_status.map(|status| status.as_str());
+    let execution_status = filters.execution_status.map(|status| status.as_str());
+    let total_count = sqlx::query_scalar::<_, i64>(
+        r#"
+        select count(*)
+        from sql_audits
+        where sql_audits.owner_user_id = $1::uuid
+          and ($2::uuid is null or sql_audits.managed_database_id = $2::uuid)
+          and ($3::text is null or sql_audits.status = $3)
+          and ($4::text is null or sql_audits.status = $4)
+          and (
+            $5::text is null
+            or ($5 = 'not_executed' and sql_audits.status not in ('executing', 'executed', 'execution_failed'))
+            or ($5 <> 'not_executed' and sql_audits.status = $5)
+          )
+          and ($6::timestamptz is null or sql_audits.created_at >= $6)
+          and ($7::timestamptz is null or sql_audits.created_at < $7)
+        "#,
+    )
+    .bind(owner_user_id)
+    .bind(filters.managed_database_id)
+    .bind(status)
+    .bind(audit_status)
+    .bind(execution_status)
+    .bind(filters.created_from)
+    .bind(filters.created_to)
+    .fetch_one(&storage.pool)
+    .await
+    .map_err(map_database_error)?;
+
     let query = format!(
         r#"
         select {SQL_AUDIT_COLUMNS}
@@ -199,20 +229,44 @@ pub(crate) async fn list_sql_audits(
         where sql_audits.owner_user_id = $1::uuid
           and ($2::uuid is null or sql_audits.managed_database_id = $2::uuid)
           and ($3::text is null or sql_audits.status = $3)
+          and ($4::text is null or sql_audits.status = $4)
+          and (
+            $5::text is null
+            or ($5 = 'not_executed' and sql_audits.status not in ('executing', 'executed', 'execution_failed'))
+            or ($5 <> 'not_executed' and sql_audits.status = $5)
+          )
+          and ($6::timestamptz is null or sql_audits.created_at >= $6)
+          and ($7::timestamptz is null or sql_audits.created_at < $7)
         order by sql_audits.created_at desc
-        limit $4
+        limit $8
+        offset $9
         "#,
     );
     let rows = sqlx::query_as::<_, SqlAuditRow>(&query)
         .bind(owner_user_id)
-        .bind(managed_database_id)
+        .bind(filters.managed_database_id)
         .bind(status)
-        .bind(limit)
+        .bind(audit_status)
+        .bind(execution_status)
+        .bind(filters.created_from)
+        .bind(filters.created_to)
+        .bind(page_size)
+        .bind(offset)
         .fetch_all(&storage.pool)
         .await
         .map_err(map_database_error)?;
 
-    rows.into_iter().map(SqlAuditRecord::try_from).collect()
+    let records = rows
+        .into_iter()
+        .map(SqlAuditRecord::try_from)
+        .collect::<Result<Vec<_>, _>>()?;
+
+    Ok(SqlAuditListPage {
+        records,
+        total_count,
+        page,
+        page_size,
+    })
 }
 
 pub(crate) async fn get_sql_audit(

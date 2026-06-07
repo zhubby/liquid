@@ -7,12 +7,14 @@ use liquid_core::{
     CreateSqlAuditRequest, Datapanel, DatapanelCard, DatapanelCardLayoutUpdate, DatapanelExport,
     DatapanelQueryResult, LlmProviderSettings, LoginRequest, ManagedDatabase, PublicUser,
     RegisterRequest, RejectSqlAuditRequest, ResolvedLlmProviderSettings, SqlAuditExecutionResult,
-    SqlAuditRecord, SqlAuditReport, SqlAuditStatus, SqlStatementKind,
+    SqlAuditExecutionStatus, SqlAuditLifecycleStatus, SqlAuditRecord, SqlAuditReport,
+    SqlAuditStatus, SqlStatementKind,
     UpdateAgentConversationRequest, UpdateCurrentUserRequest, UpdateDatapanelCardRequest,
     UpdateDatapanelRequest, UpdateLlmProviderSettingsRequest, UpdateManagedDatabaseRequest,
     UpdatePasswordRequest,
 };
 use serde_json::Value;
+use time::OffsetDateTime;
 
 use crate::error::StorageError;
 
@@ -23,6 +25,26 @@ pub struct CreateSqlAuditRecord {
     pub statement_kind: Option<SqlStatementKind>,
     pub status: SqlAuditStatus,
     pub risk_score: u8,
+}
+
+#[derive(Debug, Clone)]
+pub struct SqlAuditListFilters<'a> {
+    pub managed_database_id: Option<&'a str>,
+    pub status: Option<SqlAuditStatus>,
+    pub audit_status: Option<SqlAuditLifecycleStatus>,
+    pub execution_status: Option<SqlAuditExecutionStatus>,
+    pub created_from: Option<OffsetDateTime>,
+    pub created_to: Option<OffsetDateTime>,
+    pub page: i64,
+    pub page_size: i64,
+}
+
+#[derive(Debug, Clone)]
+pub struct SqlAuditListPage {
+    pub records: Vec<SqlAuditRecord>,
+    pub total_count: i64,
+    pub page: i64,
+    pub page_size: i64,
 }
 
 #[async_trait]
@@ -94,10 +116,8 @@ pub trait LiquidStore: Send + Sync {
     async fn list_sql_audits(
         &self,
         owner_user_id: &str,
-        managed_database_id: Option<&str>,
-        status: Option<SqlAuditStatus>,
-        limit: i64,
-    ) -> Result<Vec<SqlAuditRecord>, StorageError>;
+        filters: SqlAuditListFilters<'_>,
+    ) -> Result<SqlAuditListPage, StorageError>;
     async fn get_sql_audit(
         &self,
         owner_user_id: &str,

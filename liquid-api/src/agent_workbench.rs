@@ -13,6 +13,7 @@ use liquid_core::{
     DatapanelChartType, DatapanelQueryResult, ManagedDatabasePoolKey, PublicUser,
     RejectSqlAuditRequest, SqlAuditRecord, SqlAuditStatus,
 };
+use liquid_storage::SqlAuditListFilters;
 use serde::{Deserialize, Serialize};
 use serde_json::{Value, json};
 use time::OffsetDateTime;
@@ -27,6 +28,19 @@ use crate::{
 
 const MISSING_LLM_PROVIDER_MESSAGE: &str = "LLM provider is not configured. Configure a provider and API key before using AI workbench chat.";
 const MAX_ASSISTANT_QUERY_RESULT_TABLES: usize = 3;
+
+fn recent_sql_audits_filter(managed_database_id: Option<&str>) -> SqlAuditListFilters<'_> {
+    SqlAuditListFilters {
+        managed_database_id,
+        status: None,
+        audit_status: None,
+        execution_status: None,
+        created_from: None,
+        created_to: None,
+        page: 1,
+        page_size: 20,
+    }
+}
 
 #[derive(Debug, Deserialize)]
 struct CreateSqlAuditActionPayload {
@@ -169,8 +183,12 @@ async fn run_agent_turn_inner(
         .and_then(|context| context.selected_sql_audit_id.clone());
     let recent_sql_audits = state
         .store
-        .list_sql_audits(&user.id, turn.managed_database_id.as_deref(), None, 20)
-        .await?;
+        .list_sql_audits(
+            &user.id,
+            recent_sql_audits_filter(turn.managed_database_id.as_deref()),
+        )
+        .await?
+        .records;
     let recent_actions = state
         .store
         .list_agent_actions(&user.id, Some(&turn.conversation_id), None)
@@ -1070,8 +1088,12 @@ async fn load_llm_workbench_context(
         .and_then(|context| context.selected_sql_audit_id.clone());
     let recent_sql_audits = state
         .store
-        .list_sql_audits(owner_user_id, turn.managed_database_id.as_deref(), None, 20)
-        .await?;
+        .list_sql_audits(
+            owner_user_id,
+            recent_sql_audits_filter(turn.managed_database_id.as_deref()),
+        )
+        .await?
+        .records;
     let recent_actions = state
         .store
         .list_agent_actions(owner_user_id, Some(&turn.conversation_id), None)

@@ -10,15 +10,22 @@ import {
   useRef,
   useState,
 } from "react";
+import Image from "next/image";
+import { useTheme } from "next-themes";
 import {
+  Archive,
   ChevronDown,
   CircleAlert,
   CircleCheck,
+  ClipboardCheck,
   Database,
   KeyRound,
+  Languages,
   Loader2,
   LogIn,
   LogOut,
+  Monitor,
+  Moon,
   PencilLine,
   Plug,
   Plus,
@@ -26,7 +33,7 @@ import {
   Search,
   Server,
   Settings,
-  ShieldCheck,
+  Sun,
   Tags,
   Trash2,
   X,
@@ -34,6 +41,7 @@ import {
 import { toast } from "sonner";
 
 import { AccountSettingsDialog } from "@/components/account-settings-dialog";
+import { SqlAuditHistory } from "@/components/sql-audit-history";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import {
@@ -79,6 +87,8 @@ type ConnectionTestState = {
   message: string;
 };
 
+type ManagedDatabaseView = "overview" | "audits" | "backups";
+
 const emptyManagedDatabaseForm: ManagedDatabaseForm = {
   name: "",
   host: "",
@@ -90,6 +100,10 @@ const emptyManagedDatabaseForm: ManagedDatabaseForm = {
   ssl_mode: "prefer",
 };
 
+type ThemeShortcut = "system" | "light" | "dark";
+
+const themeShortcutOrder: ThemeShortcut[] = ["system", "light", "dark"];
+
 export function ManagedDatabasePicker({
   token,
   user,
@@ -97,7 +111,8 @@ export function ManagedDatabasePicker({
   onLogout,
   onUserUpdated,
 }: ManagedDatabasePickerProps) {
-  const { t } = useI18n();
+  const { locale, setLocale, t } = useI18n();
+  const { theme, setTheme } = useTheme();
   const [databases, setDatabases] = useState<ManagedDatabase[]>([]);
   const [query, setQuery] = useState("");
   const [form, setForm] = useState<ManagedDatabaseForm>(
@@ -113,10 +128,25 @@ export function ManagedDatabasePicker({
   const [formError, setFormError] = useState<string | null>(null);
   const [isAccountMenuOpen, setIsAccountMenuOpen] = useState(false);
   const [isSettingsOpen, setIsSettingsOpen] = useState(false);
+  const [activeView, setActiveView] = useState<ManagedDatabaseView>("overview");
   const accountMenuRef = useRef<HTMLDivElement | null>(null);
   const [testResults, setTestResults] = useState<
     Record<string, ConnectionTestState>
   >({});
+
+  const selectedTheme: ThemeShortcut =
+    theme === "light" || theme === "dark" || theme === "system"
+      ? theme
+      : "system";
+  const ThemeShortcutIcon =
+    selectedTheme === "dark" ? Moon : selectedTheme === "light" ? Sun : Monitor;
+  const nextLocale = locale === "zh-CN" ? "en-US" : "zh-CN";
+  const nextLanguageLabel = nextLocale === "zh-CN" ? "中文" : "English";
+  const themeShortcutLabel = t.databasePicker.themeShortcutLabel(
+    t.settings.preferences.themeBadges[selectedTheme],
+  );
+  const languageShortcutLabel =
+    t.databasePicker.languageShortcutLabel(nextLanguageLabel);
 
   const loadDatabases = useCallback(async () => {
     setIsLoading(true);
@@ -196,6 +226,29 @@ export function ManagedDatabasePicker({
       .map((part) => part[0])
       .join("")
       .toUpperCase() || user.email.slice(0, 1).toUpperCase();
+  const menuItems = [
+    {
+      value: "overview" as const,
+      icon: Database,
+      label: t.databasePicker.databaseOverview,
+      description: t.databasePicker.connectionCount(databases.length),
+      badge: String(databases.length),
+    },
+    {
+      value: "audits" as const,
+      icon: ClipboardCheck,
+      label: t.databasePicker.auditMenu,
+      description: t.databasePicker.auditMenuDescription,
+      badge: null,
+    },
+    {
+      value: "backups" as const,
+      icon: Archive,
+      label: t.databasePicker.backupMenu,
+      description: t.databasePicker.backupMenuDescription,
+      badge: null,
+    },
+  ];
 
   const resetForm = () => {
     setForm(emptyManagedDatabaseForm);
@@ -217,6 +270,18 @@ export function ManagedDatabasePicker({
   const openSettings = () => {
     setIsAccountMenuOpen(false);
     setIsSettingsOpen(true);
+  };
+
+  const handleThemeShortcut = () => {
+    const currentIndex = themeShortcutOrder.indexOf(selectedTheme);
+    const nextTheme =
+      themeShortcutOrder[(currentIndex + 1) % themeShortcutOrder.length];
+
+    setTheme(nextTheme);
+  };
+
+  const handleLanguageShortcut = () => {
+    setLocale(nextLocale);
   };
 
   const handleLogout = () => {
@@ -417,164 +482,245 @@ export function ManagedDatabasePicker({
   };
 
   return (
-    <main className="min-h-screen bg-muted/30 p-3 text-foreground">
-      <div className="mx-auto flex min-h-[calc(100vh-1.5rem)] w-full max-w-5xl flex-col gap-3">
-        <Card className="overflow-visible rounded-xl py-0 shadow-xs">
-          <CardContent className="flex flex-col gap-4 px-4 py-4 sm:flex-row sm:items-center sm:justify-between sm:px-5">
-            <div className="flex min-w-0 items-center gap-3.5">
-              <div className="flex size-11 shrink-0 items-center justify-center rounded-lg bg-primary text-primary-foreground shadow-sm ring-1 ring-primary/10">
-                <ShieldCheck className="size-5" aria-hidden />
-              </div>
-              <div className="min-w-0">
-                <div className="flex min-w-0 items-center gap-2">
-                  <h1 className="truncate text-lg font-semibold">
-                    {t.databasePicker.title}
-                  </h1>
-                  <Badge
-                    variant="secondary"
-                    className="hidden rounded-md px-2 py-0.5 sm:inline-flex"
-                  >
-                    {t.databasePicker.currentAccount}
-                  </Badge>
-                </div>
-                <p className="mt-1 truncate text-xs text-muted-foreground">
-                  Liquid SQL Audit / {user.display_name}
-                </p>
-              </div>
+    <main className="min-h-screen bg-background text-foreground">
+      <div className="flex min-h-screen flex-col">
+        <header className="sticky top-0 z-30 border-b bg-background">
+          <nav className="flex h-16 items-center justify-between gap-3 px-3 sm:px-4 lg:px-5">
+            <div className="flex min-w-0 items-center">
+              <Image
+                src="/banner.png"
+                alt="Liquid"
+                width={217}
+                height={72}
+                priority
+                unoptimized
+                draggable={false}
+                className="h-10 w-auto max-w-[150px] select-none object-contain sm:h-11 sm:max-w-[210px]"
+              />
+              <h1 className="sr-only">{t.databasePicker.title}</h1>
             </div>
-            <div className="relative flex justify-end sm:block" ref={accountMenuRef}>
-              <button
-                type="button"
-                className={cn(
-                  "group flex min-w-0 items-center gap-3 rounded-lg border bg-background px-2.5 py-2 text-left shadow-xs outline-none transition-all hover:border-foreground/20 hover:bg-accent/70 focus-visible:border-ring focus-visible:ring-[3px] focus-visible:ring-ring/50",
-                  isAccountMenuOpen && "border-foreground/20 bg-accent/70",
-                )}
-                aria-haspopup="menu"
-                aria-expanded={isAccountMenuOpen}
-                aria-label={t.databasePicker.accountMenuLabel(user.display_name)}
-                onClick={() => setIsAccountMenuOpen((isOpen) => !isOpen)}
-              >
-                <span className="flex size-8 shrink-0 items-center justify-center rounded-full bg-primary text-xs font-semibold text-primary-foreground shadow-sm">
-                  {userInitials}
-                </span>
-                <span className="max-w-36 truncate text-sm font-medium text-foreground">
-                  {user.display_name}
-                </span>
-                <ChevronDown
-                  className={cn(
-                    "size-4 text-muted-foreground transition-transform group-hover:text-foreground",
-                    isAccountMenuOpen && "rotate-180",
-                  )}
-                  aria-hidden
-                />
-              </button>
-              {isAccountMenuOpen ? (
-                <div
-                  className="absolute right-0 top-[calc(100%+0.5rem)] z-20 w-64 overflow-hidden rounded-xl border bg-popover p-2 text-popover-foreground shadow-lg"
-                  role="menu"
-                >
-                  <div className="flex items-center gap-3 rounded-lg bg-muted/60 p-2.5">
-                    <span className="flex size-9 shrink-0 items-center justify-center rounded-full bg-primary text-xs font-semibold text-primary-foreground">
-                      {userInitials}
-                    </span>
-                    <div className="min-w-0">
-                      <div className="truncate text-sm font-semibold">
-                        {user.display_name}
-                      </div>
-                      <div className="truncate text-xs text-muted-foreground">
-                        {user.email}
-                      </div>
-                    </div>
-                  </div>
-                  <div className="my-1.5 h-px bg-border" />
-                  <button
-                    type="button"
-                    className="flex w-full items-center gap-2.5 rounded-lg px-2.5 py-2 text-left text-sm outline-none transition-colors hover:bg-accent hover:text-accent-foreground focus-visible:bg-accent focus-visible:text-accent-foreground"
-                    role="menuitem"
-                    onClick={openSettings}
-                  >
-                    <Settings className="size-4" aria-hidden />
-                    {t.databasePicker.settings}
-                  </button>
-                  <button
-                    type="button"
-                    className="flex w-full items-center gap-2.5 rounded-lg px-2.5 py-2 text-left text-sm text-destructive outline-none transition-colors hover:bg-destructive/10 focus-visible:bg-destructive/10"
-                    role="menuitem"
-                    onClick={handleLogout}
-                  >
-                    <LogOut className="size-4" aria-hidden />
-                    {t.databasePicker.logout}
-                  </button>
-                </div>
-              ) : null}
-            </div>
-          </CardContent>
-        </Card>
 
-        <Card className="min-h-[420px] flex-1 rounded-lg py-4 shadow-xs">
-          <CardHeader className="flex flex-row items-center justify-between gap-3 px-4">
-            <div>
-              <CardTitle className="text-sm">
-                {t.databasePicker.workspaceTitle}
-              </CardTitle>
-              <p className="mt-1 text-xs text-muted-foreground">
-                {t.databasePicker.connectionCount(databases.length)}
-              </p>
-            </div>
-            <div className="flex flex-wrap items-center justify-end gap-2">
+            <div className="flex min-w-0 items-center justify-end gap-2">
               <Button
                 type="button"
                 variant="outline"
-                size="sm"
-                onClick={openCreateForm}
+                size="icon"
+                className="size-9 rounded-lg"
+                title={themeShortcutLabel}
+                aria-label={themeShortcutLabel}
+                onClick={handleThemeShortcut}
               >
-                <Plus className="size-4" aria-hidden />
-                {t.databasePicker.addConnection}
+                <ThemeShortcutIcon className="size-4" aria-hidden />
               </Button>
-            </div>
-          </CardHeader>
-          <CardContent className="flex min-h-0 flex-1 flex-col px-4">
-            <div className="relative">
-              <Search className="pointer-events-none absolute left-3 top-1/2 size-4 -translate-y-1/2 text-muted-foreground" />
-              <input
-                value={query}
-                onChange={(event) => setQuery(event.target.value)}
-                placeholder={t.databasePicker.searchPlaceholder}
-                className="h-9 w-full rounded-md border bg-background pl-9 pr-3 text-sm outline-none transition-shadow placeholder:text-muted-foreground focus-visible:ring-[3px] focus-visible:ring-ring/50"
-              />
-            </div>
+              <Button
+                type="button"
+                variant="outline"
+                size="icon"
+                className="size-9 rounded-lg"
+                title={languageShortcutLabel}
+                aria-label={languageShortcutLabel}
+                onClick={handleLanguageShortcut}
+              >
+                <Languages className="size-4" aria-hidden />
+              </Button>
 
-            <div className="mt-3 min-h-0 flex-1 space-y-2 overflow-y-auto">
-              {isLoading ? (
-                <div className="flex items-center gap-2 rounded-lg border bg-background p-3 text-sm text-muted-foreground">
-                  <Loader2 className="size-4 animate-spin" aria-hidden />
-                  {t.databasePicker.loadingConnections}
-                </div>
-              ) : databases.length === 0 ? (
-                <EmptyDatabaseState />
-              ) : filteredDatabases.length === 0 ? (
-                <div className="rounded-lg border bg-background p-4 text-sm text-muted-foreground">
-                  {t.databasePicker.noMatches}
-                </div>
-              ) : (
-                filteredDatabases.map((database) => (
-                  <DatabaseListItem
-                    key={database.id}
-                    database={database}
-                    testState={testResults[database.id]}
-                    isTesting={testingId === database.id}
-                    isEntering={enteringId === database.id}
-                    isDeleting={deletingId === database.id}
-                    onEdit={() => handleEdit(database)}
-                    onTest={() => void handleTestConnection(database)}
-                    onEnter={() => void handleEnterWorkspace(database)}
-                    onDelete={() => void handleDelete(database)}
+              <div className="relative flex justify-end" ref={accountMenuRef}>
+                <button
+                  type="button"
+                  className={cn(
+                    "group flex h-9 min-w-0 items-center gap-2 rounded-lg border bg-background px-2 text-left shadow-xs outline-none transition-all hover:border-foreground/20 hover:bg-accent/70 focus-visible:border-ring focus-visible:ring-[3px] focus-visible:ring-ring/50 sm:gap-3 sm:px-2.5",
+                    isAccountMenuOpen && "border-foreground/20 bg-accent/70",
+                  )}
+                  aria-haspopup="menu"
+                  aria-expanded={isAccountMenuOpen}
+                  aria-label={t.databasePicker.accountMenuLabel(user.display_name)}
+                  onClick={() => setIsAccountMenuOpen((isOpen) => !isOpen)}
+                >
+                  <span className="flex size-7 shrink-0 items-center justify-center rounded-full bg-primary text-xs font-semibold text-primary-foreground shadow-sm sm:size-8">
+                    {userInitials}
+                  </span>
+                  <span className="hidden max-w-32 truncate text-sm font-medium text-foreground sm:inline">
+                    {user.display_name}
+                  </span>
+                  <ChevronDown
+                    className={cn(
+                      "size-4 text-muted-foreground transition-transform group-hover:text-foreground",
+                      isAccountMenuOpen && "rotate-180",
+                    )}
+                    aria-hidden
                   />
-                ))
-              )}
+                </button>
+                {isAccountMenuOpen ? (
+                  <div
+                    className="absolute right-0 top-[calc(100%+0.5rem)] z-20 w-64 overflow-hidden rounded-xl border bg-popover p-2 text-popover-foreground shadow-lg"
+                    role="menu"
+                  >
+                    <div className="flex items-center gap-3 rounded-lg bg-muted/60 p-2.5">
+                      <span className="flex size-9 shrink-0 items-center justify-center rounded-full bg-primary text-xs font-semibold text-primary-foreground">
+                        {userInitials}
+                      </span>
+                      <div className="min-w-0">
+                        <div className="truncate text-sm font-semibold">
+                          {user.display_name}
+                        </div>
+                        <div className="truncate text-xs text-muted-foreground">
+                          {user.email}
+                        </div>
+                      </div>
+                    </div>
+                    <div className="my-1.5 h-px bg-border" />
+                    <button
+                      type="button"
+                      className="flex w-full items-center gap-2.5 rounded-lg px-2.5 py-2 text-left text-sm outline-none transition-colors hover:bg-accent hover:text-accent-foreground focus-visible:bg-accent focus-visible:text-accent-foreground"
+                      role="menuitem"
+                      onClick={openSettings}
+                    >
+                      <Settings className="size-4" aria-hidden />
+                      {t.databasePicker.settings}
+                    </button>
+                    <button
+                      type="button"
+                      className="flex w-full items-center gap-2.5 rounded-lg px-2.5 py-2 text-left text-sm text-destructive outline-none transition-colors hover:bg-destructive/10 focus-visible:bg-destructive/10"
+                      role="menuitem"
+                      onClick={handleLogout}
+                    >
+                      <LogOut className="size-4" aria-hidden />
+                      {t.databasePicker.logout}
+                    </button>
+                  </div>
+                ) : null}
+              </div>
             </div>
-          </CardContent>
-        </Card>
+          </nav>
+        </header>
+
+        <div className="flex min-h-0 flex-1 flex-col lg:flex-row">
+          <aside className="border-b bg-muted/20 px-3 py-3 lg:w-64 lg:shrink-0 lg:border-b-0 lg:border-r lg:px-4 lg:py-5">
+            <nav
+              className="flex gap-2 overflow-x-auto lg:flex-col lg:overflow-visible"
+              aria-label={t.databasePicker.navigationLabel}
+            >
+              {menuItems.map((item) => {
+                const Icon = item.icon;
+                const isActive = activeView === item.value;
+
+                return (
+                  <button
+                    key={item.value}
+                    type="button"
+                    className={cn(
+                      "group flex min-w-[15rem] items-center justify-between gap-3 rounded-lg border px-3 py-3 text-left outline-none transition-all focus-visible:border-ring focus-visible:ring-[3px] focus-visible:ring-ring/50 lg:min-w-0",
+                      isActive
+                        ? "border-border bg-background text-foreground shadow-xs"
+                        : "border-transparent text-muted-foreground hover:border-border/70 hover:bg-background/70 hover:text-foreground",
+                    )}
+                    aria-current={isActive ? "page" : undefined}
+                    onClick={() => setActiveView(item.value)}
+                  >
+                    <span className="flex min-w-0 items-center gap-3">
+                      <span
+                        className={cn(
+                          "flex size-9 shrink-0 items-center justify-center rounded-md border bg-background shadow-xs transition-colors",
+                          isActive
+                            ? "border-primary bg-primary text-primary-foreground"
+                            : "text-muted-foreground group-hover:text-foreground",
+                        )}
+                      >
+                        <Icon className="size-4" aria-hidden />
+                      </span>
+                      <span className="min-w-0">
+                        <span className="block truncate text-sm font-semibold">
+                          {item.label}
+                        </span>
+                        <span className="mt-1 block truncate text-xs text-muted-foreground">
+                          {item.description}
+                        </span>
+                      </span>
+                    </span>
+                    {item.badge ? (
+                      <Badge variant="secondary" className="rounded-md">
+                        {item.badge}
+                      </Badge>
+                    ) : null}
+                  </button>
+                );
+              })}
+            </nav>
+          </aside>
+
+          <section className="flex min-w-0 flex-1 flex-col bg-muted/30 p-3 sm:p-4 lg:p-5">
+            {activeView === "overview" ? (
+              <Card className="min-h-[420px] flex-1 rounded-lg py-4 shadow-xs">
+              <CardHeader className="flex flex-row items-center justify-between gap-3 px-4">
+                <div>
+                  <CardTitle className="text-sm">
+                    {t.databasePicker.workspaceTitle}
+                  </CardTitle>
+                  <p className="mt-1 text-xs text-muted-foreground">
+                    {t.databasePicker.connectionCount(databases.length)}
+                  </p>
+                </div>
+                <div className="flex flex-wrap items-center justify-end gap-2">
+                  <Button
+                    type="button"
+                    variant="outline"
+                    size="sm"
+                    onClick={openCreateForm}
+                  >
+                    <Plus className="size-4" aria-hidden />
+                    {t.databasePicker.addConnection}
+                  </Button>
+                </div>
+              </CardHeader>
+              <CardContent className="flex min-h-0 flex-1 flex-col px-4">
+                <div className="relative">
+                  <Search className="pointer-events-none absolute left-3 top-1/2 size-4 -translate-y-1/2 text-muted-foreground" />
+                  <input
+                    value={query}
+                    onChange={(event) => setQuery(event.target.value)}
+                    placeholder={t.databasePicker.searchPlaceholder}
+                    className="h-9 w-full rounded-md border bg-background pl-9 pr-3 text-sm outline-none transition-shadow placeholder:text-muted-foreground focus-visible:ring-[3px] focus-visible:ring-ring/50"
+                  />
+                </div>
+
+                <div className="mt-3 min-h-0 flex-1 space-y-2 overflow-y-auto">
+                  {isLoading ? (
+                    <div className="flex items-center gap-2 rounded-lg border bg-background p-3 text-sm text-muted-foreground">
+                      <Loader2 className="size-4 animate-spin" aria-hidden />
+                      {t.databasePicker.loadingConnections}
+                    </div>
+                  ) : databases.length === 0 ? (
+                    <EmptyDatabaseState />
+                  ) : filteredDatabases.length === 0 ? (
+                    <div className="rounded-lg border bg-background p-4 text-sm text-muted-foreground">
+                      {t.databasePicker.noMatches}
+                    </div>
+                  ) : (
+                    filteredDatabases.map((database) => (
+                      <DatabaseListItem
+                        key={database.id}
+                        database={database}
+                        testState={testResults[database.id]}
+                        isTesting={testingId === database.id}
+                        isEntering={enteringId === database.id}
+                        isDeleting={deletingId === database.id}
+                        onEdit={() => handleEdit(database)}
+                        onTest={() => void handleTestConnection(database)}
+                        onEnter={() => void handleEnterWorkspace(database)}
+                        onDelete={() => void handleDelete(database)}
+                      />
+                    ))
+                  )}
+                </div>
+              </CardContent>
+              </Card>
+            ) : null}
+            {activeView === "audits" ? (
+              <SqlAuditHistory token={token} databases={databases} />
+            ) : null}
+            {activeView === "backups" ? <BackupPlaceholder /> : null}
+          </section>
+        </div>
       </div>
       {isFormOpen ? (
         <ManagedDatabaseFormDialog
@@ -1156,6 +1302,29 @@ function EmptyDatabaseState() {
         {t.databasePicker.emptyDescription}
       </p>
     </div>
+  );
+}
+
+function BackupPlaceholder() {
+  const { t } = useI18n();
+
+  return (
+    <Card className="min-h-[420px] flex-1 rounded-lg py-4 shadow-xs">
+      <CardContent className="flex min-h-[360px] flex-col items-center justify-center px-4 text-center">
+        <div className="flex size-12 items-center justify-center rounded-lg border bg-muted/40">
+          <Archive className="size-6 text-muted-foreground" aria-hidden />
+        </div>
+        <h2 className="mt-4 text-base font-semibold">
+          {t.databasePicker.backupPlaceholderTitle}
+        </h2>
+        <p className="mt-2 max-w-md text-sm leading-6 text-muted-foreground">
+          {t.databasePicker.backupPlaceholderDescription}
+        </p>
+        <Badge variant="secondary" className="mt-4 rounded-md">
+          {t.databasePicker.backupPlaceholderBadge}
+        </Badge>
+      </CardContent>
+    </Card>
   );
 }
 

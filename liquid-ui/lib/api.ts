@@ -69,7 +69,9 @@ export type { RiskSeverity } from "./generated/api-types/RiskSeverity";
 export type { SaveDatapanelTableCardRequest } from "./generated/api-types/SaveDatapanelTableCardRequest";
 export type { SetCurrentManagedDatabaseRequest } from "./generated/api-types/SetCurrentManagedDatabaseRequest";
 export type { SqlAuditExecutionResult } from "./generated/api-types/SqlAuditExecutionResult";
+export type { SqlAuditExecutionStatus } from "./generated/api-types/SqlAuditExecutionStatus";
 export type { SqlAuditFinding } from "./generated/api-types/SqlAuditFinding";
+export type { SqlAuditLifecycleStatus } from "./generated/api-types/SqlAuditLifecycleStatus";
 export type { SqlAuditRecord } from "./generated/api-types/SqlAuditRecord";
 export type { SqlAuditReport } from "./generated/api-types/SqlAuditReport";
 export type { SqlAuditRequest } from "./generated/api-types/SqlAuditRequest";
@@ -130,6 +132,43 @@ export async function apiRequest<T>(
   }
 
   return response.json() as Promise<T>;
+}
+
+export async function apiRequestWithMeta<T>(
+  path: string,
+  options: {
+    method?: string;
+    token?: string;
+    body?: unknown;
+  } = {},
+): Promise<{ data: T; headers: Headers }> {
+  const headers = new Headers();
+
+  if (options.body !== undefined) {
+    headers.set("Content-Type", "application/json");
+  }
+
+  if (options.token) {
+    headers.set("Authorization", `Bearer ${options.token}`);
+  }
+
+  const response = await fetch(`${API_BASE_URL}${path}`, {
+    method: options.method ?? "GET",
+    headers,
+    body: options.body === undefined ? undefined : JSON.stringify(options.body),
+  });
+
+  if (!response.ok) {
+    throw new ApiError(await responseError(response), response.status);
+  }
+
+  const data =
+    response.status === 204 ? (undefined as T) : ((await response.json()) as T);
+
+  return {
+    data,
+    headers: response.headers,
+  };
 }
 
 export async function apiStream<T>(

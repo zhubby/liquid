@@ -148,6 +148,50 @@ impl SqlAuditStatus {
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, TS)]
 #[serde(rename_all = "snake_case")]
 #[ts(export)]
+pub enum SqlAuditLifecycleStatus {
+    Audited,
+    PendingApproval,
+    Approved,
+    Rejected,
+    Blocked,
+}
+
+impl SqlAuditLifecycleStatus {
+    pub fn as_str(self) -> &'static str {
+        match self {
+            Self::Audited => "audited",
+            Self::PendingApproval => "pending_approval",
+            Self::Approved => "approved",
+            Self::Rejected => "rejected",
+            Self::Blocked => "blocked",
+        }
+    }
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, TS)]
+#[serde(rename_all = "snake_case")]
+#[ts(export)]
+pub enum SqlAuditExecutionStatus {
+    NotExecuted,
+    Executing,
+    Executed,
+    ExecutionFailed,
+}
+
+impl SqlAuditExecutionStatus {
+    pub fn as_str(self) -> &'static str {
+        match self {
+            Self::NotExecuted => "not_executed",
+            Self::Executing => "executing",
+            Self::Executed => "executed",
+            Self::ExecutionFailed => "execution_failed",
+        }
+    }
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, TS)]
+#[serde(rename_all = "snake_case")]
+#[ts(export)]
 pub enum SqlStatementKind {
     Select,
     Insert,

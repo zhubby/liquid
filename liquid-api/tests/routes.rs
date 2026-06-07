@@ -11,8 +11,8 @@ use axum::{
         Request, StatusCode,
         header::{
             ACCESS_CONTROL_ALLOW_METHODS, ACCESS_CONTROL_ALLOW_ORIGIN,
-            ACCESS_CONTROL_REQUEST_HEADERS, ACCESS_CONTROL_REQUEST_METHOD, AUTHORIZATION,
-            CONTENT_TYPE, ORIGIN,
+            ACCESS_CONTROL_EXPOSE_HEADERS, ACCESS_CONTROL_REQUEST_HEADERS,
+            ACCESS_CONTROL_REQUEST_METHOD, AUTHORIZATION, CONTENT_TYPE, ORIGIN,
         },
     },
 };
@@ -42,7 +42,7 @@ use liquid_core::{
 use liquid_sql::{PgSqlAnalysisRequest, PgSqlStatementKind, analyze_postgres_sql};
 use liquid_storage::{
     CreateSqlAuditRecord, LiquidStore, ManagedDatabasePoolConnector, ManagedDatabasePoolError,
-    ManagedDatabasePoolManager, StorageError,
+    ManagedDatabasePoolManager, SqlAuditListFilters, SqlAuditListPage, StorageError,
 };
 use serde_json::{Value, json};
 use sqlx::{
@@ -402,23 +402,74 @@ impl LiquidStore for TestStore {
     async fn list_sql_audits(
         &self,
         owner_user_id: &str,
-        managed_database_id: Option<&str>,
-        status: Option<SqlAuditStatus>,
-        limit: i64,
-    ) -> Result<Vec<SqlAuditRecord>, StorageError> {
+        filters: SqlAuditListFilters<'_>,
+    ) -> Result<SqlAuditListPage, StorageError> {
         let audits = self.audits.lock().unwrap();
-        Ok(audits
+        let page = filters.page.max(1);
+        let page_size = filters.page_size.clamp(1, 100);
+        let offset = ((page - 1) * page_size) as usize;
+        let filtered = audits
             .iter()
             .filter(|record| record.owner_user_id == owner_user_id)
             .filter(|record| {
-                managed_database_id
+                filters
+                    .managed_database_id
                     .map(|id| record.managed_database_id == id)
                     .unwrap_or(true)
             })
-            .filter(|record| status.map(|status| record.status == status).unwrap_or(true))
-            .take(limit.clamp(1, 100) as usize)
+            .filter(|record| {
+                filters
+                    .status
+                    .map(|status| record.status == status)
+                    .unwrap_or(true)
+            })
+            .filter(|record| {
+                filters
+                    .audit_status
+                    .map(|status| record.status.as_str() == status.as_str())
+                    .unwrap_or(true)
+            })
+            .filter(|record| {
+                filters
+                    .execution_status
+                    .map(|status| match status.as_str() {
+                        "not_executed" => !matches!(
+                            record.status,
+                            SqlAuditStatus::Executing
+                                | SqlAuditStatus::Executed
+                                | SqlAuditStatus::ExecutionFailed
+                        ),
+                        other => record.status.as_str() == other,
+                    })
+                    .unwrap_or(true)
+            })
+            .filter(|record| {
+                filters
+                    .created_from
+                    .map(|created_from| record.created_at >= created_from)
+                    .unwrap_or(true)
+            })
+            .filter(|record| {
+                filters
+                    .created_to
+                    .map(|created_to| record.created_at < created_to)
+                    .unwrap_or(true)
+            })
             .cloned()
-            .collect())
+            .collect::<Vec<_>>();
+        let total_count = filtered.len() as i64;
+        let records = filtered
+            .into_iter()
+            .skip(offset)
+            .take(page_size as usize)
+            .collect();
+
+        Ok(SqlAuditListPage {
+            records,
+            total_count,
+            page,
+            page_size,
+        })
     }
 
     async fn get_sql_audit(
@@ -1868,6 +1919,36 @@ async fn cors_preflight_allows_setting_current_managed_database() {
         .to_str()
         .unwrap();
     assert!(allowed_methods.contains("PUT"));
+}
+
+#[tokio::test]
+async fn cors_exposes_sql_audit_pagination_headers() {
+    let response = test_app_with_cors()
+        .oneshot(
+            Request::builder()
+                .uri("/api/v1/sql-audits")
+                .header(ORIGIN, "http://localhost:3000")
+                .header(AUTHORIZATION, format!("Bearer {VALID_TOKEN}"))
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+
+    assert_eq!(response.status(), StatusCode::OK);
+    assert_eq!(
+        response.headers().get(ACCESS_CONTROL_ALLOW_ORIGIN).unwrap(),
+        "http://localhost:3000"
+    );
+    let exposed_headers = response
+        .headers()
+        .get(ACCESS_CONTROL_EXPOSE_HEADERS)
+        .unwrap()
+        .to_str()
+        .unwrap();
+    assert!(exposed_headers.contains("x-total-count"));
+    assert!(exposed_headers.contains("x-page"));
+    assert!(exposed_headers.contains("x-page-size"));
 }
 
 #[tokio::test]
@@ -4445,6 +4526,173 @@ async fn sql_audit_persistence_creates_audited_select_record() {
     assert_eq!(list_response.status(), StatusCode::OK);
     let payload = response_json(list_response).await;
     assert_eq!(payload.as_array().unwrap().len(), 1);
+}
+
+#[tokio::test]
+async fn sql_audit_list_supports_filters_pagination_and_headers() {
+    let app = test_app_with_agent_and_execution(
+        Arc::new(CapturingSqlAuditAgent::default()),
+        PostgresToolExecutionMode::WriteGated,
+    );
+    create_test_database(&app).await;
+
+    let select_response = app
+        .clone()
+        .oneshot(auth_json_request(
+            "POST",
+            "/api/v1/managed-databases/db-1/sql-audits",
+            json!({
+                "sql": "select * from users"
+            }),
+        ))
+        .await
+        .unwrap();
+    assert_eq!(select_response.status(), StatusCode::CREATED);
+
+    let update_response = app
+        .clone()
+        .oneshot(auth_json_request(
+            "POST",
+            "/api/v1/managed-databases/db-1/sql-audits",
+            json!({
+                "sql": "update users set active = false where id = 1",
+                "execution_purpose": "Deactivate test user"
+            }),
+        ))
+        .await
+        .unwrap();
+    assert_eq!(update_response.status(), StatusCode::CREATED);
+
+    let drop_response = app
+        .clone()
+        .oneshot(auth_json_request(
+            "POST",
+            "/api/v1/managed-databases/db-1/sql-audits",
+            json!({
+                "sql": "drop table users"
+            }),
+        ))
+        .await
+        .unwrap();
+    assert_eq!(drop_response.status(), StatusCode::CREATED);
+
+    let approve_response = app
+        .clone()
+        .oneshot(auth_json_request(
+            "POST",
+            "/api/v1/sql-audits/audit-2/approve",
+            json!({
+                "comment": "approved"
+            }),
+        ))
+        .await
+        .unwrap();
+    assert_eq!(approve_response.status(), StatusCode::OK);
+
+    let execute_response = app
+        .clone()
+        .oneshot(
+            Request::builder()
+                .method("POST")
+                .uri("/api/v1/sql-audits/audit-2/execute")
+                .header(AUTHORIZATION, format!("Bearer {VALID_TOKEN}"))
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(execute_response.status(), StatusCode::OK);
+
+    let first_page_response = app
+        .clone()
+        .oneshot(auth_request("/api/v1/sql-audits?page=1&page_size=10"))
+        .await
+        .unwrap();
+    assert_eq!(first_page_response.status(), StatusCode::OK);
+    assert_eq!(
+        first_page_response
+            .headers()
+            .get("x-total-count")
+            .unwrap()
+            .to_str()
+            .unwrap(),
+        "3"
+    );
+    assert_eq!(
+        first_page_response
+            .headers()
+            .get("x-page-size")
+            .unwrap()
+            .to_str()
+            .unwrap(),
+        "10"
+    );
+    let payload = response_json(first_page_response).await;
+    assert_eq!(payload.as_array().unwrap().len(), 3);
+
+    let second_page_response = app
+        .clone()
+        .oneshot(auth_request("/api/v1/sql-audits?page=2&page_size=10"))
+        .await
+        .unwrap();
+    assert_eq!(second_page_response.status(), StatusCode::OK);
+    let payload = response_json(second_page_response).await;
+    assert_eq!(payload.as_array().unwrap().len(), 0);
+
+    let blocked_response = app
+        .clone()
+        .oneshot(auth_request("/api/v1/sql-audits?audit_status=blocked"))
+        .await
+        .unwrap();
+    assert_eq!(blocked_response.status(), StatusCode::OK);
+    let payload = response_json(blocked_response).await;
+    assert_eq!(payload.as_array().unwrap().len(), 1);
+    assert_eq!(payload[0]["status"], "blocked");
+
+    let executed_response = app
+        .clone()
+        .oneshot(auth_request("/api/v1/sql-audits?execution_status=executed"))
+        .await
+        .unwrap();
+    assert_eq!(executed_response.status(), StatusCode::OK);
+    let payload = response_json(executed_response).await;
+    assert_eq!(payload.as_array().unwrap().len(), 1);
+    assert_eq!(payload[0]["status"], "executed");
+
+    let not_executed_response = app
+        .clone()
+        .oneshot(auth_request(
+            "/api/v1/sql-audits?execution_status=not_executed",
+        ))
+        .await
+        .unwrap();
+    assert_eq!(not_executed_response.status(), StatusCode::OK);
+    let payload = response_json(not_executed_response).await;
+    assert_eq!(payload.as_array().unwrap().len(), 2);
+
+    let time_range_response = app
+        .clone()
+        .oneshot(auth_request(
+            "/api/v1/sql-audits?created_from=1969-01-01T00%3A00%3A00Z&created_to=1971-01-01T00%3A00%3A00Z",
+        ))
+        .await
+        .unwrap();
+    assert_eq!(time_range_response.status(), StatusCode::OK);
+    assert_eq!(
+        time_range_response
+            .headers()
+            .get("x-total-count")
+            .unwrap()
+            .to_str()
+            .unwrap(),
+        "3"
+    );
+
+    let invalid_page_size_response = app
+        .oneshot(auth_request("/api/v1/sql-audits?page_size=25"))
+        .await
+        .unwrap();
+    assert_eq!(invalid_page_size_response.status(), StatusCode::BAD_REQUEST);
 }
 
 #[tokio::test]

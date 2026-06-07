@@ -10,7 +10,7 @@ use liquid_core::{
     LoginRequest, ManagedDatabase, ManagedDatabaseConnectionLoader,
     ManagedDatabaseConnectionLoaderError, ManagedDatabaseConnectionSpec, ManagedDatabasePoolKey,
     PublicUser, RegisterRequest, RejectSqlAuditRequest, ResolvedLlmProviderSettings,
-    SqlAuditExecutionResult, SqlAuditRecord, SqlAuditStatus, UpdateAgentConversationRequest,
+    SqlAuditExecutionResult, SqlAuditRecord, UpdateAgentConversationRequest,
     UpdateCurrentUserRequest, UpdateDatapanelCardRequest, UpdateDatapanelRequest,
     UpdateLlmProviderSettingsRequest, UpdateManagedDatabaseRequest, UpdatePasswordRequest,
 };
@@ -25,7 +25,7 @@ use crate::{
     managed_databases,
     options::StorageOptions,
     settings, sql_audits,
-    traits::{CreateSqlAuditRecord, LiquidStore},
+    traits::{CreateSqlAuditRecord, LiquidStore, SqlAuditListFilters, SqlAuditListPage},
 };
 
 #[derive(Debug, Clone)]
@@ -397,11 +397,9 @@ impl LiquidStore for Storage {
     async fn list_sql_audits(
         &self,
         owner_user_id: &str,
-        managed_database_id: Option<&str>,
-        status: Option<SqlAuditStatus>,
-        limit: i64,
-    ) -> Result<Vec<SqlAuditRecord>, StorageError> {
-        sql_audits::list_sql_audits(self, owner_user_id, managed_database_id, status, limit).await
+        filters: SqlAuditListFilters<'_>,
+    ) -> Result<SqlAuditListPage, StorageError> {
+        sql_audits::list_sql_audits(self, owner_user_id, filters).await
     }
 
     async fn get_sql_audit(
