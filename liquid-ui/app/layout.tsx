@@ -11,6 +11,13 @@ import "./globals.css";
 export const metadata: Metadata = {
   title: "Liquid",
   description: "SQL AI audit and datapanel dashboard",
+  icons: {
+    icon: [
+      { url: "/favicon.ico", sizes: "any" },
+      { url: "/icon.png", type: "image/png", sizes: "512x512" },
+    ],
+    apple: [{ url: "/apple-touch-icon.png", type: "image/png", sizes: "180x180" }],
+  },
 };
 
 export default function RootLayout({

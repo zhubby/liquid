@@ -1392,6 +1392,7 @@ dependencies = [
  "liquid-llm",
  "liquid-sql",
  "liquid-storage",
+ "pg_query",
  "serde",
  "serde_json",
  "sqlx",

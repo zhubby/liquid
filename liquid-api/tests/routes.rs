@@ -21,7 +21,8 @@ use liquid_agent::{
     PostgresToolExecutionMode, SqlAuditAgent, ToolRegistry,
 };
 use liquid_api::{
-    ApiState, ApprovedSqlExecutionFuture, ApprovedSqlExecutor, ManagedDatabaseConnectionTestFuture,
+    ApiState, ApprovedSqlExecutionFuture, ApprovedSqlExecutor, ChatSqlExecutionFuture,
+    ChatSqlExecutionOutcome, ChatSqlExecutor, ManagedDatabaseConnectionTestFuture,
     ManagedDatabaseConnectionTester, router, router_with_cors,
 };
 use liquid_core::{
@@ -35,7 +36,7 @@ use liquid_core::{
     ManagedDatabaseConnectionLoaderError, ManagedDatabaseConnectionSpec, ManagedDatabaseEngine,
     ManagedDatabasePoolKey, ManagedDatabasePoolPolicy, ManagedDatabaseSslMode, PublicUser,
     RegisterRequest, RejectSqlAuditRequest, ResolvedLlmProviderSettings, SqlAuditExecutionResult,
-    SqlAuditRecord, SqlAuditReport, SqlAuditRequest, SqlAuditStatus,
+    SqlAuditRecord, SqlAuditReport, SqlAuditRequest, SqlAuditStatus, SqlStatementKind,
     UpdateAgentConversationRequest, UpdateCurrentUserRequest, UpdateDatapanelCardRequest,
     UpdateDatapanelRequest, UpdateLlmProviderSettingsRequest, UpdateManagedDatabaseRequest,
     UpdatePasswordRequest,
@@ -1514,6 +1515,39 @@ impl ApprovedSqlExecutor for FakeApprovedSqlExecutor {
     }
 }
 
+enum FakeChatSqlOutcome {
+    Ok(ChatSqlExecutionOutcome),
+    Err(String),
+}
+
+#[derive(Default)]
+struct FakeChatSqlExecutor {
+    outcomes: Mutex<VecDeque<FakeChatSqlOutcome>>,
+    sql: Mutex<Vec<String>>,
+}
+
+impl FakeChatSqlExecutor {
+    fn with_outcomes(outcomes: Vec<FakeChatSqlOutcome>) -> Self {
+        Self {
+            outcomes: Mutex::new(outcomes.into()),
+            sql: Mutex::new(Vec::new()),
+        }
+    }
+}
+
+impl ChatSqlExecutor for FakeChatSqlExecutor {
+    fn execute<'a>(&'a self, _pool: PgPool, sql: &'a str) -> ChatSqlExecutionFuture<'a> {
+        Box::pin(async move {
+            self.sql.lock().unwrap().push(sql.to_owned());
+            match self.outcomes.lock().unwrap().pop_front() {
+                Some(FakeChatSqlOutcome::Ok(outcome)) => Ok(outcome),
+                Some(FakeChatSqlOutcome::Err(message)) => Err(anyhow::anyhow!(message)),
+                None => Err(anyhow::anyhow!("missing fake SQL execution outcome")),
+            }
+        })
+    }
+}
+
 #[derive(Default)]
 struct FakeManagedDatabaseConnectionTester;
 
@@ -1837,6 +1871,32 @@ fn test_app_with_agent_store_execution_and_executor(
     ))
 }
 
+fn test_app_with_agent_store_executors(
+    agent: Arc<dyn SqlAuditAgent>,
+    store: Arc<TestStore>,
+    sql_execution: PostgresToolExecutionMode,
+    executor: Arc<dyn ApprovedSqlExecutor>,
+    chat_sql_executor: Arc<dyn ChatSqlExecutor>,
+) -> Router {
+    let loader: Arc<dyn ManagedDatabaseConnectionLoader> = store.clone();
+    let pool_manager = Arc::new(ManagedDatabasePoolManager::with_connector(
+        loader,
+        Arc::new(TestPoolConnector),
+        ManagedDatabasePoolPolicy::default(),
+    ));
+
+    router(ApiState::with_pool_manager_executors_and_connection_tester(
+        agent,
+        store,
+        pool_manager,
+        false,
+        sql_execution,
+        executor,
+        chat_sql_executor,
+        Arc::new(FakeManagedDatabaseConnectionTester),
+    ))
+}
+
 fn test_auth_response(email: String, display_name: String) -> AuthResponse {
     AuthResponse {
         token: VALID_TOKEN.to_owned(),
@@ -1856,6 +1916,38 @@ fn test_user() -> PublicUser {
         email: "user@test.local".to_owned(),
         display_name: "Test User".to_owned(),
     }
+}
+
+async fn create_sql_mode_workspace(store: &TestStore) -> (ManagedDatabase, AgentConversation) {
+    let database = store
+        .create_managed_database(
+            "user-1",
+            CreateManagedDatabaseRequest {
+                name: "Warehouse".to_owned(),
+                engine: ManagedDatabaseEngine::Postgres,
+                host: "localhost".to_owned(),
+                port: 5432,
+                database: "warehouse".to_owned(),
+                username: "readonly".to_owned(),
+                password: "password123".to_owned(),
+                tags: None,
+                ssl_mode: ManagedDatabaseSslMode::Disable,
+            },
+        )
+        .await
+        .unwrap();
+    let conversation = store
+        .create_agent_conversation(
+            "user-1",
+            CreateAgentConversationRequest {
+                title: Some("SQL workspace".to_owned()),
+                managed_database_id: Some(database.id.clone()),
+            },
+        )
+        .await
+        .unwrap();
+
+    (database, conversation)
 }
 
 fn public_llm_settings(settings: &ResolvedLlmProviderSettings) -> LlmProviderSettings {
@@ -2744,6 +2836,247 @@ async fn chat_messages_and_stream_include_query_result_table_parts() {
     let stream_body = String::from_utf8(stream_body.to_vec()).unwrap();
     assert!(stream_body.contains(r#""type":"assistant_done""#));
     assert!(stream_body.contains(r#""kind":"query_result_table""#));
+}
+
+#[tokio::test]
+async fn chat_sql_execution_persists_select_result_table_without_llm_provider() {
+    let store = Arc::new(TestStore::default());
+    let executor = Arc::new(FakeChatSqlExecutor::with_outcomes(vec![
+        FakeChatSqlOutcome::Ok(ChatSqlExecutionOutcome::Query {
+            statement_kind: SqlStatementKind::Select,
+            result: DatapanelQueryResult {
+                columns: vec!["id".to_owned(), "event_type".to_owned()],
+                rows: vec![json!({ "id": 1, "event_type": "turn_started" })],
+                row_count: 1,
+                truncated: false,
+                elapsed_ms: 4,
+                refreshed_at: time::OffsetDateTime::UNIX_EPOCH,
+            },
+            saveable: true,
+        }),
+    ]));
+    let app = test_app_with_agent_store_executors(
+        Arc::new(MockSqlAuditAgent),
+        store.clone(),
+        PostgresToolExecutionMode::Readonly,
+        Arc::new(FakeApprovedSqlExecutor::default()),
+        executor.clone(),
+    );
+    let (_database, conversation) = create_sql_mode_workspace(&store).await;
+
+    let response = app
+        .clone()
+        .oneshot(auth_json_request(
+            "POST",
+            &format!(
+                "/api/v1/chat/conversations/{}/sql-executions",
+                conversation.id
+            ),
+            json!({
+                "sql": "select id, event_type from agent_events",
+                "client_request_id": "client-select-1"
+            }),
+        ))
+        .await
+        .unwrap();
+
+    assert_eq!(response.status(), StatusCode::OK);
+    let payload = response_json(response).await;
+    assert_eq!(payload["turn"]["status"], "completed");
+    assert_eq!(
+        payload["user_message"]["content"],
+        "select id, event_type from agent_events"
+    );
+    assert_eq!(
+        payload["assistant_message"]["parts"][1]["kind"],
+        "query_result_table"
+    );
+    assert_eq!(
+        payload["assistant_message"]["parts"][1]["result"]["row_count"],
+        1
+    );
+    assert!(
+        payload["assistant_message"]["parts"][1]
+            .get("saveable")
+            .is_none()
+    );
+    assert_eq!(
+        executor.sql.lock().unwrap().as_slice(),
+        &["select id, event_type from agent_events".to_owned()]
+    );
+
+    let messages_response = app
+        .oneshot(auth_request(&format!(
+            "/api/v1/chat/conversations/{}/messages",
+            conversation.id
+        )))
+        .await
+        .unwrap();
+    assert_eq!(messages_response.status(), StatusCode::OK);
+    let messages = response_json(messages_response).await;
+    assert_eq!(messages[1]["parts"][1]["kind"], "query_result_table");
+    assert_eq!(messages[1]["parts"][1]["result"]["columns"][0], "id");
+}
+
+#[tokio::test]
+async fn chat_sql_execution_persists_update_summary() {
+    let store = Arc::new(TestStore::default());
+    let executor = Arc::new(FakeChatSqlExecutor::with_outcomes(vec![
+        FakeChatSqlOutcome::Ok(ChatSqlExecutionOutcome::Summary {
+            statement_kind: SqlStatementKind::Update,
+            affected_rows: Some(3),
+            elapsed_ms: 9,
+        }),
+    ]));
+    let app = test_app_with_agent_store_executors(
+        Arc::new(MockSqlAuditAgent),
+        store.clone(),
+        PostgresToolExecutionMode::Readonly,
+        Arc::new(FakeApprovedSqlExecutor::default()),
+        executor,
+    );
+    let (_database, conversation) = create_sql_mode_workspace(&store).await;
+
+    let response = app
+        .oneshot(auth_json_request(
+            "POST",
+            &format!(
+                "/api/v1/chat/conversations/{}/sql-executions",
+                conversation.id
+            ),
+            json!({ "sql": "update accounts set active = false where stale" }),
+        ))
+        .await
+        .unwrap();
+
+    assert_eq!(response.status(), StatusCode::OK);
+    let payload = response_json(response).await;
+    assert_eq!(payload["turn"]["status"], "completed");
+    assert_eq!(
+        payload["assistant_message"]["parts"][1]["kind"],
+        "sql_execution_summary"
+    );
+    assert_eq!(
+        payload["assistant_message"]["parts"][1]["statement_kind"],
+        "update"
+    );
+    assert_eq!(payload["assistant_message"]["parts"][1]["affected_rows"], 3);
+    assert_eq!(payload["assistant_message"]["parts"][1]["elapsed_ms"], 9);
+}
+
+#[tokio::test]
+async fn chat_sql_execution_marks_returning_results_not_saveable() {
+    let store = Arc::new(TestStore::default());
+    let executor = Arc::new(FakeChatSqlExecutor::with_outcomes(vec![
+        FakeChatSqlOutcome::Ok(ChatSqlExecutionOutcome::Query {
+            statement_kind: SqlStatementKind::Insert,
+            result: DatapanelQueryResult {
+                columns: vec!["id".to_owned()],
+                rows: vec![json!({ "id": 42 })],
+                row_count: 1,
+                truncated: false,
+                elapsed_ms: 5,
+                refreshed_at: time::OffsetDateTime::UNIX_EPOCH,
+            },
+            saveable: false,
+        }),
+    ]));
+    let app = test_app_with_agent_store_executors(
+        Arc::new(MockSqlAuditAgent),
+        store.clone(),
+        PostgresToolExecutionMode::Readonly,
+        Arc::new(FakeApprovedSqlExecutor::default()),
+        executor,
+    );
+    let (_database, conversation) = create_sql_mode_workspace(&store).await;
+
+    let response = app
+        .oneshot(auth_json_request(
+            "POST",
+            &format!(
+                "/api/v1/chat/conversations/{}/sql-executions",
+                conversation.id
+            ),
+            json!({ "sql": "insert into accounts(name) values ('a') returning id" }),
+        ))
+        .await
+        .unwrap();
+
+    assert_eq!(response.status(), StatusCode::OK);
+    let payload = response_json(response).await;
+    assert_eq!(
+        payload["assistant_message"]["parts"][1]["kind"],
+        "query_result_table"
+    );
+    assert_eq!(payload["assistant_message"]["parts"][1]["saveable"], false);
+}
+
+#[tokio::test]
+async fn chat_sql_execution_persists_validation_failure_for_multiple_statements() {
+    let store = Arc::new(TestStore::default());
+    let app = test_app_with_agent_store_execution_and_executor(
+        Arc::new(MockSqlAuditAgent),
+        store.clone(),
+        PostgresToolExecutionMode::Readonly,
+        Arc::new(FakeApprovedSqlExecutor::default()),
+    );
+    let (_database, conversation) = create_sql_mode_workspace(&store).await;
+
+    let response = app
+        .oneshot(auth_json_request(
+            "POST",
+            &format!(
+                "/api/v1/chat/conversations/{}/sql-executions",
+                conversation.id
+            ),
+            json!({ "sql": "select 1; select 2" }),
+        ))
+        .await
+        .unwrap();
+
+    assert_eq!(response.status(), StatusCode::OK);
+    let payload = response_json(response).await;
+    assert_eq!(payload["turn"]["status"], "failed");
+    assert!(
+        payload["assistant_message"]["content"]
+            .as_str()
+            .unwrap()
+            .contains("exactly one")
+    );
+}
+
+#[tokio::test]
+async fn chat_sql_execution_persists_validation_failure_for_transaction_control() {
+    let store = Arc::new(TestStore::default());
+    let app = test_app_with_agent_store_execution_and_executor(
+        Arc::new(MockSqlAuditAgent),
+        store.clone(),
+        PostgresToolExecutionMode::Readonly,
+        Arc::new(FakeApprovedSqlExecutor::default()),
+    );
+    let (_database, conversation) = create_sql_mode_workspace(&store).await;
+
+    let response = app
+        .oneshot(auth_json_request(
+            "POST",
+            &format!(
+                "/api/v1/chat/conversations/{}/sql-executions",
+                conversation.id
+            ),
+            json!({ "sql": "begin" }),
+        ))
+        .await
+        .unwrap();
+
+    assert_eq!(response.status(), StatusCode::OK);
+    let payload = response_json(response).await;
+    assert_eq!(payload["turn"]["status"], "failed");
+    assert!(
+        payload["assistant_message"]["content"]
+            .as_str()
+            .unwrap()
+            .contains("transaction and control")
+    );
 }
 
 #[tokio::test]

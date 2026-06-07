@@ -4,6 +4,7 @@ mod agent_workbench;
 mod audit;
 mod auth;
 mod chat;
+mod chat_sql;
 mod cors;
 mod datapanels;
 mod error;
@@ -15,6 +16,7 @@ mod settings;
 mod sql_audits;
 mod state;
 
+pub use chat_sql::{ChatSqlExecutionFuture, ChatSqlExecutionOutcome, ChatSqlExecutor};
 pub use server::serve;
 pub use state::{
     ApiState, ApprovedSqlExecutionFuture, ApprovedSqlExecutor, ManagedDatabaseConnectionTestFuture,

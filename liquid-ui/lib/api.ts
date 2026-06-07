@@ -36,6 +36,7 @@ export type { ChatManagedDatabaseSummary } from "./generated/api-types/ChatManag
 export type { ChatMessage } from "./generated/api-types/ChatMessage";
 export type { ChatMessagePart } from "./generated/api-types/ChatMessagePart";
 export type { ChatMessageStatus } from "./generated/api-types/ChatMessageStatus";
+export type { ChatSqlExecutionResponse } from "./generated/api-types/ChatSqlExecutionResponse";
 export type { ChatStreamEvent } from "./generated/api-types/ChatStreamEvent";
 export type { ChatStreamStage } from "./generated/api-types/ChatStreamStage";
 export type { ChatToolStatus } from "./generated/api-types/ChatToolStatus";
@@ -44,6 +45,7 @@ export type { ChatTurnDashboardContext } from "./generated/api-types/ChatTurnDas
 export type { CreateAgentActionRequest } from "./generated/api-types/CreateAgentActionRequest";
 export type { CreateDatapanelCardRequest } from "./generated/api-types/CreateDatapanelCardRequest";
 export type { CreateChatConversationRequest } from "./generated/api-types/CreateChatConversationRequest";
+export type { CreateChatSqlExecutionRequest } from "./generated/api-types/CreateChatSqlExecutionRequest";
 export type { CreateChatTurnRequest } from "./generated/api-types/CreateChatTurnRequest";
 export type { CreateManagedDatabaseRequest } from "./generated/api-types/CreateManagedDatabaseRequest";
 export type { CreateSqlAuditRequest } from "./generated/api-types/CreateSqlAuditRequest";

@@ -8,6 +8,8 @@ use liquid_core::{ManagedDatabaseConnectionLoader, ManagedDatabasePoolPolicy};
 use liquid_storage::{LiquidStore, ManagedDatabasePoolManager};
 use sqlx::PgPool;
 
+use crate::chat_sql::{ChatSqlExecutor, DefaultChatSqlExecutor};
+
 pub type ApprovedSqlExecutionFuture<'a> =
     Pin<Box<dyn Future<Output = anyhow::Result<ApprovedWriteExecutionResult>> + Send + 'a>>;
 
@@ -64,6 +66,7 @@ pub struct ApiState {
     pub(crate) sql_execution: PostgresToolExecutionMode,
     pub(crate) approved_write_execution_enabled: bool,
     pub(crate) approved_sql_executor: Arc<dyn ApprovedSqlExecutor>,
+    pub(crate) chat_sql_executor: Arc<dyn ChatSqlExecutor>,
     pub(crate) managed_database_connection_tester: Arc<dyn ManagedDatabaseConnectionTester>,
 }
 
@@ -140,6 +143,31 @@ impl ApiState {
     where
         S: LiquidStore + 'static,
     {
+        Self::with_pool_manager_executors_and_connection_tester(
+            agent,
+            store,
+            managed_database_pools,
+            sql_metadata_required,
+            sql_execution,
+            approved_sql_executor,
+            Arc::new(DefaultChatSqlExecutor),
+            managed_database_connection_tester,
+        )
+    }
+
+    pub fn with_pool_manager_executors_and_connection_tester<S>(
+        agent: Arc<dyn SqlAuditAgent>,
+        store: Arc<S>,
+        managed_database_pools: Arc<ManagedDatabasePoolManager>,
+        sql_metadata_required: bool,
+        sql_execution: PostgresToolExecutionMode,
+        approved_sql_executor: Arc<dyn ApprovedSqlExecutor>,
+        chat_sql_executor: Arc<dyn ChatSqlExecutor>,
+        managed_database_connection_tester: Arc<dyn ManagedDatabaseConnectionTester>,
+    ) -> Self
+    where
+        S: LiquidStore + 'static,
+    {
         Self {
             agent,
             store,
@@ -151,6 +179,7 @@ impl ApiState {
             ),
             sql_execution,
             approved_sql_executor,
+            chat_sql_executor,
             managed_database_connection_tester,
         }
     }

@@ -2,6 +2,7 @@
 import type { ChatErrorCode } from "./ChatErrorCode";
 import type { ChatStreamStage } from "./ChatStreamStage";
 import type { DatapanelQueryResult } from "./DatapanelQueryResult";
+import type { SqlStatementKind } from "./SqlStatementKind";
 
 export type ChatMessagePart =
   | { "kind": "text"; text: string }
@@ -14,6 +15,15 @@ export type ChatMessagePart =
     managed_database_id: string;
     sql: string;
     result: DatapanelQueryResult;
+    saveable?: boolean;
+  }
+  | {
+    "kind": "sql_execution_summary";
+    managed_database_id: string;
+    sql: string;
+    statement_kind: SqlStatementKind;
+    affected_rows?: number;
+    elapsed_ms: number;
   }
   | { "kind": "action_ref"; action_id: string }
   | { "kind": "error"; code: ChatErrorCode; message: string }

@@ -16,11 +16,12 @@ use liquid_core::{
     AgentAction, AgentActionStatus, AgentConversation, AgentEventRecord, AgentEventType,
     AgentMessage, AgentMessageRole, AgentTurn, AgentTurnStatus, ChatAction,
     ChatActionDecisionRequest, ChatActionPreview, ChatConversation, ChatErrorCode,
-    ChatManagedDatabaseSummary, ChatMessage, ChatMessagePart, ChatMessageStatus, ChatStreamEvent,
-    ChatStreamStage, ChatToolStatus, ChatTurn, ChatTurnDashboardContext,
-    CreateAgentConversationRequest, CreateAgentTurnRequest, CreateChatConversationRequest,
-    CreateChatTurnRequest, DatapanelQueryResult, ManagedDatabase, SqlAuditRecord,
-    UpdateAgentConversationRequest, UpdateChatConversationRequest,
+    ChatManagedDatabaseSummary, ChatMessage, ChatMessagePart, ChatMessageStatus,
+    ChatSqlExecutionResponse, ChatStreamEvent, ChatStreamStage, ChatToolStatus, ChatTurn,
+    ChatTurnDashboardContext, CreateAgentConversationRequest, CreateAgentTurnRequest,
+    CreateChatConversationRequest, CreateChatSqlExecutionRequest, CreateChatTurnRequest,
+    DatapanelQueryResult, ManagedDatabase, ManagedDatabasePoolKey, SqlAuditRecord,
+    SqlStatementKind, UpdateAgentConversationRequest, UpdateChatConversationRequest,
 };
 use liquid_storage::StorageError;
 use serde::Deserialize;
@@ -33,6 +34,7 @@ use crate::{
         append_event, apply_agent_action, run_agent_turn, synthesize_action_observation,
     },
     auth::authenticated_user,
+    chat_sql::ChatSqlExecutionOutcome,
     error::ApiError,
     state::ApiState,
 };
@@ -62,6 +64,10 @@ pub(crate) fn routes() -> Router<ApiState> {
         .route(
             "/api/v1/chat/conversations/{conversation_id}/turns",
             post(create_turn),
+        )
+        .route(
+            "/api/v1/chat/conversations/{conversation_id}/sql-executions",
+            post(create_sql_execution),
         )
         .route("/api/v1/chat/turns/{turn_id}/stream", get(stream_turn))
         .route("/api/v1/chat/turns/{turn_id}/cancel", post(cancel_turn))
@@ -273,6 +279,219 @@ async fn create_turn(
     });
 
     Ok(Json(chat_turn(turn)))
+}
+
+async fn execute_sql_mode_statement(
+    state: &ApiState,
+    owner_user_id: &str,
+    managed_database_id: &str,
+    sql: &str,
+) -> Result<ChatSqlExecutionOutcome, String> {
+    let pool = state
+        .managed_database_pools
+        .get_pool(ManagedDatabasePoolKey::new(
+            owner_user_id.to_owned(),
+            managed_database_id.to_owned(),
+        ))
+        .await
+        .map_err(|error| error.to_string())?;
+
+    state
+        .chat_sql_executor
+        .execute(pool, sql)
+        .await
+        .map_err(|error| error.to_string())
+}
+
+async fn load_chat_agent_message(
+    state: &ApiState,
+    owner_user_id: &str,
+    conversation_id: &str,
+    message_id: &str,
+) -> Result<AgentMessage, ApiError> {
+    state
+        .store
+        .list_agent_messages(owner_user_id, conversation_id, 200, None)
+        .await?
+        .into_iter()
+        .find(|message| message.id == message_id)
+        .ok_or_else(|| ApiError::internal(anyhow::anyhow!("chat message not found")))
+}
+
+fn sql_execution_assistant_message(
+    managed_database_id: &str,
+    sql: &str,
+    execution: Result<ChatSqlExecutionOutcome, String>,
+) -> (String, Value, AgentTurnStatus, Option<String>) {
+    match execution {
+        Ok(ChatSqlExecutionOutcome::Query {
+            statement_kind,
+            result,
+            saveable,
+        }) => {
+            let content = format!(
+                "SQL execution completed. Returned {} {}.",
+                result.row_count,
+                if result.row_count == 1 { "row" } else { "rows" }
+            );
+            let metadata = serde_json::json!({
+                "kind": "sql_execution",
+                "statement_kind": statement_kind,
+                "query_result_tables": [{
+                    "managed_database_id": managed_database_id,
+                    "sql": sql,
+                    "result": result,
+                    "saveable": saveable,
+                }],
+            });
+
+            (content, metadata, AgentTurnStatus::Completed, None)
+        }
+        Ok(ChatSqlExecutionOutcome::Summary {
+            statement_kind,
+            affected_rows,
+            elapsed_ms,
+        }) => {
+            let content = format!(
+                "SQL execution completed. Statement `{}` affected {}.",
+                statement_kind.as_str(),
+                affected_rows
+                    .map(|rows| format!("{rows} rows"))
+                    .unwrap_or_else(|| "an unknown number of rows".to_owned()),
+            );
+            let metadata = serde_json::json!({
+                "kind": "sql_execution",
+                "sql_execution_summaries": [{
+                    "managed_database_id": managed_database_id,
+                    "sql": sql,
+                    "statement_kind": statement_kind,
+                    "affected_rows": affected_rows,
+                    "elapsed_ms": elapsed_ms,
+                }],
+            });
+
+            (content, metadata, AgentTurnStatus::Completed, None)
+        }
+        Err(message) => {
+            let content = format!("SQL execution failed: {message}");
+            let metadata = serde_json::json!({
+                "kind": "sql_execution_error",
+                "error": message,
+            });
+
+            (content, metadata, AgentTurnStatus::Failed, Some(message))
+        }
+    }
+}
+
+async fn create_sql_execution(
+    State(state): State<ApiState>,
+    headers: HeaderMap,
+    Path(conversation_id): Path<String>,
+    Json(request): Json<CreateChatSqlExecutionRequest>,
+) -> Result<Json<ChatSqlExecutionResponse>, ApiError> {
+    let user = authenticated_user(&state, &headers).await?;
+    let conversation = state
+        .store
+        .get_agent_conversation(&user.id, &conversation_id)
+        .await?;
+    let database = conversation_database(&state, &user.id, &conversation)
+        .await?
+        .ok_or_else(|| ApiError::bad_request("SQL mode requires a managed database"))?;
+    let sql = request.sql.trim().to_owned();
+    let turn = state
+        .store
+        .create_agent_turn(
+            &user.id,
+            &conversation_id,
+            CreateAgentTurnRequest {
+                message: sql.clone(),
+                managed_database_id: Some(database.id.clone()),
+                dashboard_context: None,
+                client_request_id: request.client_request_id,
+            },
+        )
+        .await?;
+    let user_message =
+        load_chat_agent_message(&state, &user.id, &conversation_id, &turn.user_message_id).await?;
+
+    append_event(
+        &state,
+        &user.id,
+        &turn.id,
+        AgentEventType::TurnStarted,
+        serde_json::json!({ "source": "sql_mode" }),
+    )
+    .await?;
+    state
+        .store
+        .update_agent_turn_status(&user.id, &turn.id, AgentTurnStatus::Running, None)
+        .await?;
+
+    let execution = execute_sql_mode_statement(&state, &user.id, &database.id, &sql).await;
+    let (assistant_content, assistant_metadata, terminal_status, error_message) =
+        sql_execution_assistant_message(&database.id, &sql, execution);
+    let assistant_message = state
+        .store
+        .append_agent_message(
+            &user.id,
+            &conversation_id,
+            Some(&turn.id),
+            AgentMessageRole::Assistant,
+            &assistant_content,
+            Some(assistant_metadata),
+        )
+        .await?;
+
+    append_event(
+        &state,
+        &user.id,
+        &turn.id,
+        AgentEventType::MessageCreated,
+        serde_json::json!({
+            "message_id": assistant_message.id,
+            "role": "assistant",
+        }),
+    )
+    .await?;
+    let turn = state
+        .store
+        .set_agent_turn_assistant_message(&user.id, &turn.id, &assistant_message.id)
+        .await?;
+    let turn = state
+        .store
+        .update_agent_turn_status(&user.id, &turn.id, terminal_status, error_message.clone())
+        .await?;
+
+    match terminal_status {
+        AgentTurnStatus::Completed => {
+            append_event(
+                &state,
+                &user.id,
+                &turn.id,
+                AgentEventType::TurnCompleted,
+                serde_json::json!({ "turn": turn.clone() }),
+            )
+            .await?;
+        }
+        AgentTurnStatus::Failed => {
+            append_event(
+                &state,
+                &user.id,
+                &turn.id,
+                AgentEventType::TurnFailed,
+                serde_json::json!({ "error": error_message }),
+            )
+            .await?;
+        }
+        _ => {}
+    }
+
+    Ok(Json(ChatSqlExecutionResponse {
+        turn: chat_turn(turn),
+        user_message: chat_message(user_message),
+        assistant_message: chat_message(assistant_message),
+    }))
 }
 
 async fn stream_turn(
@@ -1459,6 +1678,7 @@ fn chat_message(message: AgentMessage) -> ChatMessage {
 
     if message.role == AgentMessageRole::Assistant {
         parts.extend(query_result_table_parts(message.metadata.as_ref()));
+        parts.extend(sql_execution_summary_parts(message.metadata.as_ref()));
     }
 
     ChatMessage {
@@ -1481,6 +1701,8 @@ struct QueryResultTablePartMetadata {
     managed_database_id: String,
     sql: String,
     result: DatapanelQueryResult,
+    #[serde(default = "default_true")]
+    saveable: bool,
 }
 
 fn query_result_table_parts(metadata: Option<&Value>) -> Vec<ChatMessagePart> {
@@ -1496,8 +1718,42 @@ fn query_result_table_parts(metadata: Option<&Value>) -> Vec<ChatMessagePart> {
             managed_database_id: part.managed_database_id,
             sql: part.sql,
             result: part.result,
+            saveable: (!part.saveable).then_some(false),
         })
         .collect()
+}
+
+#[derive(Debug, Deserialize)]
+struct SqlExecutionSummaryPartMetadata {
+    managed_database_id: String,
+    sql: String,
+    statement_kind: SqlStatementKind,
+    #[serde(default)]
+    affected_rows: Option<i64>,
+    elapsed_ms: i64,
+}
+
+fn sql_execution_summary_parts(metadata: Option<&Value>) -> Vec<ChatMessagePart> {
+    metadata
+        .and_then(|metadata| metadata.get("sql_execution_summaries"))
+        .cloned()
+        .and_then(|value| {
+            serde_json::from_value::<Vec<SqlExecutionSummaryPartMetadata>>(value).ok()
+        })
+        .unwrap_or_default()
+        .into_iter()
+        .map(|part| ChatMessagePart::SqlExecutionSummary {
+            managed_database_id: part.managed_database_id,
+            sql: part.sql,
+            statement_kind: part.statement_kind,
+            affected_rows: part.affected_rows,
+            elapsed_ms: part.elapsed_ms,
+        })
+        .collect()
+}
+
+fn default_true() -> bool {
+    true
 }
 
 fn is_action_result_message(message: &AgentMessage) -> bool {

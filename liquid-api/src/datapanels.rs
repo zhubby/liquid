@@ -227,9 +227,6 @@ pub(crate) async fn materialize_datapanel_query(
     sql: &str,
     limit: usize,
 ) -> Result<DatapanelQueryResult, ApiError> {
-    let executable_sql = validate_readonly_select(sql)?;
-    let limit = limit.clamp(1, MAX_DATAPANEL_QUERY_LIMIT);
-    let fetch_limit = limit.saturating_add(1).min(MAX_DATAPANEL_QUERY_LIMIT + 1);
     let pool = state
         .managed_database_pools
         .get_pool(ManagedDatabasePoolKey::new(
@@ -237,6 +234,17 @@ pub(crate) async fn materialize_datapanel_query(
             managed_database_id.to_owned(),
         ))
         .await?;
+    materialize_datapanel_query_with_pool(pool, sql, limit).await
+}
+
+pub(crate) async fn materialize_datapanel_query_with_pool(
+    pool: sqlx::PgPool,
+    sql: &str,
+    limit: usize,
+) -> Result<DatapanelQueryResult, ApiError> {
+    let executable_sql = validate_readonly_select(sql)?;
+    let limit = limit.clamp(1, MAX_DATAPANEL_QUERY_LIMIT);
+    let fetch_limit = limit.saturating_add(1).min(MAX_DATAPANEL_QUERY_LIMIT + 1);
     let started_at = Instant::now();
     let wrapped_sql = format!(
         "select to_jsonb(liquid_row) as row from ({}) liquid_row limit {}",

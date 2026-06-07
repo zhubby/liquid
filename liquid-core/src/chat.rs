@@ -5,7 +5,7 @@ use ts_rs::TS;
 use crate::{
     AgentActionKind, AgentActionStatus, AgentActiveView, AgentDateRange, AgentMessageRole,
     AgentResourceKind, AgentTurnStatus, DatapanelCardKind, DatapanelChartConfig,
-    DatapanelQueryResult, ManagedDatabaseEngine, ManagedDatabaseSslMode,
+    DatapanelQueryResult, ManagedDatabaseEngine, ManagedDatabaseSslMode, SqlStatementKind,
 };
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, TS)]
@@ -75,6 +75,15 @@ pub struct CreateChatTurnRequest {
 
 #[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize, TS)]
 #[ts(export)]
+pub struct CreateChatSqlExecutionRequest {
+    pub sql: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[ts(optional)]
+    pub client_request_id: Option<String>,
+}
+
+#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize, TS)]
+#[ts(export)]
 pub struct ChatActionDecisionRequest {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     #[ts(optional)]
@@ -120,6 +129,14 @@ pub struct ChatMessage {
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize, TS)]
+#[ts(export)]
+pub struct ChatSqlExecutionResponse {
+    pub turn: ChatTurn,
+    pub user_message: ChatMessage,
+    pub assistant_message: ChatMessage,
+}
+
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize, TS)]
 #[serde(tag = "kind", rename_all = "snake_case")]
 #[ts(export)]
 pub enum ChatMessagePart {
@@ -143,6 +160,18 @@ pub enum ChatMessagePart {
         managed_database_id: String,
         sql: String,
         result: DatapanelQueryResult,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        #[ts(optional)]
+        saveable: Option<bool>,
+    },
+    SqlExecutionSummary {
+        managed_database_id: String,
+        sql: String,
+        statement_kind: SqlStatementKind,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        #[ts(optional)]
+        affected_rows: Option<i64>,
+        elapsed_ms: i64,
     },
     ActionRef {
         action_id: String,

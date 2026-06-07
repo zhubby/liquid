@@ -42,6 +42,7 @@ import { toast } from "sonner";
 import { DatapanelChartRenderer } from "@/components/datapanel-chart-renderer";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
+import { Switch } from "@/components/ui/switch";
 import {
   type AgentMessageRole,
   type DatapanelCard,
@@ -50,6 +51,7 @@ import {
   type ChatErrorCode,
   type ChatMessage,
   type ChatMessagePart,
+  type ChatSqlExecutionResponse,
   type ChatStreamEvent,
   type ChatStreamStage,
   type ChatTurn,
@@ -76,6 +78,8 @@ type FailedTurn = {
 };
 
 type PendingActionDecision = "apply" | "reject";
+
+type ComposerMode = "chat" | "sql";
 
 type ActivityItem = {
   id: string;
@@ -134,6 +138,7 @@ export function ChatPanel({
   const [actions, setActions] = useState<ChatAction[]>([]);
   const [titleInput, setTitleInput] = useState(conversation.title);
   const [input, setInput] = useState("");
+  const [composerMode, setComposerMode] = useState<ComposerMode>("chat");
   const [isLoading, setIsLoading] = useState(true);
   const [isSending, setIsSending] = useState(false);
   const [isSavingTitle, setIsSavingTitle] = useState(false);
@@ -215,6 +220,7 @@ export function ChatPanel({
     notifiedDatapanelActionIdsRef.current.clear();
     nearBottomRef.current = true;
     setInput("");
+    setComposerMode("chat");
     setMessages([]);
     setActions([]);
     setIsSending(false);
@@ -622,6 +628,125 @@ export function ChatPanel({
     ],
   );
 
+  const submitSql = useCallback(
+    async (sqlOverride?: string) => {
+      const sql = (sqlOverride ?? input).trim();
+
+      if (!sql || isSending || activeSendRef.current) {
+        return;
+      }
+
+      const conversationId = conversation.id;
+      const localUserId = `local-sql-${Date.now()}`;
+      const sendKey = `${conversationId}:${localUserId}`;
+      const localUserMessage: DisplayMessage = {
+        id: localUserId,
+        role: "user",
+        status: "streaming",
+        content: sql,
+        parts: [{ kind: "code", language: "sql", code: sql }],
+        created_at: new Date().toISOString(),
+        local: true,
+      };
+
+      activeSendRef.current = sendKey;
+      activeStreamRef.current?.abort();
+      setInput("");
+      setIsSending(true);
+      setActivityItems([createStatusActivity("executing_sql", undefined, t)]);
+      setActiveTurn(null);
+      setFailedTurn(null);
+      setMessages((current) => [...current, localUserMessage]);
+
+      try {
+        const response = await apiRequest<ChatSqlExecutionResponse>(
+          `/api/v1/chat/conversations/${conversationId}/sql-executions`,
+          {
+            method: "POST",
+            token,
+            body: {
+              sql,
+              client_request_id: localUserId,
+            },
+          },
+        );
+
+        if (
+          activeConversationIdRef.current !== conversationId ||
+          activeSendRef.current !== sendKey
+        ) {
+          return;
+        }
+
+        setActiveTurn(response.turn);
+        setActivityItems([]);
+        setMessages((current) => {
+          const withUser = current.some((message) => message.id === localUserId)
+            ? current.map((message) =>
+                message.id === localUserId
+                  ? { ...response.user_message, local: false }
+                  : message,
+              )
+            : upsertMessage(current, response.user_message);
+
+          return upsertMessage(withUser, response.assistant_message);
+        });
+
+        if (response.turn.status === "failed") {
+          const message =
+            response.turn.error_message || t.workspace.sqlExecutionFailed;
+
+          setFailedTurn({
+            turnId: response.turn.id,
+            prompt: sql,
+            code: "storage_error",
+            message,
+          });
+        } else {
+          setFailedTurn(null);
+        }
+      } catch (error) {
+        if (activeConversationIdRef.current !== conversationId) {
+          return;
+        }
+
+        const message =
+          error instanceof Error ? error.message : t.workspace.sqlExecutionFailed;
+        const turnId = `failed-${localUserId}`;
+
+        setActivityItems([]);
+        setFailedTurn({
+          turnId,
+          prompt: sql,
+          code: "storage_error",
+          message,
+        });
+        setMessages((current) =>
+          upsertErrorMessage(
+            current.map((message) =>
+              message.id === localUserId
+                ? { ...message, status: "complete", local: false }
+                : message,
+            ),
+            turnId,
+            "storage_error",
+            message,
+          ),
+        );
+        toast.error(message);
+      } finally {
+        if (activeSendRef.current === sendKey) {
+          activeSendRef.current = null;
+          activeStreamRef.current = null;
+          activeTurnRef.current = null;
+          setIsSending(false);
+          setActivityItems([]);
+        }
+      }
+    },
+    [conversation.id, input, isSending, t, token],
+  );
+
   const stopTurn = useCallback(async () => {
     const turn = activeTurnRef.current ?? activeTurn;
 
@@ -754,6 +879,12 @@ export function ChatPanel({
 
   const handleSubmit = (event: FormEvent<HTMLFormElement>) => {
     event.preventDefault();
+
+    if (composerMode === "sql") {
+      void submitSql();
+      return;
+    }
+
     void submitPrompt();
   };
 
@@ -763,6 +894,11 @@ export function ChatPanel({
     }
 
     event.preventDefault();
+    if (composerMode === "sql") {
+      void submitSql();
+      return;
+    }
+
     void submitPrompt();
   };
 
@@ -882,16 +1018,20 @@ export function ChatPanel({
 
         <MessageComposer
           textareaRef={composerRef}
+          mode={composerMode}
           input={input}
           isLoading={isLoading}
           isSending={isSending}
           providerReady={providerReady}
           failedTurn={failedTurn}
+          onModeChange={setComposerMode}
           onChange={setInput}
           onSubmit={handleSubmit}
           onKeyDown={handleComposerKeyDown}
           onStop={() => void stopTurn()}
-          onRetry={(prompt) => void submitPrompt(prompt)}
+          onRetry={(prompt) =>
+            void (composerMode === "sql" ? submitSql(prompt) : submitPrompt(prompt))
+          }
         />
       </div>
     </section>
@@ -1368,6 +1508,8 @@ function MessagePart({
           onDatapanelChanged={onDatapanelChanged}
         />
       );
+    case "sql_execution_summary":
+      return <SqlExecutionSummaryCard part={part} />;
     case "error":
       return (
         <div className="flex items-start gap-2 text-sm">
@@ -1411,6 +1553,7 @@ function QueryResultTableCard({
     part.result.elapsed_ms,
     part.result.truncated,
   );
+  const canSave = part.saveable !== false;
 
   const saveToDatapanel = async () => {
     if (isSaving || savedCardId) {
@@ -1463,27 +1606,29 @@ function QueryResultTableCard({
             {description ? <span>{description}</span> : null}
           </div>
         </div>
-        <Button
-          type="button"
-          variant={savedCardId ? "outline" : "secondary"}
-          size="sm"
-          className="h-8 shrink-0 rounded-md"
-          disabled={isSaving || Boolean(savedCardId)}
-          onClick={() => void saveToDatapanel()}
-        >
-          {isSaving ? (
-            <Loader2 className="size-4 animate-spin" aria-hidden />
-          ) : savedCardId ? (
-            <Check className="size-4" aria-hidden />
-          ) : (
-            <PanelRightOpen className="size-4" aria-hidden />
-          )}
-          {isSaving
-            ? t.workspace.queryResult.saving
-            : savedCardId
-              ? t.workspace.queryResult.saved
-              : t.workspace.queryResult.save}
-        </Button>
+        {canSave ? (
+          <Button
+            type="button"
+            variant={savedCardId ? "outline" : "secondary"}
+            size="sm"
+            className="h-8 shrink-0 rounded-md"
+            disabled={isSaving || Boolean(savedCardId)}
+            onClick={() => void saveToDatapanel()}
+          >
+            {isSaving ? (
+              <Loader2 className="size-4 animate-spin" aria-hidden />
+            ) : savedCardId ? (
+              <Check className="size-4" aria-hidden />
+            ) : (
+              <PanelRightOpen className="size-4" aria-hidden />
+            )}
+            {isSaving
+              ? t.workspace.queryResult.saving
+              : savedCardId
+                ? t.workspace.queryResult.saved
+                : t.workspace.queryResult.save}
+          </Button>
+        ) : null}
       </header>
       <div className="h-64 min-h-0 p-2">
         <QueryResultTable
@@ -1492,6 +1637,50 @@ function QueryResultTableCard({
         />
       </div>
       <div className="border-t bg-muted/20 px-3 py-2">
+        <CodeBlock code={part.sql} language="sql" />
+      </div>
+    </article>
+  );
+}
+
+type SqlExecutionSummaryPart = Extract<
+  ChatMessagePart,
+  { kind: "sql_execution_summary" }
+>;
+
+function SqlExecutionSummaryCard({
+  part,
+}: {
+  part: SqlExecutionSummaryPart;
+}) {
+  const { t } = useI18n();
+  const affectedRows =
+    part.affected_rows === undefined
+      ? t.workspace.sqlExecutionAffectedRowsUnknown
+      : t.workspace.sqlExecutionAffectedRows(part.affected_rows);
+
+  return (
+    <article className="overflow-hidden rounded-lg border bg-background text-left shadow-xs">
+      <header className="flex items-start gap-3 border-b bg-muted/35 px-3 py-2">
+        <div className="mt-0.5 flex size-8 shrink-0 items-center justify-center rounded-md border bg-background text-emerald-600">
+          <CheckCircle2 className="size-4" aria-hidden />
+        </div>
+        <div className="min-w-0">
+          <div className="flex flex-wrap items-center gap-2">
+            <h3 className="text-sm font-medium">
+              {t.workspace.sqlExecutionSummaryTitle}
+            </h3>
+            <Badge variant="outline" className="font-mono uppercase">
+              {part.statement_kind}
+            </Badge>
+          </div>
+          <div className="mt-1 flex flex-wrap items-center gap-2 text-xs text-muted-foreground">
+            <span>{affectedRows}</span>
+            <span>{t.workspace.sqlExecutionElapsed(part.elapsed_ms)}</span>
+          </div>
+        </div>
+      </header>
+      <div className="border-t-0 bg-muted/20 px-3 py-2">
         <CodeBlock code={part.sql} language="sql" />
       </div>
     </article>
@@ -1943,11 +2132,13 @@ function InlineStageState({ stage }: { stage: ChatStreamStage }) {
 
 const MessageComposer = ({
   textareaRef,
+  mode,
   input,
   isLoading,
   isSending,
   providerReady,
   failedTurn,
+  onModeChange,
   onChange,
   onSubmit,
   onKeyDown,
@@ -1955,11 +2146,13 @@ const MessageComposer = ({
   onRetry,
 }: {
   textareaRef: Ref<HTMLTextAreaElement>;
+  mode: ComposerMode;
   input: string;
   isLoading: boolean;
   isSending: boolean;
   providerReady: boolean | null;
   failedTurn: FailedTurn | null;
+  onModeChange: (mode: ComposerMode) => void;
   onChange: (value: string) => void;
   onSubmit: (event: FormEvent<HTMLFormElement>) => void;
   onKeyDown: (event: KeyboardEvent<HTMLTextAreaElement>) => void;
@@ -1968,6 +2161,7 @@ const MessageComposer = ({
 }) => {
   const { t } = useI18n();
   const canSubmit = Boolean(input.trim()) && !isLoading && !isSending;
+  const isSqlMode = mode === "sql";
 
   return (
     <footer className="shrink-0 border-t bg-card px-4 py-3">
@@ -1997,7 +2191,7 @@ const MessageComposer = ({
         </div>
       ) : null}
 
-      {providerReady === false ? (
+      {providerReady === false && !isSqlMode ? (
         <div className="mb-3 flex items-center gap-2 text-xs text-muted-foreground">
           <AlertTriangle className="size-3.5 text-destructive" aria-hidden />
           <span>{t.workspace.providerSetupHint}</span>
@@ -2009,24 +2203,54 @@ const MessageComposer = ({
         onSubmit={onSubmit}
       >
         <label className="sr-only" htmlFor="ai-message">
-          {t.workspace.inputLabel}
+          {isSqlMode ? t.workspace.sqlInputLabel : t.workspace.inputLabel}
         </label>
-        <textarea
-          ref={textareaRef}
-          id="ai-message"
-          className="max-h-[10.5rem] min-h-12 w-full resize-none bg-transparent px-2 py-1.5 text-sm leading-6 outline-none placeholder:text-muted-foreground"
-          placeholder={t.workspace.inputPlaceholder}
-          value={input}
-          disabled={isLoading}
-          rows={1}
-          onChange={(event) => onChange(event.target.value)}
-          onKeyDown={onKeyDown}
-        />
-        <div className="mt-2 flex items-center justify-between gap-2">
-          <span className="px-2 text-xs text-muted-foreground">
-            {isSending ? t.workspace.pending : t.workspace.composerHint}
-          </span>
-          {isSending ? (
+        {isSqlMode ? (
+          <SqlHighlightedTextarea
+            textareaRef={textareaRef}
+            input={input}
+            isLoading={isLoading}
+            placeholder={t.workspace.sqlInputPlaceholder}
+            onChange={onChange}
+            onKeyDown={onKeyDown}
+          />
+        ) : (
+          <textarea
+            ref={textareaRef}
+            id="ai-message"
+            className="max-h-[10.5rem] min-h-12 w-full resize-none bg-transparent px-2 py-1.5 text-sm leading-6 outline-none placeholder:text-muted-foreground"
+            placeholder={t.workspace.inputPlaceholder}
+            value={input}
+            disabled={isLoading}
+            rows={1}
+            onChange={(event) => onChange(event.target.value)}
+            onKeyDown={onKeyDown}
+          />
+        )}
+        <div className="mt-2 flex flex-col gap-2 sm:flex-row sm:items-center sm:justify-between">
+          <div className="flex min-w-0 flex-wrap items-center gap-x-3 gap-y-1">
+            <label className="flex shrink-0 items-center gap-2 px-2 text-xs font-medium text-muted-foreground">
+              <Switch
+                checked={isSqlMode}
+                disabled={isLoading || isSending}
+                aria-label={t.workspace.sqlModeSwitchLabel}
+                onCheckedChange={(checked) =>
+                  onModeChange(checked ? "sql" : "chat")
+                }
+              />
+              <span>{isSqlMode ? t.workspace.sqlModeLabel : t.workspace.chatModeLabel}</span>
+            </label>
+            <span className="min-w-0 truncate px-2 text-xs text-muted-foreground">
+              {isSending
+                ? isSqlMode
+                  ? t.workspace.sqlExecuting
+                  : t.workspace.pending
+                : isSqlMode
+                  ? t.workspace.sqlComposerHint
+                  : t.workspace.composerHint}
+            </span>
+          </div>
+          {isSending && !isSqlMode ? (
             <Button
               type="button"
               variant="outline"
@@ -2036,6 +2260,17 @@ const MessageComposer = ({
             >
               <Square className="size-3.5 fill-current" aria-hidden />
               {t.workspace.stop}
+            </Button>
+          ) : isSending ? (
+            <Button
+              type="button"
+              variant="outline"
+              size="sm"
+              className="h-8 rounded-md"
+              disabled
+            >
+              <Loader2 className="size-4 animate-spin" aria-hidden />
+              {t.workspace.sqlExecuting}
             </Button>
           ) : (
             <Button
@@ -2055,6 +2290,56 @@ const MessageComposer = ({
     </footer>
   );
 };
+
+function SqlHighlightedTextarea({
+  textareaRef,
+  input,
+  isLoading,
+  placeholder,
+  onChange,
+  onKeyDown,
+}: {
+  textareaRef: Ref<HTMLTextAreaElement>;
+  input: string;
+  isLoading: boolean;
+  placeholder: string;
+  onChange: (value: string) => void;
+  onKeyDown: (event: KeyboardEvent<HTMLTextAreaElement>) => void;
+}) {
+  const highlightedInput = input || " ";
+
+  return (
+    <div className="relative max-h-[10.5rem] min-h-12 overflow-hidden">
+      <SyntaxHighlighter
+        language="sql"
+        useInlineStyles={false}
+        className="liquid-code-highlight pointer-events-none absolute inset-0 overflow-hidden px-2 py-1.5 text-sm leading-6"
+        codeTagProps={{
+          className: "font-mono whitespace-pre-wrap break-words",
+        }}
+        customStyle={{
+          margin: 0,
+          background: "transparent",
+          whiteSpace: "pre-wrap",
+        }}
+      >
+        {highlightedInput}
+      </SyntaxHighlighter>
+      <textarea
+        ref={textareaRef}
+        id="ai-message"
+        className="relative z-10 max-h-[10.5rem] min-h-12 w-full resize-none bg-transparent px-2 py-1.5 font-mono text-sm leading-6 text-transparent caret-foreground outline-none selection:bg-primary/20 placeholder:font-sans placeholder:text-muted-foreground"
+        placeholder={placeholder}
+        value={input}
+        disabled={isLoading}
+        rows={1}
+        spellCheck={false}
+        onChange={(event) => onChange(event.target.value)}
+        onKeyDown={onKeyDown}
+      />
+    </div>
+  );
+}
 
 function ConfirmDeleteWorkspaceDialog({
   conversationTitle,

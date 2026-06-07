@@ -14,6 +14,7 @@ liquid-core.workspace = true
 liquid-llm.workspace = true
 liquid-sql.workspace = true
 liquid-storage.workspace = true
+pg_query.workspace = true
 serde.workspace = true
 serde_json.workspace = true
 sqlx.workspace = true
