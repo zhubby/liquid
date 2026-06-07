@@ -33,6 +33,8 @@ import {
   X,
 } from "lucide-react";
 import ReactMarkdown from "react-markdown";
+import { Light as SyntaxHighlighter } from "react-syntax-highlighter";
+import sqlSyntax from "react-syntax-highlighter/dist/esm/languages/hljs/sql";
 import rehypeSanitize from "rehype-sanitize";
 import remarkGfm from "remark-gfm";
 import { toast } from "sonner";
@@ -112,6 +114,10 @@ type CodeElementProps = {
   className?: string;
   children?: ReactNode;
 };
+
+const SQL_CODE_LANGUAGES = new Set(["sql", "pgsql", "postgres", "postgresql"]);
+
+SyntaxHighlighter.registerLanguage("sql", sqlSyntax);
 
 export function ChatPanel({
   token,
@@ -1579,6 +1585,7 @@ function CodeBlock({
 }) {
   const { t } = useI18n();
   const label = language?.trim() || t.workspace.codeBlock;
+  const normalizedLanguage = normalizeCodeLanguage(language);
 
   return (
     <div className="overflow-hidden rounded-md border bg-muted/60 text-left">
@@ -1588,11 +1595,33 @@ function CodeBlock({
         </span>
         <CopyButton text={code} title={t.workspace.copyCode} compact />
       </div>
-      <pre className="max-h-72 overflow-auto p-3 text-xs leading-5">
-        <code className="font-mono">{code}</code>
-      </pre>
+      {normalizedLanguage === "sql" ? (
+        <SyntaxHighlighter
+          language="sql"
+          useInlineStyles={false}
+          className="liquid-code-highlight max-h-72 overflow-auto p-3 text-xs leading-5"
+          codeTagProps={{ className: "font-mono" }}
+          customStyle={{ margin: 0, background: "transparent" }}
+        >
+          {code}
+        </SyntaxHighlighter>
+      ) : (
+        <pre className="max-h-72 overflow-auto p-3 text-xs leading-5">
+          <code className="font-mono">{code}</code>
+        </pre>
+      )}
     </div>
   );
+}
+
+function normalizeCodeLanguage(language: string | null) {
+  const normalized = language?.trim().toLowerCase();
+
+  if (!normalized) {
+    return null;
+  }
+
+  return SQL_CODE_LANGUAGES.has(normalized) ? "sql" : normalized;
 }
 
 function ActionCard({

@@ -130,4 +130,51 @@
   .react-grid-item > .react-resizable-handle::after {
     @apply border-foreground/40;
   }
+
+  .liquid-code-highlight {
+    background: transparent;
+    color: var(--foreground);
+  }
+
+  .liquid-code-highlight code {
+    font-family: ui-monospace, SFMono-Regular, SFMono, Consolas, "Liberation Mono",
+      Menlo, monospace;
+  }
+
+  .liquid-code-highlight .hljs-keyword,
+  .liquid-code-highlight .hljs-built_in,
+  .liquid-code-highlight .hljs-name {
+    color: var(--chart-3);
+    font-weight: 700;
+  }
+
+  .liquid-code-highlight .hljs-type,
+  .liquid-code-highlight .hljs-title,
+  .liquid-code-highlight .hljs-section {
+    color: var(--chart-1);
+    font-weight: 600;
+  }
+
+  .liquid-code-highlight .hljs-string,
+  .liquid-code-highlight .hljs-symbol,
+  .liquid-code-highlight .hljs-template-variable {
+    color: var(--chart-2);
+  }
+
+  .liquid-code-highlight .hljs-number,
+  .liquid-code-highlight .hljs-literal,
+  .liquid-code-highlight .hljs-variable {
+    color: var(--chart-5);
+  }
+
+  .liquid-code-highlight .hljs-comment,
+  .liquid-code-highlight .hljs-quote {
+    color: var(--muted-foreground);
+    font-style: italic;
+  }
+
+  .liquid-code-highlight .hljs-operator,
+  .liquid-code-highlight .hljs-punctuation {
+    color: color-mix(in oklch, var(--foreground) 70%, var(--muted-foreground));
+  }
 }
