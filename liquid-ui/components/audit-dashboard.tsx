@@ -20,6 +20,12 @@ import { DatapanelWorkspacePanel } from "@/components/datapanel";
 import { ChatPanel } from "@/components/chat-workspace";
 import { Button } from "@/components/ui/button";
 import {
+  Tooltip,
+  TooltipContent,
+  TooltipProvider,
+  TooltipTrigger,
+} from "@/components/ui/tooltip";
+import {
   type ChatConversation,
   type ManagedDatabase,
   type PublicUser,
@@ -38,15 +44,6 @@ type AuditDashboardProps = {
 const MIN_AI_WIDTH = 320;
 const MIN_BI_WIDTH = 520;
 const DEFAULT_AI_PERCENT = 38;
-
-function newWorkspaceTitle(prefix: string) {
-  const alphabet = "ABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789";
-  const suffix = Array.from({ length: 5 }, () =>
-    alphabet[Math.floor(Math.random() * alphabet.length)],
-  ).join("");
-
-  return `${prefix}-${suffix}`;
-}
 
 export function AuditDashboard({
   token,
@@ -80,7 +77,7 @@ export function AuditDashboard({
       selectedDatabase.id,
     )}`;
     const createWorkspaceBody = () => ({
-      title: newWorkspaceTitle(t.workspace.defaultTitlePrefix),
+      title: t.workspace.defaultConversationTitle,
       managed_database_id: selectedDatabase.id,
     });
 
@@ -130,7 +127,7 @@ export function AuditDashboard({
     };
   }, [
     selectedDatabase.id,
-    t.workspace.defaultTitlePrefix,
+    t.workspace.defaultConversationTitle,
     t.workspace.loadFailed,
     token,
   ]);
@@ -149,7 +146,7 @@ export function AuditDashboard({
           method: "POST",
           token,
           body: {
-            title: newWorkspaceTitle(t.workspace.defaultTitlePrefix),
+            title: t.workspace.defaultConversationTitle,
             managed_database_id: selectedDatabase.id,
           },
         },
@@ -173,7 +170,7 @@ export function AuditDashboard({
     isCreatingWorkspace,
     selectedDatabase.id,
     t.workspace.createFailed,
-    t.workspace.defaultTitlePrefix,
+    t.workspace.defaultConversationTitle,
     token,
   ]);
 
@@ -227,7 +224,7 @@ export function AuditDashboard({
               method: "POST",
               token,
               body: {
-                title: newWorkspaceTitle(t.workspace.defaultTitlePrefix),
+                title: t.workspace.defaultConversationTitle,
                 managed_database_id: selectedDatabase.id,
               },
             },
@@ -252,7 +249,7 @@ export function AuditDashboard({
       conversations,
       isDeletingWorkspace,
       selectedDatabase.id,
-      t.workspace.defaultTitlePrefix,
+      t.workspace.defaultConversationTitle,
       t.workspace.deleteFailed,
       token,
     ],
@@ -403,62 +400,64 @@ function IconSidebar({
   const { t } = useI18n();
 
   return (
-    <aside className="flex w-14 shrink-0 flex-col items-center border-r bg-sidebar text-sidebar-foreground">
-      <div className="flex h-16 w-full items-center justify-center border-b border-sidebar-border">
-        <div
-          className="flex size-10 items-center justify-center"
-          title="Liquid"
-        >
-          <Image
-            src="/logo.png"
-            alt="Liquid"
-            width={36}
-            height={36}
-            priority
-            unoptimized
-            draggable={false}
-            className="size-9 select-none object-contain"
-          />
+    <TooltipProvider delayDuration={250}>
+      <aside className="flex w-14 shrink-0 flex-col items-center border-r bg-sidebar text-sidebar-foreground">
+        <div className="flex h-16 w-full items-center justify-center border-b border-sidebar-border">
+          <div
+            className="flex size-10 items-center justify-center"
+            title="Liquid"
+          >
+            <Image
+              src="/logo.png"
+              alt="Liquid"
+              width={36}
+              height={36}
+              priority
+              unoptimized
+              draggable={false}
+              className="size-9 select-none object-contain"
+            />
+          </div>
         </div>
-      </div>
-      <nav className="flex flex-1 flex-col items-center gap-2 overflow-y-auto py-4">
-        {conversations.map((conversation) => (
+        <nav className="flex flex-1 flex-col items-center gap-2 overflow-y-auto py-4">
+          {conversations.map((conversation) => (
+            <SidebarIcon
+              key={conversation.id}
+              icon={<Bot className="size-5" aria-hidden />}
+              label={conversation.title}
+              active={conversation.id === activeConversationId}
+              onClick={() => onSelectWorkspace(conversation)}
+            />
+          ))}
           <SidebarIcon
-            key={conversation.id}
-            icon={<Bot className="size-5" aria-hidden />}
-            label={conversation.title}
-            active={conversation.id === activeConversationId}
-            onClick={() => onSelectWorkspace(conversation)}
+            icon={
+              isCreatingWorkspace ? (
+                <Loader2 className="size-5 animate-spin" aria-hidden />
+              ) : (
+                <Plus className="size-5" aria-hidden />
+              )
+            }
+            label={t.workspace.newWorkspace}
+            active={isCreatingWorkspace}
+            disabled={isWorkspaceLoading || isCreatingWorkspace}
+            onClick={onCreateWorkspace}
           />
-        ))}
-        <SidebarIcon
-          icon={
-            isCreatingWorkspace ? (
-              <Loader2 className="size-5 animate-spin" aria-hidden />
-            ) : (
-              <Plus className="size-5" aria-hidden />
-            )
-          }
-          label={t.workspace.newWorkspace}
-          active={isCreatingWorkspace}
-          disabled={isWorkspaceLoading || isCreatingWorkspace}
-          onClick={onCreateWorkspace}
-        />
-      </nav>
-      <div className="flex w-full flex-col items-center gap-2 border-t border-sidebar-border py-3">
-        <Button
-          type="button"
-          variant="ghost"
-          size="icon"
-          className="size-10 rounded-md text-sidebar-foreground/70 hover:bg-sidebar-accent hover:text-sidebar-accent-foreground"
-          aria-label={t.workspace.returnToDatabases}
-          title={t.workspace.returnToDatabases}
-          onClick={onDatabaseExit}
-        >
-          <ArrowLeft className="size-5" aria-hidden />
-        </Button>
-      </div>
-    </aside>
+        </nav>
+        <div className="flex w-full flex-col items-center gap-2 border-t border-sidebar-border py-3">
+          <Button
+            type="button"
+            variant="ghost"
+            size="icon"
+            className="size-10 rounded-md text-sidebar-foreground/70 hover:bg-sidebar-accent hover:text-sidebar-accent-foreground"
+            aria-label={t.workspace.returnToDatabases}
+            title={t.workspace.returnToDatabases}
+            onClick={onDatabaseExit}
+          >
+            <ArrowLeft className="size-5" aria-hidden />
+          </Button>
+        </div>
+      </aside>
+    </TooltipProvider>
   );
 }
 
@@ -476,22 +475,28 @@ function SidebarIcon({
   onClick?: MouseEventHandler<HTMLButtonElement>;
 }) {
   return (
-    <Button
-      type="button"
-      variant="ghost"
-      size="icon"
-      disabled={disabled}
-      className={cn(
-        "size-10 rounded-md text-sidebar-foreground/70 hover:bg-sidebar-accent hover:text-sidebar-accent-foreground",
-        active &&
-          "bg-sidebar-accent text-sidebar-accent-foreground shadow-xs ring-1 ring-sidebar-border",
-      )}
-      aria-label={label}
-      title={label}
-      onClick={onClick}
-    >
-      {icon}
-    </Button>
+    <Tooltip>
+      <TooltipTrigger asChild>
+        <Button
+          type="button"
+          variant="ghost"
+          size="icon"
+          disabled={disabled}
+          className={cn(
+            "size-10 rounded-md text-sidebar-foreground/70 hover:bg-sidebar-accent hover:text-sidebar-accent-foreground",
+            active &&
+              "bg-sidebar-accent text-sidebar-accent-foreground shadow-xs ring-1 ring-sidebar-border",
+          )}
+          aria-label={label}
+          onClick={onClick}
+        >
+          {icon}
+        </Button>
+      </TooltipTrigger>
+      <TooltipContent side="right" align="center" sideOffset={8}>
+        <span className="block max-w-64 truncate">{label}</span>
+      </TooltipContent>
+    </Tooltip>
   );
 }
 

@@ -336,7 +336,7 @@ const zhCN = {
     },
   },
   workspace: {
-    defaultTitlePrefix: "AI工作区",
+    defaultConversationTitle: "新的会话",
     loadFailed: "加载工作区失败",
     createFailed: "新建工作区失败",
     deleteFailed: "删除工作区失败",
@@ -348,8 +348,6 @@ const zhCN = {
     sendFailed: "发送失败",
     providerNotConfigured:
       "请先在设置中配置 LLM Provider 和 API Key，再使用 AI 工作台聊天。",
-    providerReady: "模型已连接",
-    providerMissing: "模型未配置",
     providerSetupHint:
       "当前账户还没有可用 API Key。配置 LLM Provider 后即可开始真实聊天。",
     errorMessages: {
@@ -922,7 +920,7 @@ const enUS: Messages = {
     },
   },
   workspace: {
-    defaultTitlePrefix: "AI Workspace",
+    defaultConversationTitle: "New session",
     loadFailed: "Failed to load workspaces",
     createFailed: "Failed to create workspace",
     deleteFailed: "Failed to delete workspace",
@@ -934,8 +932,6 @@ const enUS: Messages = {
     sendFailed: "Failed to send",
     providerNotConfigured:
       "Configure an LLM provider and API key in Settings before using AI workbench chat.",
-    providerReady: "Model connected",
-    providerMissing: "Model missing",
     providerSetupHint:
       "This account does not have a usable API key yet. Configure an LLM provider to start real chat.",
     errorMessages: {

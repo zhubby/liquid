@@ -659,9 +659,7 @@ impl LiquidStore for TestStore {
         let conversation = AgentConversation {
             id: format!("conversation-{}", conversations.len() + 1),
             owner_user_id: owner_user_id.to_owned(),
-            title: request
-                .title
-                .unwrap_or_else(|| "New conversation".to_owned()),
+            title: request.title.unwrap_or_else(|| "新的会话".to_owned()),
             managed_database_id,
             created_at: time::OffsetDateTime::UNIX_EPOCH,
             updated_at: time::OffsetDateTime::UNIX_EPOCH,
@@ -1101,8 +1099,7 @@ impl LiquidStore for TestStore {
         owner_user_id: &str,
         conversation_id: &str,
     ) -> Result<Datapanel, StorageError> {
-        let conversation = self
-            .get_agent_conversation(owner_user_id, conversation_id)
+        self.get_agent_conversation(owner_user_id, conversation_id)
             .await?;
         let mut panels = self.panels.lock().unwrap();
 
@@ -1118,8 +1115,8 @@ impl LiquidStore for TestStore {
         let panel = Datapanel {
             id: format!("panel-{}", panels.len() + 1),
             conversation_id: conversation_id.to_owned(),
-            title: format!("{} Datapanel", conversation.title),
-            description: None,
+            title: "新的数据面板".to_owned(),
+            description: Some("用于沉淀当前会话的数据查询结果与图表".to_owned()),
             cards: Vec::new(),
             created_at: time::OffsetDateTime::UNIX_EPOCH,
             updated_at: time::OffsetDateTime::UNIX_EPOCH,
@@ -4264,7 +4261,7 @@ async fn datapanel_preview_reuses_slug_and_public_response_excludes_private_fiel
         .unwrap();
     assert_eq!(public_response.status(), StatusCode::OK);
     let preview = response_json(public_response).await;
-    assert_eq!(preview["title"], "datapanel workspace Datapanel");
+    assert_eq!(preview["title"], "新的数据面板");
     assert_eq!(preview["cards"][0]["title"], "Agent events");
     assert_eq!(preview["cards"][0]["result"]["row_count"], 1);
     assert!(preview["cards"][0].get("sql").is_none());

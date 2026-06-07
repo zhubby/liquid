@@ -832,7 +832,6 @@ export function ChatPanel({
       <ChatHeader
         conversation={conversation}
         selectedDatabase={selectedDatabase}
-        providerReady={providerReady}
         titleInput={titleInput}
         isSavingTitle={isSavingTitle}
         isDeletingWorkspace={isDeletingWorkspace}
@@ -896,7 +895,6 @@ export function ChatPanel({
 function ChatHeader({
   conversation,
   selectedDatabase,
-  providerReady,
   titleInput,
   isSavingTitle,
   isDeletingWorkspace,
@@ -907,7 +905,6 @@ function ChatHeader({
 }: {
   conversation: ChatConversation;
   selectedDatabase: ManagedDatabase;
-  providerReady: boolean | null;
   titleInput: string;
   isSavingTitle: boolean;
   isDeletingWorkspace: boolean;
@@ -956,7 +953,6 @@ function ChatHeader({
           <span className="truncate">
             {selectedDatabase.name} / {selectedDatabase.database}
           </span>
-          <ProviderBadge providerReady={providerReady} />
         </div>
       </div>
       <Button
@@ -976,26 +972,6 @@ function ChatHeader({
         )}
       </Button>
     </header>
-  );
-}
-
-function ProviderBadge({ providerReady }: { providerReady: boolean | null }) {
-  const { t } = useI18n();
-
-  if (providerReady === null) {
-    return null;
-  }
-
-  return (
-    <Badge
-      variant={providerReady ? "secondary" : "outline"}
-      className={cn(
-        "h-5 rounded-md border px-1.5 text-[11px]",
-        !providerReady && "border-destructive/25 text-destructive",
-      )}
-    >
-      {providerReady ? t.workspace.providerReady : t.workspace.providerMissing}
-    </Badge>
   );
 }
 

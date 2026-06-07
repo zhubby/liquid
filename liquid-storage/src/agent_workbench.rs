@@ -78,6 +78,7 @@ requires_confirmation,
 created_at,
 updated_at
 "#;
+const DEFAULT_AGENT_CONVERSATION_TITLE: &str = "新的会话";
 
 pub(crate) async fn list_agent_conversations(
     storage: &Storage,
@@ -110,8 +111,8 @@ pub(crate) async fn create_agent_conversation(
     owner_user_id: &str,
     request: CreateAgentConversationRequest,
 ) -> Result<AgentConversation, StorageError> {
-    let title =
-        optional_string("title", request.title)?.unwrap_or_else(|| "New conversation".into());
+    let title = optional_string("title", request.title)?
+        .unwrap_or_else(|| DEFAULT_AGENT_CONVERSATION_TITLE.into());
     let managed_database_id = optional_string("managed_database_id", request.managed_database_id)?;
     let row = sqlx::query_as::<_, AgentConversationRow>(&format!(
         r#"

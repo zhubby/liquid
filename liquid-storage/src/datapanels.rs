@@ -41,6 +41,8 @@ updated_at
 "#;
 
 const PREVIEW_SLUG_BYTES: usize = 32;
+const DEFAULT_DATAPANEL_TITLE: &str = "新的数据面板";
+const DEFAULT_DATAPANEL_DESCRIPTION: &str = "用于沉淀当前会话的数据查询结果与图表";
 
 pub(crate) async fn get_or_create_datapanel(
     storage: &Storage,
@@ -49,8 +51,8 @@ pub(crate) async fn get_or_create_datapanel(
 ) -> Result<Datapanel, StorageError> {
     let row = sqlx::query_as::<_, DatapanelRow>(&format!(
         r#"
-        insert into datapanels (conversation_id, owner_user_id, title)
-        select id, owner_user_id, title || ' Datapanel'
+        insert into datapanels (conversation_id, owner_user_id, title, description)
+        select id, owner_user_id, $3, $4
         from agent_conversations
         where id = $2::uuid
           and owner_user_id = $1::uuid
@@ -61,6 +63,8 @@ pub(crate) async fn get_or_create_datapanel(
     ))
     .bind(owner_user_id)
     .bind(conversation_id)
+    .bind(DEFAULT_DATAPANEL_TITLE)
+    .bind(DEFAULT_DATAPANEL_DESCRIPTION)
     .fetch_optional(&storage.pool)
     .await
     .map_err(map_database_error)?;

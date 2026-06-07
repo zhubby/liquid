@@ -1,9 +1,10 @@
 "use client";
 
-import { useEffect, useMemo, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 import {
   AlertCircle,
   CalendarDays,
+  ChevronDown,
   ChevronLeft,
   ChevronRight,
   ClipboardCheck,
@@ -257,83 +258,81 @@ export function SqlAuditHistory({ token, databases }: SqlAuditHistoryProps) {
         <CardContent className="space-y-3 px-4">
           <div className="grid gap-2 rounded-lg border bg-muted/20 p-3 md:grid-cols-2 xl:grid-cols-5">
             <FilterField label={t.auditHistory.filters.database}>
-              <select
+              <FilterSelect
                 value={databaseId}
-                onChange={(event) =>
-                  handleFilterChange(() => setDatabaseId(event.target.value))
+                ariaLabel={t.auditHistory.filters.database}
+                options={[
+                  { value: "all", label: t.auditHistory.allDatabases },
+                  ...databases.map((database) => ({
+                    value: database.id,
+                    label: database.name,
+                  })),
+                ]}
+                onValueChange={(value) =>
+                  handleFilterChange(() => setDatabaseId(value))
                 }
-                className="h-9 w-full rounded-md border bg-background px-3 text-sm outline-none transition-shadow focus-visible:ring-[3px] focus-visible:ring-ring/50"
-              >
-                <option value="all">{t.auditHistory.allDatabases}</option>
-                {databases.map((database) => (
-                  <option key={database.id} value={database.id}>
-                    {database.name}
-                  </option>
-                ))}
-              </select>
+              />
             </FilterField>
             <FilterField label={t.auditHistory.filters.createdFrom}>
-              <input
-                type="date"
+              <DatePicker
                 value={createdFrom}
-                onChange={(event) =>
-                  handleFilterChange(() => setCreatedFrom(event.target.value))
+                locale={locale}
+                ariaLabel={t.auditHistory.filters.createdFrom}
+                onValueChange={(value) =>
+                  handleFilterChange(() => setCreatedFrom(value))
                 }
-                className="h-9 w-full rounded-md border bg-background px-3 text-sm outline-none transition-shadow focus-visible:ring-[3px] focus-visible:ring-ring/50"
               />
             </FilterField>
             <FilterField label={t.auditHistory.filters.createdTo}>
-              <input
-                type="date"
+              <DatePicker
                 value={createdTo}
-                onChange={(event) =>
-                  handleFilterChange(() => setCreatedTo(event.target.value))
+                locale={locale}
+                ariaLabel={t.auditHistory.filters.createdTo}
+                onValueChange={(value) =>
+                  handleFilterChange(() => setCreatedTo(value))
                 }
-                className="h-9 w-full rounded-md border bg-background px-3 text-sm outline-none transition-shadow focus-visible:ring-[3px] focus-visible:ring-ring/50"
               />
             </FilterField>
             <FilterField label={t.auditHistory.filters.auditStatus}>
-              <select
+              <FilterSelect
                 value={auditStatus}
-                onChange={(event) =>
+                ariaLabel={t.auditHistory.filters.auditStatus}
+                options={[
+                  { value: "all", label: t.auditHistory.allStatuses },
+                  ...auditStatusOptions.map((status) => ({
+                    value: status,
+                    label: t.auditHistory.auditStatuses[status],
+                  })),
+                ]}
+                onValueChange={(value) =>
                   handleFilterChange(() =>
-                    setAuditStatus(
-                      event.target.value as FilterValue<SqlAuditLifecycleStatus>,
-                    ),
+                    setAuditStatus(value as FilterValue<SqlAuditLifecycleStatus>),
                   )
                 }
-                className="h-9 w-full rounded-md border bg-background px-3 text-sm outline-none transition-shadow focus-visible:ring-[3px] focus-visible:ring-ring/50"
-              >
-                <option value="all">{t.auditHistory.allStatuses}</option>
-                {auditStatusOptions.map((status) => (
-                  <option key={status} value={status}>
-                    {t.auditHistory.auditStatuses[status]}
-                  </option>
-                ))}
-              </select>
+              />
             </FilterField>
             <FilterField label={t.auditHistory.filters.executionStatus}>
-              <select
+              <FilterSelect
                 value={executionStatus}
-                onChange={(event) =>
+                ariaLabel={t.auditHistory.filters.executionStatus}
+                options={[
+                  {
+                    value: "all",
+                    label: t.auditHistory.allExecutionStatuses,
+                  },
+                  ...executionStatusOptions.map((status) => ({
+                    value: status,
+                    label: t.auditHistory.executionStatuses[status],
+                  })),
+                ]}
+                onValueChange={(value) =>
                   handleFilterChange(() =>
                     setExecutionStatus(
-                      event.target
-                        .value as FilterValue<SqlAuditExecutionStatus>,
+                      value as FilterValue<SqlAuditExecutionStatus>,
                     ),
                   )
                 }
-                className="h-9 w-full rounded-md border bg-background px-3 text-sm outline-none transition-shadow focus-visible:ring-[3px] focus-visible:ring-ring/50"
-              >
-                <option value="all">
-                  {t.auditHistory.allExecutionStatuses}
-                </option>
-                {executionStatusOptions.map((status) => (
-                  <option key={status} value={status}>
-                    {t.auditHistory.executionStatuses[status]}
-                  </option>
-                ))}
-              </select>
+              />
             </FilterField>
           </div>
 
@@ -424,23 +423,22 @@ export function SqlAuditHistory({ token, databases }: SqlAuditHistoryProps) {
               {t.auditHistory.pageSummary(page, pageCount, totalCount)}
             </div>
             <div className="flex flex-wrap items-center gap-2">
-              <label className="flex items-center gap-2 text-xs text-muted-foreground">
+              <div className="flex items-center gap-2 text-xs text-muted-foreground">
                 {t.auditHistory.pageSize}
-                <select
+                <FilterSelect
                   value={pageSize}
-                  onChange={(event) => {
-                    setPageSize(Number(event.target.value) as PageSize);
+                  className="w-24"
+                  ariaLabel={t.auditHistory.pageSize}
+                  options={pageSizeOptions.map((size) => ({
+                    value: size,
+                    label: String(size),
+                  }))}
+                  onValueChange={(value) => {
+                    setPageSize(Number(value) as PageSize);
                     setPage(1);
                   }}
-                  className="h-8 rounded-md border bg-background px-2 text-sm text-foreground outline-none transition-shadow focus-visible:ring-[3px] focus-visible:ring-ring/50"
-                >
-                  {pageSizeOptions.map((size) => (
-                    <option key={size} value={size}>
-                      {size}
-                    </option>
-                  ))}
-                </select>
-              </label>
+                />
+              </div>
               <Button
                 type="button"
                 variant="outline"
@@ -491,10 +489,313 @@ function FilterField({
   children: React.ReactNode;
 }) {
   return (
-    <label className="space-y-1.5">
+    <div className="space-y-1.5">
       <span className="text-xs font-medium text-muted-foreground">{label}</span>
       {children}
-    </label>
+    </div>
+  );
+}
+
+type FilterSelectOption<T extends string | number> = {
+  value: T;
+  label: string;
+};
+
+function FilterSelect<T extends string | number>({
+  value,
+  options,
+  ariaLabel,
+  className,
+  onValueChange,
+}: {
+  value: T;
+  options: FilterSelectOption<T>[];
+  ariaLabel: string;
+  className?: string;
+  onValueChange: (value: T) => void;
+}) {
+  const [isOpen, setIsOpen] = useState(false);
+  const rootRef = useRef<HTMLDivElement | null>(null);
+  const selected = options.find((option) => option.value === value);
+
+  useEffect(() => {
+    if (!isOpen) {
+      return;
+    }
+
+    const handlePointerDown = (event: PointerEvent) => {
+      if (!rootRef.current?.contains(event.target as Node)) {
+        setIsOpen(false);
+      }
+    };
+
+    const handleKeyDown = (event: KeyboardEvent) => {
+      if (event.key === "Escape") {
+        setIsOpen(false);
+      }
+    };
+
+    document.addEventListener("pointerdown", handlePointerDown);
+    document.addEventListener("keydown", handleKeyDown);
+
+    return () => {
+      document.removeEventListener("pointerdown", handlePointerDown);
+      document.removeEventListener("keydown", handleKeyDown);
+    };
+  }, [isOpen]);
+
+  return (
+    <div ref={rootRef} className={cn("relative", className)}>
+      <button
+        type="button"
+        className={cn(
+          "flex h-9 w-full items-center justify-between gap-2 rounded-md border bg-background px-3 text-left text-sm outline-none transition-all hover:bg-accent/50 focus-visible:border-ring focus-visible:ring-[3px] focus-visible:ring-ring/50",
+          isOpen && "border-ring ring-[3px] ring-ring/50",
+        )}
+        aria-label={ariaLabel}
+        aria-haspopup="listbox"
+        aria-expanded={isOpen}
+        onClick={() => setIsOpen((current) => !current)}
+      >
+        <span className="min-w-0 truncate text-foreground">
+          {selected?.label ?? ""}
+        </span>
+        <ChevronDown
+          className={cn(
+            "size-4 shrink-0 text-muted-foreground transition-transform",
+            isOpen && "rotate-180",
+          )}
+          aria-hidden
+        />
+      </button>
+
+      {isOpen ? (
+        <div
+          className="absolute left-0 top-[calc(100%+0.25rem)] z-40 max-h-72 w-full min-w-44 overflow-y-auto rounded-md border bg-popover p-1 text-popover-foreground shadow-lg"
+          role="listbox"
+          aria-label={ariaLabel}
+        >
+          {options.map((option) => {
+            const isSelected = option.value === value;
+
+            return (
+              <button
+                key={String(option.value)}
+                type="button"
+                className={cn(
+                  "flex h-8 w-full items-center rounded-sm px-2.5 text-left text-sm outline-none transition-colors hover:bg-accent hover:text-accent-foreground focus-visible:bg-accent focus-visible:text-accent-foreground",
+                  isSelected && "bg-accent text-accent-foreground",
+                )}
+                role="option"
+                aria-selected={isSelected}
+                onClick={() => {
+                  onValueChange(option.value);
+                  setIsOpen(false);
+                }}
+              >
+                <span className="min-w-0 truncate">{option.label}</span>
+              </button>
+            );
+          })}
+        </div>
+      ) : null}
+    </div>
+  );
+}
+
+function DatePicker({
+  value,
+  locale,
+  ariaLabel,
+  onValueChange,
+}: {
+  value: string;
+  locale: string;
+  ariaLabel: string;
+  onValueChange: (value: string) => void;
+}) {
+  const [isOpen, setIsOpen] = useState(false);
+  const rootRef = useRef<HTMLDivElement | null>(null);
+  const selectedDate = useMemo(() => parseDateValue(value), [value]);
+  const [visibleMonth, setVisibleMonth] = useState(() =>
+    startOfMonth(selectedDate ?? new Date()),
+  );
+  const today = startOfDay(new Date());
+  const days = useMemo(() => monthGrid(visibleMonth), [visibleMonth]);
+  const weekDays = useMemo(() => weekdayLabels(locale), [locale]);
+  const clearLabel = locale === "zh-CN" ? "清除" : "Clear";
+  const todayLabel = locale === "zh-CN" ? "今天" : "Today";
+  const buttonLabel = selectedDate
+    ? formatDateLabel(selectedDate, locale)
+    : locale === "zh-CN"
+      ? "年 /月 /日"
+      : "yyyy / mm / dd";
+
+  useEffect(() => {
+    if (selectedDate) {
+      setVisibleMonth(startOfMonth(selectedDate));
+    }
+  }, [selectedDate]);
+
+  useEffect(() => {
+    if (!isOpen) {
+      return;
+    }
+
+    const handlePointerDown = (event: PointerEvent) => {
+      if (!rootRef.current?.contains(event.target as Node)) {
+        setIsOpen(false);
+      }
+    };
+
+    const handleKeyDown = (event: KeyboardEvent) => {
+      if (event.key === "Escape") {
+        setIsOpen(false);
+      }
+    };
+
+    document.addEventListener("pointerdown", handlePointerDown);
+    document.addEventListener("keydown", handleKeyDown);
+
+    return () => {
+      document.removeEventListener("pointerdown", handlePointerDown);
+      document.removeEventListener("keydown", handleKeyDown);
+    };
+  }, [isOpen]);
+
+  return (
+    <div ref={rootRef} className="relative">
+      <button
+        type="button"
+        className={cn(
+          "flex h-9 w-full items-center justify-between gap-2 rounded-md border bg-background px-3 text-left text-sm outline-none transition-all hover:bg-accent/50 focus-visible:border-ring focus-visible:ring-[3px] focus-visible:ring-ring/50",
+          isOpen && "border-ring ring-[3px] ring-ring/50",
+        )}
+        aria-label={ariaLabel}
+        aria-haspopup="dialog"
+        aria-expanded={isOpen}
+        onClick={() => setIsOpen((current) => !current)}
+      >
+        <span
+          className={cn(
+            "min-w-0 truncate",
+            selectedDate ? "text-foreground" : "text-muted-foreground",
+          )}
+        >
+          {buttonLabel}
+        </span>
+        <CalendarDays className="size-4 shrink-0 text-muted-foreground" aria-hidden />
+      </button>
+
+      {isOpen ? (
+        <div
+          className="absolute left-0 top-[calc(100%+0.25rem)] z-40 w-[19rem] rounded-md border bg-popover p-3 text-popover-foreground shadow-lg"
+          role="dialog"
+          aria-label={ariaLabel}
+        >
+          <div className="flex items-center justify-between gap-2">
+            <div className="truncate text-sm font-semibold">
+              {formatMonthLabel(visibleMonth, locale)}
+            </div>
+            <div className="flex items-center gap-1">
+              <Button
+                type="button"
+                variant="ghost"
+                size="icon"
+                className="size-8"
+                aria-label="Previous month"
+                onClick={() =>
+                  setVisibleMonth((current) => addMonths(current, -1))
+                }
+              >
+                <ChevronLeft className="size-4" aria-hidden />
+              </Button>
+              <Button
+                type="button"
+                variant="ghost"
+                size="icon"
+                className="size-8"
+                aria-label="Next month"
+                onClick={() =>
+                  setVisibleMonth((current) => addMonths(current, 1))
+                }
+              >
+                <ChevronRight className="size-4" aria-hidden />
+              </Button>
+            </div>
+          </div>
+
+          <div className="mt-3 grid grid-cols-7 gap-1 text-center text-xs font-medium text-muted-foreground">
+            {weekDays.map((day) => (
+              <div key={day} className="py-1">
+                {day}
+              </div>
+            ))}
+          </div>
+
+          <div className="mt-1 grid grid-cols-7 gap-1">
+            {days.map((day) => {
+              const isSelected = selectedDate
+                ? sameCalendarDate(day, selectedDate)
+                : false;
+              const isToday = sameCalendarDate(day, today);
+              const isCurrentMonth =
+                day.getMonth() === visibleMonth.getMonth() &&
+                day.getFullYear() === visibleMonth.getFullYear();
+
+              return (
+                <button
+                  key={formatDateValue(day)}
+                  type="button"
+                  className={cn(
+                    "flex size-9 items-center justify-center rounded-md text-sm outline-none transition-colors hover:bg-accent hover:text-accent-foreground focus-visible:ring-[3px] focus-visible:ring-ring/50",
+                    !isCurrentMonth && "text-muted-foreground/60",
+                    isToday && !isSelected && "border border-border",
+                    isSelected &&
+                      "bg-primary font-semibold text-primary-foreground hover:bg-primary hover:text-primary-foreground",
+                  )}
+                  aria-pressed={isSelected}
+                  onClick={() => {
+                    onValueChange(formatDateValue(day));
+                    setIsOpen(false);
+                  }}
+                >
+                  {day.getDate()}
+                </button>
+              );
+            })}
+          </div>
+
+          <div className="mt-3 flex items-center justify-between">
+            <Button
+              type="button"
+              variant="ghost"
+              size="sm"
+              className="px-2 text-primary hover:text-primary"
+              onClick={() => {
+                onValueChange("");
+                setIsOpen(false);
+              }}
+            >
+              {clearLabel}
+            </Button>
+            <Button
+              type="button"
+              variant="ghost"
+              size="sm"
+              className="px-2 text-primary hover:text-primary"
+              onClick={() => {
+                onValueChange(formatDateValue(today));
+                setVisibleMonth(startOfMonth(today));
+                setIsOpen(false);
+              }}
+            >
+              {todayLabel}
+            </Button>
+          </div>
+        </div>
+      ) : null}
+    </div>
   );
 }
 
@@ -903,6 +1204,96 @@ function deriveExecutionStatus(status: SqlAuditStatus): SqlAuditExecutionStatus 
   }
 
   return "not_executed";
+}
+
+function parseDateValue(value: string) {
+  const match = /^(\d{4})-(\d{2})-(\d{2})$/.exec(value);
+
+  if (!match) {
+    return null;
+  }
+
+  const year = Number(match[1]);
+  const month = Number(match[2]) - 1;
+  const day = Number(match[3]);
+  const date = new Date(year, month, day);
+
+  if (
+    date.getFullYear() !== year ||
+    date.getMonth() !== month ||
+    date.getDate() !== day
+  ) {
+    return null;
+  }
+
+  return date;
+}
+
+function formatDateValue(date: Date) {
+  const year = date.getFullYear();
+  const month = String(date.getMonth() + 1).padStart(2, "0");
+  const day = String(date.getDate()).padStart(2, "0");
+
+  return `${year}-${month}-${day}`;
+}
+
+function formatDateLabel(date: Date, locale: string) {
+  return new Intl.DateTimeFormat(locale, {
+    year: "numeric",
+    month: "2-digit",
+    day: "2-digit",
+  }).format(date);
+}
+
+function formatMonthLabel(date: Date, locale: string) {
+  return new Intl.DateTimeFormat(locale, {
+    year: "numeric",
+    month: "long",
+  }).format(date);
+}
+
+function startOfDay(date: Date) {
+  return new Date(date.getFullYear(), date.getMonth(), date.getDate());
+}
+
+function startOfMonth(date: Date) {
+  return new Date(date.getFullYear(), date.getMonth(), 1);
+}
+
+function addMonths(date: Date, amount: number) {
+  return new Date(date.getFullYear(), date.getMonth() + amount, 1);
+}
+
+function monthGrid(month: Date) {
+  const firstDay = startOfMonth(month);
+  const start = new Date(firstDay);
+
+  start.setDate(firstDay.getDate() - firstDay.getDay());
+
+  return Array.from({ length: 42 }, (_, index) => {
+    const date = new Date(start);
+    date.setDate(start.getDate() + index);
+    return date;
+  });
+}
+
+function weekdayLabels(locale: string) {
+  const sunday = new Date(2026, 5, 7);
+
+  return Array.from({ length: 7 }, (_, index) => {
+    const date = new Date(sunday);
+    date.setDate(sunday.getDate() + index);
+
+    return new Intl.DateTimeFormat(locale, { weekday: "narrow" }).format(date);
+  });
+}
+
+function sameCalendarDate(left: Date, right: Date) {
+  return (
+    left.getFullYear() === right.getFullYear() &&
+    left.getMonth() === right.getMonth() &&
+    left.getDate() === right.getDate()
+  );
 }
 
 function localDateBoundary(value: string, boundary: "start" | "end") {

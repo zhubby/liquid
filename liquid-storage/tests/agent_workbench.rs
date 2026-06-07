@@ -166,6 +166,10 @@ async fn datapanel_store_persists_cards_layouts_and_export() {
         .await
         .unwrap();
     assert_eq!(panel.id, same_panel.id);
+    assert_eq!(
+        panel.description.as_deref(),
+        Some("用于沉淀当前会话的数据查询结果与图表")
+    );
 
     let card = storage
         .create_datapanel_card(
