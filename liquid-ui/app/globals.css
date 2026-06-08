@@ -137,11 +137,55 @@
   }
 }
 
-@layer components {
-  .react-grid-item.react-grid-placeholder {
-    @apply rounded-lg border border-border bg-muted/70 opacity-100 shadow-sm;
-  }
+.datapanel-grid-layout.react-grid-layout {
+  transition: height 160ms cubic-bezier(0.2, 0, 0, 1);
+}
 
+.datapanel-grid-layout .react-grid-placeholder,
+.datapanel-grid-layout .react-grid-item.react-grid-placeholder {
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  background: var(--muted);
+  background: color-mix(in oklab, var(--muted) 70%, transparent);
+  opacity: 1;
+  box-shadow: 0 1px 3px rgb(0 0 0 / 10%), 0 1px 2px rgb(0 0 0 / 6%);
+}
+
+.datapanel-grid-layout .react-grid-item {
+  transition-duration: 160ms;
+  transition-timing-function: cubic-bezier(0.2, 0, 0, 1);
+}
+
+.datapanel-grid-layout .react-grid-item.cssTransforms {
+  transition-property: transform, width, height;
+}
+
+.datapanel-grid-layout .react-grid-item.react-draggable-dragging,
+.datapanel-grid-layout .react-grid-item.resizing {
+  z-index: 30;
+  cursor: grabbing;
+  transition: none;
+}
+
+.datapanel-grid-layout .react-grid-item.resizing {
+  cursor: se-resize;
+}
+
+.datapanel-grid-layout-interacting .datapanel-card-content {
+  pointer-events: none;
+}
+
+.datapanel-grid-layout .react-grid-item.react-draggable-dragging > *,
+.datapanel-grid-layout .react-grid-item.resizing > * {
+  pointer-events: none;
+}
+
+.datapanel-grid-layout
+  .react-grid-item.react-grid-placeholder.placeholder-resizing {
+  transition: none;
+}
+
+@layer components {
   .react-grid-item > .react-resizable-handle::after {
     @apply border-foreground/40;
   }

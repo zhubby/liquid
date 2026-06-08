@@ -185,33 +185,38 @@ const ChartTooltipContent = React.forwardRef<
       return null;
     }
 
-    const nestLabel = payload.length === 1 && indicator !== "dot";
-
     return (
       <div
         ref={ref}
         className={cn(
-          "grid min-w-32 items-start gap-1.5 rounded-md border border-border/60 bg-popover px-3 py-2 text-xs text-popover-foreground shadow-md",
+          "grid min-w-44 items-start gap-3 rounded-2xl border border-border bg-popover px-5 py-4 text-sm text-popover-foreground shadow-xl shadow-black/10",
           className,
         )}
       >
-        {!nestLabel ? tooltipLabel : null}
-        <div className="grid gap-1.5">
+        {tooltipLabel ? (
+          <div className="font-semibold leading-none text-popover-foreground">
+            {tooltipLabel}
+          </div>
+        ) : null}
+        <div className="grid gap-2.5">
           {payload
             .filter((item) => item.type !== "none")
             .map((item, index) => {
               const key = `${nameKey || item.name || item.dataKey || "value"}`;
               const itemConfig = getPayloadConfigFromPayload(config, item, key);
-              const indicatorColor =
-                color || getPayloadFill(item.payload) || item.color;
+              const indicatorColor = getIndicatorColor(
+                item,
+                itemConfig,
+                color,
+                config[`series-${index}`],
+              );
               const value = item.value;
 
               return (
                 <div
                   key={`${item.dataKey || item.name || "value"}:${index}`}
                   className={cn(
-                    "flex w-full flex-wrap items-stretch gap-2 [&>svg]:size-2.5 [&>svg]:text-muted-foreground",
-                    indicator === "dot" && "items-center",
+                    "grid w-full grid-cols-[auto_minmax(0,1fr)_auto] items-center gap-3 [&>svg]:size-3.5 [&>svg]:text-muted-foreground",
                   )}
                 >
                   {formatter && value !== undefined && item.name ? (
@@ -224,19 +229,21 @@ const ChartTooltipContent = React.forwardRef<
                         !hideIndicator && (
                           <div
                             className={cn(
-                              "shrink-0 rounded-[2px] border-[--color-border] bg-[--color-bg]",
+                              "shrink-0 rounded-[2px] border text-muted-foreground",
                               {
-                                "size-2.5": indicator === "dot",
-                                "w-1": indicator === "line",
+                                "size-4": indicator === "dot",
+                                "h-4 w-1.5": indicator === "line",
                                 "w-0 border-[1.5px] border-dashed bg-transparent":
                                   indicator === "dashed",
-                                "my-0.5": nestLabel && indicator === "dashed",
                               },
                             )}
                             style={
                               {
-                                "--color-bg": indicatorColor,
-                                "--color-border": indicatorColor,
+                                backgroundColor:
+                                  indicator === "dashed"
+                                    ? "transparent"
+                                    : indicatorColor,
+                                borderColor: indicatorColor,
                               } as React.CSSProperties
                             }
                           />
@@ -244,18 +251,16 @@ const ChartTooltipContent = React.forwardRef<
                       )}
                       <div
                         className={cn(
-                          "flex flex-1 justify-between gap-4 leading-none",
-                          nestLabel ? "items-end" : "items-center",
+                          "contents leading-none",
                         )}
                       >
-                        <div className="grid gap-1.5">
-                          {nestLabel ? tooltipLabel : null}
-                          <span className="text-muted-foreground">
+                        <div className="min-w-0">
+                          <span className="block truncate text-muted-foreground">
                             {itemConfig?.label || item.name}
                           </span>
                         </div>
                         {value !== undefined && value !== null ? (
-                          <span className="font-mono font-medium tabular-nums text-foreground">
+                          <span className="justify-self-end font-mono font-medium tabular-nums text-popover-foreground">
                             {formatTooltipValue(value)}
                           </span>
                         ) : null}
@@ -377,6 +382,39 @@ function getPayloadFill(payload: unknown) {
   const fill = payload.fill;
 
   return typeof fill === "string" ? fill : undefined;
+}
+
+function getPayloadColor(payload: unknown) {
+  if (typeof payload !== "object" || payload === null || !("color" in payload)) {
+    return undefined;
+  }
+
+  const color = payload.color;
+
+  return typeof color === "string" ? color : undefined;
+}
+
+function getChartConfigColor(config?: ChartConfig[string]) {
+  return config?.theme?.light ?? config?.color;
+}
+
+function getIndicatorColor(
+  item: unknown,
+  itemConfig?: ChartConfig[string],
+  color?: string,
+  fallbackConfig?: ChartConfig[string],
+) {
+  return (
+    color ||
+    (typeof item === "object" && item !== null && "payload" in item
+      ? getPayloadFill(item.payload)
+      : undefined) ||
+    getPayloadFill(item) ||
+    getPayloadColor(item) ||
+    getChartConfigColor(itemConfig) ||
+    getChartConfigColor(fallbackConfig) ||
+    "currentColor"
+  );
 }
 
 function formatTooltipValue(value: unknown) {

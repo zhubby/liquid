@@ -494,7 +494,9 @@ function renderTreemapChart(
         content={<TreemapTile compact={compact} />}
         nestIndexContent={() => null}
         isAnimationActive={false}
-      />
+      >
+        {tooltip()}
+      </Treemap>
     </ChartShell>
   );
 }
@@ -565,7 +567,9 @@ function renderSunburstChart(
           fontSize: compact ? "9px" : "11px",
           pointerEvents: "none",
         }}
-      />
+      >
+        {tooltip()}
+      </SunburstChart>
     </ChartShell>
   );
 }

@@ -10,20 +10,19 @@ import {
   useState,
 } from "react";
 import ReactGridLayout, {
+  type EventCallback,
   type Layout,
-  useContainerWidth,
   verticalCompactor,
+  useContainerWidth,
 } from "react-grid-layout";
 import {
   Download,
   Eye,
   GripVertical,
   Loader2,
-  Pencil,
   RefreshCw,
   Table2,
   Trash2,
-  X,
 } from "lucide-react";
 import { toast } from "sonner";
 
@@ -410,7 +409,7 @@ export function DatapanelWorkspacePanel({
               aria-label={t.dashboard.panelTitleLabel}
               onChange={(event) => setTitleInput(event.target.value)}
               onBlur={() => void savePanelMetadata()}
-              onKeyDown={(event) => handleCommitKey(event, savePanelMetadata)}
+              onKeyDown={handleCommitKey}
             />
             {isSavingPanel || isSavingLayout ? (
               <Loader2 className="size-4 shrink-0 animate-spin text-muted-foreground" />
@@ -423,7 +422,7 @@ export function DatapanelWorkspacePanel({
             aria-label={t.dashboard.panelDescriptionLabel}
             onChange={(event) => setDescriptionInput(event.target.value)}
             onBlur={() => void savePanelMetadata()}
-            onKeyDown={(event) => handleCommitKey(event, savePanelMetadata)}
+            onKeyDown={handleCommitKey}
           />
         </div>
         <div className="flex flex-wrap items-center gap-2">
@@ -544,6 +543,10 @@ function DatapanelGrid({
 }) {
   const { t } = useI18n();
   const { width, containerRef, mounted } = useContainerWidth();
+  const [activeInteractionCardId, setActiveInteractionCardId] = useState<
+    string | null
+  >(null);
+  const interactionFrameRef = useRef<number | null>(null);
   const layout = useMemo<Layout>(
     () =>
       cards.map((card) => ({
@@ -558,6 +561,31 @@ function DatapanelGrid({
     [cards],
   );
   const useStackedCards = mounted && width < 640;
+  const handleInteractionStart = useCallback<EventCallback>(
+    (_layout, oldItem, item) => {
+      if (interactionFrameRef.current !== null) {
+        window.cancelAnimationFrame(interactionFrameRef.current);
+        interactionFrameRef.current = null;
+      }
+
+      setActiveInteractionCardId(item?.i ?? oldItem?.i ?? null);
+    },
+    [],
+  );
+  const handleInteractionStop = useCallback(() => {
+    interactionFrameRef.current = window.requestAnimationFrame(() => {
+      setActiveInteractionCardId(null);
+      interactionFrameRef.current = null;
+    });
+  }, []);
+
+  useEffect(() => {
+    return () => {
+      if (interactionFrameRef.current !== null) {
+        window.cancelAnimationFrame(interactionFrameRef.current);
+      }
+    };
+  }, []);
 
   return (
     <div
@@ -584,6 +612,7 @@ function DatapanelGrid({
                 isRefreshing={refreshingCardId === card.renderId}
                 isDeleting={deletingCardId === card.renderId}
                 isStacked
+                isInteracting={false}
                 readOnly={readOnly}
                 onUpdate={onUpdate}
                 onRefresh={onRefresh ? () => onRefresh(card.renderId) : undefined}
@@ -596,6 +625,10 @@ function DatapanelGrid({
 
       {!isLoading && cards.length > 0 && mounted && !useStackedCards ? (
         <ReactGridLayout
+          className={cn(
+            "datapanel-grid-layout",
+            activeInteractionCardId && "datapanel-grid-layout-interacting",
+          )}
           width={width}
           layout={layout}
           autoSize
@@ -616,6 +649,10 @@ function DatapanelGrid({
             handles: ["se"],
           }}
           compactor={verticalCompactor}
+          onDragStart={readOnly ? undefined : handleInteractionStart}
+          onDragStop={readOnly ? undefined : handleInteractionStop}
+          onResizeStart={readOnly ? undefined : handleInteractionStart}
+          onResizeStop={readOnly ? undefined : handleInteractionStop}
           onLayoutChange={readOnly ? undefined : onLayoutChange}
         >
           {cards.map((card) => (
@@ -625,6 +662,7 @@ function DatapanelGrid({
                 isRefreshing={refreshingCardId === card.renderId}
                 isDeleting={deletingCardId === card.renderId}
                 isStacked={false}
+                isInteracting={activeInteractionCardId === card.renderId}
                 readOnly={readOnly}
                 onUpdate={onUpdate}
                 onRefresh={onRefresh ? () => onRefresh(card.renderId) : undefined}
@@ -669,6 +707,7 @@ function DatapanelCardView({
   isRefreshing,
   isDeleting,
   isStacked,
+  isInteracting,
   readOnly,
   onUpdate,
   onRefresh,
@@ -678,6 +717,7 @@ function DatapanelCardView({
   isRefreshing: boolean;
   isDeleting: boolean;
   isStacked: boolean;
+  isInteracting: boolean;
   readOnly: boolean;
   onUpdate?: (
     cardId: string,
@@ -687,7 +727,6 @@ function DatapanelCardView({
   onDelete?: () => void;
 }) {
   const { t } = useI18n();
-  const [isEditing, setIsEditing] = useState(false);
   const [titleInput, setTitleInput] = useState(card.title);
   const [descriptionInput, setDescriptionInput] = useState(card.description ?? "");
 
@@ -712,11 +751,16 @@ function DatapanelCardView({
       title,
       description: descriptionInput.trim(),
     });
-    setIsEditing(false);
   }, [card.renderId, card.title, descriptionInput, onUpdate, readOnly, titleInput]);
 
   return (
-    <article className="flex h-full min-h-0 min-w-0 flex-col overflow-hidden rounded-lg border bg-background shadow-xs">
+    <article
+      className={cn(
+        "flex h-full min-h-0 min-w-0 flex-col overflow-hidden rounded-lg border bg-background shadow-xs transition-[box-shadow,transform,border-color,opacity] duration-150 will-change-transform",
+        isInteracting &&
+          "scale-[0.995] select-none border-foreground/15 shadow-lg shadow-foreground/10",
+      )}
+    >
       <header
         className={cn(
           "flex shrink-0 items-start gap-2 border-b bg-muted/40 px-3 py-2",
@@ -737,21 +781,23 @@ function DatapanelCardView({
               aria-label={t.dashboard.cardTitleLabel}
               onChange={(event) => setTitleInput(event.target.value)}
               onBlur={commit}
-              onKeyDown={(event) => handleCommitKey(event, commit)}
+              onKeyDown={handleCommitKey}
             />
           )}
-          {!readOnly && isEditing ? (
-            <textarea
-              className="datapanel-card-no-drag mt-1 max-h-16 min-h-8 w-full resize-none rounded-sm bg-background px-2 py-1 text-xs leading-5 text-muted-foreground outline-none focus-visible:ring-[3px] focus-visible:ring-ring/50"
-              value={descriptionInput}
-              aria-label={t.dashboard.cardDescriptionLabel}
-              onChange={(event) => setDescriptionInput(event.target.value)}
-              onBlur={commit}
-            />
-          ) : (
+          {readOnly ? (
             <p className="mt-0.5 truncate text-xs text-muted-foreground">
               {card.description || t.dashboard.sqlSource(card.result.row_count)}
             </p>
+          ) : (
+            <input
+              className="datapanel-card-no-drag mt-0.5 w-full truncate rounded-sm bg-transparent text-xs text-muted-foreground outline-none hover:bg-background/70 focus-visible:bg-background focus-visible:ring-[3px] focus-visible:ring-ring/50"
+              value={descriptionInput}
+              placeholder={t.dashboard.sqlSource(card.result.row_count)}
+              aria-label={t.dashboard.cardDescriptionLabel}
+              onChange={(event) => setDescriptionInput(event.target.value)}
+              onBlur={commit}
+              onKeyDown={handleCommitKey}
+            />
           )}
         </div>
         <div className="datapanel-card-no-drag flex shrink-0 items-center gap-1">
@@ -771,18 +817,6 @@ function DatapanelCardView({
               )}
             </IconButton>
           ) : null}
-          {!readOnly ? (
-            <IconButton
-              label={isEditing ? t.common.close : t.dashboard.editCard}
-              onClick={() => setIsEditing((current) => !current)}
-            >
-              {isEditing ? (
-                <X className="size-4" aria-hidden />
-              ) : (
-                <Pencil className="size-4" aria-hidden />
-              )}
-            </IconButton>
-          ) : null}
           {!readOnly && onDelete ? (
             <IconButton
               label={t.dashboard.deleteCard}
@@ -799,7 +833,12 @@ function DatapanelCardView({
           ) : null}
         </div>
       </header>
-      <div className="min-h-0 flex-1 overflow-hidden px-3 py-3">
+      <div
+        className={cn(
+          "datapanel-card-content min-h-0 flex-1 overflow-hidden px-3 py-3 transition-opacity duration-100",
+          isInteracting && "pointer-events-none opacity-35",
+        )}
+      >
         {card.kind === "chart" && card.chart ? (
           <DatapanelChart card={card} />
         ) : (
@@ -899,11 +938,9 @@ function datapanelPreviewCardToDisplayCard(
 
 function handleCommitKey(
   event: KeyboardEvent<HTMLInputElement | HTMLTextAreaElement>,
-  commit: () => void | Promise<void>,
 ) {
   if (event.key === "Enter" && event.currentTarget.tagName !== "TEXTAREA") {
     event.preventDefault();
-    void commit();
     event.currentTarget.blur();
   }
 
