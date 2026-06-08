@@ -2,7 +2,6 @@
 
 import {
   Children,
-  type FormEvent,
   isValidElement,
   type KeyboardEvent,
   type ReactElement,
@@ -143,7 +142,6 @@ export function ChatPanel({
   const [messages, setMessages] = useState<DisplayMessage[]>([]);
   const [actions, setActions] = useState<ChatAction[]>([]);
   const [titleInput, setTitleInput] = useState(conversation.title);
-  const [input, setInput] = useState("");
   const [composerMode, setComposerMode] = useState<ComposerMode>("chat");
   const [isLoading, setIsLoading] = useState(true);
   const [isSending, setIsSending] = useState(false);
@@ -157,7 +155,6 @@ export function ChatPanel({
     Record<string, PendingActionDecision>
   >({});
   const listRef = useRef<HTMLDivElement>(null);
-  const composerRef = useRef<HTMLTextAreaElement>(null);
   const activeStreamRef = useRef<AbortController | null>(null);
   const activeActionStreamRef = useRef<AbortController | null>(null);
   const activeTurnRef = useRef<ChatTurn | null>(null);
@@ -225,7 +222,6 @@ export function ChatPanel({
     pendingActionIdsRef.current.clear();
     notifiedDatapanelActionIdsRef.current.clear();
     nearBottomRef.current = true;
-    setInput("");
     setComposerMode("chat");
     setMessages([]);
     setActions([]);
@@ -273,17 +269,6 @@ export function ChatPanel({
       activeActionStreamKeyRef.current = null;
     };
   }, [conversation.id, loadConversationState, t.workspace.agentLoadFailed]);
-
-  useEffect(() => {
-    const textarea = composerRef.current;
-
-    if (!textarea) {
-      return;
-    }
-
-    textarea.style.height = "auto";
-    textarea.style.height = `${Math.min(textarea.scrollHeight, 168)}px`;
-  }, [input]);
 
   useEffect(() => {
     if (!nearBottomRef.current) {
@@ -500,8 +485,8 @@ export function ChatPanel({
   );
 
   const submitPrompt = useCallback(
-    async (promptOverride?: string) => {
-      const content = (promptOverride ?? input).trim();
+    async (prompt: string) => {
+      const content = prompt.trim();
 
       if (!content || isSending || activeSendRef.current) {
         return;
@@ -522,7 +507,6 @@ export function ChatPanel({
 
       activeSendRef.current = sendKey;
       activeStreamRef.current?.abort();
-      setInput("");
       setIsSending(true);
       setActivityItems([createStatusActivity("planning", undefined, t)]);
       setActiveTurn(null);
@@ -626,7 +610,6 @@ export function ChatPanel({
     [
       conversation.id,
       handleStreamEvent,
-      input,
       isSending,
       selectedDatabase.id,
       t,
@@ -635,8 +618,8 @@ export function ChatPanel({
   );
 
   const submitSql = useCallback(
-    async (sqlOverride?: string) => {
-      const sql = (sqlOverride ?? input).trim();
+    async (sqlInput: string) => {
+      const sql = sqlInput.trim();
 
       if (!sql || isSending || activeSendRef.current) {
         return;
@@ -657,7 +640,6 @@ export function ChatPanel({
 
       activeSendRef.current = sendKey;
       activeStreamRef.current?.abort();
-      setInput("");
       setIsSending(true);
       setActivityItems([createStatusActivity("executing_sql", undefined, t)]);
       setActiveTurn(null);
@@ -751,7 +733,7 @@ export function ChatPanel({
         }
       }
     },
-    [conversation.id, input, isSending, t, token],
+    [conversation.id, isSending, t, token],
   );
 
   const stopTurn = useCallback(async () => {
@@ -884,31 +866,6 @@ export function ChatPanel({
     ],
   );
 
-  const handleSubmit = (event: FormEvent<HTMLFormElement>) => {
-    event.preventDefault();
-
-    if (composerMode === "sql") {
-      void submitSql();
-      return;
-    }
-
-    void submitPrompt();
-  };
-
-  const handleComposerKeyDown = (event: KeyboardEvent<HTMLTextAreaElement>) => {
-    if (event.key !== "Enter" || event.shiftKey) {
-      return;
-    }
-
-    event.preventDefault();
-    if (composerMode === "sql") {
-      void submitSql();
-      return;
-    }
-
-    void submitPrompt();
-  };
-
   const handleActionDecision = async (
     action: ChatAction,
     decision: "apply" | "reject",
@@ -1024,17 +981,16 @@ export function ChatPanel({
         />
 
         <MessageComposer
-          textareaRef={composerRef}
+          key={conversation.id}
           mode={composerMode}
-          input={input}
           isLoading={isLoading}
           isSending={isSending}
           providerReady={providerReady}
           failedTurn={failedTurn}
           onModeChange={setComposerMode}
-          onChange={setInput}
-          onSubmit={handleSubmit}
-          onKeyDown={handleComposerKeyDown}
+          onSubmit={(prompt) =>
+            void (composerMode === "sql" ? submitSql(prompt) : submitPrompt(prompt))
+          }
           onStop={() => void stopTurn()}
           onRetry={(prompt) =>
             void (composerMode === "sql" ? submitSql(prompt) : submitPrompt(prompt))
@@ -2182,37 +2138,62 @@ function InlineStageState({ stage }: { stage: ChatStreamStage }) {
 }
 
 const MessageComposer = ({
-  textareaRef,
   mode,
-  input,
   isLoading,
   isSending,
   providerReady,
   failedTurn,
   onModeChange,
-  onChange,
   onSubmit,
-  onKeyDown,
   onStop,
   onRetry,
 }: {
-  textareaRef: Ref<HTMLTextAreaElement>;
   mode: ComposerMode;
-  input: string;
   isLoading: boolean;
   isSending: boolean;
   providerReady: boolean | null;
   failedTurn: FailedTurn | null;
   onModeChange: (mode: ComposerMode) => void;
-  onChange: (value: string) => void;
-  onSubmit: (event: FormEvent<HTMLFormElement>) => void;
-  onKeyDown: (event: KeyboardEvent<HTMLTextAreaElement>) => void;
+  onSubmit: (prompt: string) => void;
   onStop: () => void;
   onRetry: (prompt: string) => void;
 }) => {
   const { t } = useI18n();
+  const [input, setInput] = useState("");
+  const textareaRef = useRef<HTMLTextAreaElement>(null);
   const canSubmit = Boolean(input.trim()) && !isLoading && !isSending;
   const isSqlMode = mode === "sql";
+
+  useEffect(() => {
+    const textarea = textareaRef.current;
+
+    if (!textarea) {
+      return;
+    }
+
+    textarea.style.height = "auto";
+    textarea.style.height = `${Math.min(textarea.scrollHeight, 168)}px`;
+  }, [input, mode]);
+
+  const submitInput = () => {
+    const prompt = input.trim();
+
+    if (!prompt || isLoading || isSending) {
+      return;
+    }
+
+    setInput("");
+    onSubmit(prompt);
+  };
+
+  const handleKeyDown = (event: KeyboardEvent<HTMLTextAreaElement>) => {
+    if (event.key !== "Enter" || event.shiftKey) {
+      return;
+    }
+
+    event.preventDefault();
+    submitInput();
+  };
 
   return (
     <footer className="shrink-0 border-t bg-card px-4 py-3">
@@ -2251,7 +2232,10 @@ const MessageComposer = ({
 
       <form
         className="rounded-lg border bg-background p-2 shadow-xs focus-within:ring-[3px] focus-within:ring-ring/50"
-        onSubmit={onSubmit}
+        onSubmit={(event) => {
+          event.preventDefault();
+          submitInput();
+        }}
       >
         <label className="sr-only" htmlFor="ai-message">
           {isSqlMode ? t.workspace.sqlInputLabel : t.workspace.inputLabel}
@@ -2262,8 +2246,8 @@ const MessageComposer = ({
             input={input}
             isLoading={isLoading}
             placeholder={t.workspace.sqlInputPlaceholder}
-            onChange={onChange}
-            onKeyDown={onKeyDown}
+            onChange={setInput}
+            onKeyDown={handleKeyDown}
           />
         ) : (
           <textarea
@@ -2274,8 +2258,8 @@ const MessageComposer = ({
             value={input}
             disabled={isLoading}
             rows={1}
-            onChange={(event) => onChange(event.target.value)}
-            onKeyDown={onKeyDown}
+            onChange={(event) => setInput(event.target.value)}
+            onKeyDown={handleKeyDown}
           />
         )}
         <div className="mt-2 flex flex-col gap-2 sm:flex-row sm:items-center sm:justify-between">
