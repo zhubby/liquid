@@ -124,7 +124,7 @@
 
 @layer components {
   .react-grid-item.react-grid-placeholder {
-    @apply rounded-lg border border-primary/30 bg-primary/10 opacity-100;
+    @apply rounded-lg border border-border bg-muted/70 opacity-100 shadow-sm;
   }
 
   .react-grid-item > .react-resizable-handle::after {
