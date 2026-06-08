@@ -23,7 +23,7 @@ Use the standard shadcn CSS variables defined in `app/globals.css`:
 - Controls: `--primary`, `--primary-foreground`, `--secondary`,
   `--secondary-foreground`, `--accent`, `--accent-foreground`.
 - States: `--muted`, `--muted-foreground`, `--destructive`.
-- Charts: `--chart-1` through `--chart-5`.
+- Charts: `--chart-1` through `--chart-10`.
 - Floating chart tooltips: `--popover`, `--popover-foreground`.
 
 Severity colors in charts should map to existing tokens:
