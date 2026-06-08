@@ -20,19 +20,19 @@ mod tests {
     use serde_json::{Value, json};
     use sqlx::{PgPool, postgres::PgPoolOptions};
 
-    use crate::tools::{AgentTool, ToolRegistry};
+    use crate::tools::{AgentTool, ToolRegistry, sets::sql_audit_tools};
 
     use super::{args::limit_arg, config::MAX_TOOL_LIMIT, execute::readonly_payload, *};
 
     #[tokio::test]
     async fn postgres_tool_registry_registers_write_only_when_gated() {
         let pool = lazy_test_pool();
-        let readonly = ToolRegistry::with_postgres_tools(PostgresToolConfig::new(
+        let readonly = sql_audit_tools(PostgresToolConfig::new(
             Some(pool.clone()),
             false,
             PostgresToolExecutionMode::Readonly,
         ));
-        let write_gated = ToolRegistry::with_postgres_tools(PostgresToolConfig::new(
+        let write_gated = sql_audit_tools(PostgresToolConfig::new(
             Some(pool),
             false,
             PostgresToolExecutionMode::WriteGated,
@@ -182,7 +182,7 @@ mod tests {
             .await
             .unwrap();
 
-        let registry = ToolRegistry::with_postgres_tools(PostgresToolConfig::new(
+        let registry = sql_audit_tools(PostgresToolConfig::new(
             Some(pool),
             false,
             PostgresToolExecutionMode::Readonly,

@@ -3,7 +3,7 @@ mod database_operations;
 mod llm_invocation;
 mod mock;
 mod prompt;
-mod tools;
+pub mod tools;
 mod types;
 mod workbench;
 

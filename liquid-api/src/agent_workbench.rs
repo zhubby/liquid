@@ -4,6 +4,7 @@ use anyhow::Context;
 use liquid_agent::{
     LlmWorkbenchAgent, LlmWorkbenchContext, PostgresToolConfig, PostgresToolExecutionMode,
     ToolRegistry, WorkbenchResponse, WorkbenchToolStep,
+    tools::sets::workbench_readonly_postgres_tools,
 };
 use liquid_core::{
     AgentAction, AgentActionKind, AgentEventRecord, AgentEventType, AgentMessageRole,
@@ -308,13 +309,11 @@ async fn workbench_tool_registry(
         ))
         .await?;
 
-    Ok(ToolRegistry::with_workbench_readonly_postgres_tools(
-        PostgresToolConfig::new(
-            Some(pool),
-            state.sql_metadata_required,
-            PostgresToolExecutionMode::Readonly,
-        ),
-    ))
+    Ok(workbench_readonly_postgres_tools(PostgresToolConfig::new(
+        Some(pool),
+        state.sql_metadata_required,
+        PostgresToolExecutionMode::Readonly,
+    )))
 }
 
 async fn persist_workbench_response(

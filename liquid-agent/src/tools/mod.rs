@@ -1,6 +1,8 @@
 mod database_operations;
+pub(crate) mod execution;
 pub(crate) mod postgres;
 mod registry;
+pub mod sets;
 mod sql_risk;
 
 pub use database_operations::DatabaseOperationToolContext;

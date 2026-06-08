@@ -5,12 +5,11 @@ use async_stream::try_stream;
 use async_trait::async_trait;
 use liquid_core::{AuditSummary, SqlAuditReport, SqlAuditRequest};
 use liquid_llm::{LlmClient, LlmMessage, LlmProtocol, LlmRequest};
-use serde_json::json;
 
 use crate::{
     llm_invocation::{LlmInvocationMode, invoke_llm},
     prompt::{audit_messages, parse_audit_report},
-    tools::ToolRegistry,
+    tools::{ToolRegistry, execution::execute_tool_for_model, sets::sql_risk_tools},
     types::{AgentEvent, AgentStream},
 };
 
@@ -47,7 +46,7 @@ impl ToolCallingSqlAuditAgent {
             llm,
             model: model.into(),
             protocol,
-            tools: ToolRegistry::with_default_sql_tools(),
+            tools: sql_risk_tools(None, false),
             max_tool_rounds: DEFAULT_MAX_TOOL_ROUNDS,
             invocation_mode: LlmInvocationMode::Complete,
         }
@@ -94,7 +93,7 @@ impl ToolCallingSqlAuditAgent {
             ));
 
             for call in &response.tool_calls {
-                let output = execute_tool_for_model(&tools, call).await;
+                let output = execute_tool_for_model(&tools, call, "sql_audit_agent").await;
                 messages.push(LlmMessage::tool_result(call.id.clone(), output.content));
             }
         }
@@ -166,7 +165,7 @@ impl SqlAuditAgent for ToolCallingSqlAuditAgent {
                         id: call.id.clone(),
                         name: call.name.clone(),
                     };
-                    let output = execute_tool_for_model(&agent.tools, call).await;
+                    let output = execute_tool_for_model(&agent.tools, call, "sql_audit_agent").await;
                     yield AgentEvent::ToolCallFinished {
                         id: call.id.clone(),
                         name: call.name.clone(),
@@ -181,29 +180,6 @@ impl SqlAuditAgent for ToolCallingSqlAuditAgent {
                 agent.max_tool_rounds
             ))?;
         }))
-    }
-}
-
-async fn execute_tool_for_model(
-    tools: &ToolRegistry,
-    call: &liquid_llm::ToolCall,
-) -> crate::types::ToolOutput {
-    match tools.execute(call).await {
-        Ok(output) => output,
-        Err(error) => {
-            let message = error.to_string();
-            tracing::warn!(
-                tool_name = %call.name,
-                tool_call_id = %call.id,
-                error = %message,
-                "SQL audit agent tool call failed; returning error to model"
-            );
-            crate::types::ToolOutput::json(json!({
-                "ok": false,
-                "tool": call.name,
-                "error": message,
-            }))
-        }
     }
 }
 

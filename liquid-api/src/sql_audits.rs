@@ -4,7 +4,9 @@ use axum::{
     http::{HeaderMap, HeaderValue, StatusCode},
     routing::{get, post},
 };
-use liquid_agent::{PostgresToolConfig, SqlAuditAgent, ToolCallingSqlAuditAgent};
+use liquid_agent::{
+    PostgresToolConfig, SqlAuditAgent, ToolCallingSqlAuditAgent, tools::sets::sql_audit_tools,
+};
 use liquid_core::{
     ApproveSqlAuditRequest, CreateSqlAuditRequest, DatapanelQueryResult, ManagedDatabase,
     ManagedDatabasePoolKey, RejectSqlAuditRequest, RiskSeverity, SqlAuditExecutionResult,
@@ -89,7 +91,7 @@ pub(crate) async fn create_sql_audit_for_user(
     let deterministic_analysis = serde_json::to_value(&analysis).map_err(|error| {
         ApiError::internal(anyhow::anyhow!("failed to serialize SQL analysis: {error}"))
     })?;
-    let tools = liquid_agent::ToolRegistry::with_postgres_tools(PostgresToolConfig::new(
+    let tools = sql_audit_tools(PostgresToolConfig::new(
         Some(pool),
         state.sql_metadata_required,
         state.sql_execution,

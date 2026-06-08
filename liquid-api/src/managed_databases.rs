@@ -4,7 +4,7 @@ use axum::{
     http::{HeaderMap, StatusCode},
     routing::{get, patch, post},
 };
-use liquid_agent::{PostgresToolConfig, ToolRegistry};
+use liquid_agent::{PostgresToolConfig, tools::sets::sql_audit_tools};
 use liquid_core::{
     CreateManagedDatabaseRequest, CurrentManagedDatabaseResponse, ManagedDatabase,
     ManagedDatabaseConnectionTestResponse, ManagedDatabasePoolKey,
@@ -169,7 +169,7 @@ async fn audit_managed_database_sql(
         .managed_database_pools
         .get_pool(ManagedDatabasePoolKey::new(user.id, id))
         .await?;
-    let tools = ToolRegistry::with_postgres_tools(PostgresToolConfig::new(
+    let tools = sql_audit_tools(PostgresToolConfig::new(
         Some(pool),
         state.sql_metadata_required,
         state.sql_execution,
