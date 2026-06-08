@@ -8,6 +8,7 @@ use liquid_llm::{LlmClient, LlmMessage, LlmProtocol, LlmRequest};
 use serde_json::json;
 
 use crate::{
+    llm_invocation::{LlmInvocationMode, invoke_llm},
     prompt::{audit_messages, parse_audit_report},
     tools::ToolRegistry,
     types::{AgentEvent, AgentStream},
@@ -37,6 +38,7 @@ pub struct ToolCallingSqlAuditAgent {
     protocol: LlmProtocol,
     tools: ToolRegistry,
     max_tool_rounds: usize,
+    invocation_mode: LlmInvocationMode,
 }
 
 impl ToolCallingSqlAuditAgent {
@@ -47,6 +49,7 @@ impl ToolCallingSqlAuditAgent {
             protocol,
             tools: ToolRegistry::with_default_sql_tools(),
             max_tool_rounds: DEFAULT_MAX_TOOL_ROUNDS,
+            invocation_mode: LlmInvocationMode::Complete,
         }
     }
 
@@ -60,6 +63,11 @@ impl ToolCallingSqlAuditAgent {
         self
     }
 
+    pub fn with_streaming_enabled(mut self, streaming_enabled: bool) -> Self {
+        self.invocation_mode = LlmInvocationMode::from_streaming_enabled(streaming_enabled);
+        self
+    }
+
     async fn run_audit_with_tools(
         &self,
         request: SqlAuditRequest,
@@ -68,10 +76,12 @@ impl ToolCallingSqlAuditAgent {
         let mut messages = audit_messages(&request)?;
 
         for _ in 0..self.max_tool_rounds {
-            let response = self
-                .llm
-                .complete(self.llm_request(messages.clone(), &tools))
-                .await?;
+            let response = invoke_llm(
+                &self.llm,
+                self.llm_request(messages.clone(), &tools),
+                self.invocation_mode,
+            )
+            .await?;
 
             if response.tool_calls.is_empty() {
                 return parse_audit_report(&response.content);
@@ -133,7 +143,11 @@ impl SqlAuditAgent for ToolCallingSqlAuditAgent {
             let mut messages = audit_messages(&request)?;
 
             for _ in 0..agent.max_tool_rounds {
-                let response = agent.llm.complete(agent.llm_request(messages.clone(), &agent.tools)).await?;
+                let response = invoke_llm(
+                    &agent.llm,
+                    agent.llm_request(messages.clone(), &agent.tools),
+                    agent.invocation_mode,
+                ).await?;
 
                 if response.tool_calls.is_empty() {
                     let report = parse_audit_report(&response.content)?;

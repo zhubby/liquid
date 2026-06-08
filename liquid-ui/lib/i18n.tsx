@@ -328,6 +328,8 @@ const zhCN = {
       fullUrl: "完整 URL",
       urlHelp: "例如 /v1/chat/completions 或 /v1/responses。",
       modelLabel: "模型",
+      streamingTitle: "流式响应",
+      streamingDescription: "默认开启。关闭后模型请求会使用非流式接口。",
       secretTitle: "密钥",
       secretDescriptionConfigured: "留空保存时会继续使用已保存密钥。",
       secretDescriptionMissing: "API Key 只会加密保存，不会回显。",
@@ -924,6 +926,9 @@ const enUS: Messages = {
       fullUrl: "Full URL",
       urlHelp: "For example /v1/chat/completions or /v1/responses.",
       modelLabel: "Model",
+      streamingTitle: "Streaming responses",
+      streamingDescription:
+        "Enabled by default. Turn off to use non-streaming model requests.",
       secretTitle: "Secret",
       secretDescriptionConfigured:
         "Leave blank when saving to keep the stored key.",

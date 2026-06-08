@@ -15,7 +15,8 @@ pub(crate) async fn get_llm_provider_settings(
 ) -> Result<Option<LlmProviderSettings>, StorageError> {
     let row = sqlx::query_as::<_, LlmProviderSettingsRow>(
         r#"
-        select provider, base_url, model, api_mode, encrypted_api_key <> '' as has_api_key
+        select provider, base_url, model, api_mode, streaming_enabled,
+            encrypted_api_key <> '' as has_api_key
         from user_llm_provider_settings
         where owner_user_id = $1::uuid
         "#,
@@ -41,19 +42,22 @@ pub(crate) async fn upsert_llm_provider_settings(
     let row = sqlx::query_as::<_, LlmProviderSettingsRow>(
         r#"
         insert into user_llm_provider_settings (
-            owner_user_id, provider, base_url, model, api_mode, encrypted_api_key, updated_at
+            owner_user_id, provider, base_url, model, api_mode, streaming_enabled,
+            encrypted_api_key, updated_at
         )
         values (
-            $1::uuid, $2, $3, $4, $5, coalesce($6::text, ''), now()
+            $1::uuid, $2, $3, $4, $5, $6, coalesce($7::text, ''), now()
         )
         on conflict (owner_user_id) do update
         set provider = excluded.provider,
             base_url = excluded.base_url,
             model = excluded.model,
             api_mode = excluded.api_mode,
-            encrypted_api_key = coalesce($6::text, user_llm_provider_settings.encrypted_api_key),
+            streaming_enabled = excluded.streaming_enabled,
+            encrypted_api_key = coalesce($7::text, user_llm_provider_settings.encrypted_api_key),
             updated_at = now()
-        returning provider, base_url, model, api_mode, encrypted_api_key <> '' as has_api_key
+        returning provider, base_url, model, api_mode, streaming_enabled,
+            encrypted_api_key <> '' as has_api_key
         "#,
     )
     .bind(owner_user_id)
@@ -61,6 +65,7 @@ pub(crate) async fn upsert_llm_provider_settings(
     .bind(record.base_url)
     .bind(record.model)
     .bind(record.api_mode.as_str())
+    .bind(record.streaming_enabled)
     .bind(encrypted_api_key)
     .fetch_one(&storage.pool)
     .await
@@ -75,7 +80,7 @@ pub(crate) async fn resolve_llm_provider_settings(
 ) -> Result<Option<ResolvedLlmProviderSettings>, StorageError> {
     let row = sqlx::query_as::<_, ResolvedLlmProviderSettingsRow>(
         r#"
-        select provider, base_url, model, api_mode, encrypted_api_key
+        select provider, base_url, model, api_mode, streaming_enabled, encrypted_api_key
         from user_llm_provider_settings
         where owner_user_id = $1::uuid
         "#,
@@ -94,6 +99,7 @@ struct ValidatedLlmProviderSettings {
     base_url: String,
     model: String,
     api_mode: LlmProviderApiMode,
+    streaming_enabled: bool,
     api_key: Option<String>,
 }
 
@@ -104,6 +110,7 @@ impl ValidatedLlmProviderSettings {
             base_url: required_string("base_url", &request.base_url)?,
             model: required_string("model", &request.model)?,
             api_mode: request.api_mode,
+            streaming_enabled: request.streaming_enabled.unwrap_or(true),
             api_key: request
                 .api_key
                 .map(|api_key| api_key.trim().to_owned())
@@ -118,6 +125,7 @@ struct LlmProviderSettingsRow {
     base_url: String,
     model: String,
     api_mode: String,
+    streaming_enabled: bool,
     has_api_key: bool,
 }
 
@@ -127,6 +135,7 @@ struct ResolvedLlmProviderSettingsRow {
     base_url: String,
     model: String,
     api_mode: String,
+    streaming_enabled: bool,
     encrypted_api_key: String,
 }
 
@@ -139,6 +148,7 @@ impl<'r> sqlx::FromRow<'r, sqlx::postgres::PgRow> for LlmProviderSettingsRow {
             base_url: row.try_get("base_url")?,
             model: row.try_get("model")?,
             api_mode: row.try_get("api_mode")?,
+            streaming_enabled: row.try_get("streaming_enabled")?,
             has_api_key: row.try_get("has_api_key")?,
         })
     }
@@ -153,6 +163,7 @@ impl<'r> sqlx::FromRow<'r, sqlx::postgres::PgRow> for ResolvedLlmProviderSetting
             base_url: row.try_get("base_url")?,
             model: row.try_get("model")?,
             api_mode: row.try_get("api_mode")?,
+            streaming_enabled: row.try_get("streaming_enabled")?,
             encrypted_api_key: row.try_get("encrypted_api_key")?,
         })
     }
@@ -167,6 +178,7 @@ impl TryFrom<LlmProviderSettingsRow> for LlmProviderSettings {
             base_url: row.base_url,
             model: row.model,
             api_mode: parse_api_mode(&row.api_mode)?,
+            streaming_enabled: row.streaming_enabled,
             has_api_key: row.has_api_key,
         })
     }
@@ -185,6 +197,7 @@ impl ResolvedLlmProviderSettingsRow {
             base_url: self.base_url,
             model: self.model,
             api_mode: parse_api_mode(&self.api_mode)?,
+            streaming_enabled: self.streaming_enabled,
             api_key,
         })
     }

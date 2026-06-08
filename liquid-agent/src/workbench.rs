@@ -1,4 +1,4 @@
-use std::{sync::Arc, time::Instant};
+use std::{future::Future, sync::Arc, time::Instant};
 
 use anyhow::{Context, Result, bail};
 use async_trait::async_trait;
@@ -12,6 +12,7 @@ use serde::Deserialize;
 use serde_json::{Value, json};
 
 use crate::{
+    llm_invocation::{LlmInvocationMode, invoke_llm, invoke_llm_with_text_delta},
     tools::{AgentTool, ToolRegistry},
     types::ToolOutput,
 };
@@ -27,6 +28,7 @@ Never invent database IDs, SQL audit IDs, action IDs, credentials, execution sta
 If the answer is already available from context, answer directly and return no actions.
 If a tool is needed, use it. Do not replace safe read-only tool execution with a confirmation card.
 The workbench_context.tool_capabilities object tells you what the server can actually do in this turn.
+When you call any tool, do not include assistant-facing text in the same model response. Return only the tool call.
 
 Operating modes:
 - planning: decide whether to answer directly, use automatic read-only tools, or create a confirmation proposal.
@@ -46,11 +48,8 @@ Do not present "I prepared an audit" as the main response for ordinary user task
 For confirmation proposals, write the message as a concise action-oriented confirmation of the intended outcome, for example "I prepared the database creation operation for confirmation."
 For tool_observation_synthesis, write the final user-facing reply in the user's language and keep it concise. If the observation contains query/card rows, summarize the returned data directly and mention where the detailed result is available. If it contains successful DDL/DML execution, state the completed operation and key facts such as resource ID, statement kind, affected rows, and elapsed time when available. If it shows failure, explain what failed and what the user can do next.
 
-When you are done and are not calling tools, return JSON only with this shape:
-{
-  "message": "assistant reply",
-  "actions": []
-}"#;
+When you are done and are not calling tools, return the final user-facing assistant reply as plain text only. Do not wrap the final reply in JSON, Markdown code fences, or metadata.
+Confirmation proposals must be created only by calling proposal tools. Do not invent actions in the final text."#;
 
 #[derive(Debug, Clone)]
 pub struct WorkbenchContext {
@@ -127,6 +126,7 @@ pub struct LlmWorkbenchAgent {
     model: String,
     protocol: LlmProtocol,
     max_tool_rounds: usize,
+    invocation_mode: LlmInvocationMode,
 }
 
 impl LlmWorkbenchAgent {
@@ -136,11 +136,17 @@ impl LlmWorkbenchAgent {
             model: model.into(),
             protocol,
             max_tool_rounds: DEFAULT_MAX_WORKBENCH_TOOL_ROUNDS,
+            invocation_mode: LlmInvocationMode::Complete,
         }
     }
 
     pub fn with_max_tool_rounds(mut self, max_tool_rounds: usize) -> Self {
         self.max_tool_rounds = max_tool_rounds;
+        self
+    }
+
+    pub fn with_streaming_enabled(mut self, streaming_enabled: bool) -> Self {
+        self.invocation_mode = LlmInvocationMode::from_streaming_enabled(streaming_enabled);
         self
     }
 
@@ -155,7 +161,7 @@ impl LlmWorkbenchAgent {
         )
         .with_temperature(0.2)
         .with_max_output_tokens(1_200);
-        let response = self.llm.complete(request).await?;
+        let response = invoke_llm(&self.llm, request, self.invocation_mode).await?;
 
         parse_llm_workbench_response(&response.content, &context)
     }
@@ -174,6 +180,20 @@ impl LlmWorkbenchAgent {
         self.run_tool_loop(context, messages, tools, 1_200).await
     }
 
+    pub async fn respond_with_tools_and_text_delta<F, Fut>(
+        &self,
+        context: LlmWorkbenchContext,
+        tools: ToolRegistry,
+        on_text_delta: F,
+    ) -> Result<WorkbenchResponse>
+    where
+        F: FnMut(String) -> Fut + Send,
+        Fut: Future<Output = ()> + Send,
+    {
+        self.run_tool_loop_with_text_delta(context, tools, on_text_delta)
+            .await
+    }
+
     pub async fn synthesize_observation(
         &self,
         context: LlmWorkbenchContext,
@@ -189,7 +209,34 @@ impl LlmWorkbenchAgent {
         )
         .with_temperature(0.2)
         .with_max_output_tokens(1_000);
-        let response = self.llm.complete(request).await?;
+        let response = invoke_llm(&self.llm, request, self.invocation_mode).await?;
+
+        parse_llm_workbench_response(&response.content, &context)
+    }
+
+    pub async fn synthesize_observation_with_text_delta<F, Fut>(
+        &self,
+        context: LlmWorkbenchContext,
+        observation: Value,
+        on_text_delta: F,
+    ) -> Result<WorkbenchResponse>
+    where
+        F: FnMut(String) -> Fut + Send,
+        Fut: Future<Output = ()> + Send,
+    {
+        let request = LlmRequest::new(
+            self.model.clone(),
+            self.protocol,
+            vec![
+                LlmMessage::system(WORKBENCH_SYSTEM_PROMPT),
+                LlmMessage::user(workbench_observation_payload(&context, observation)?),
+            ],
+        )
+        .with_temperature(0.2)
+        .with_max_output_tokens(1_000);
+        let response =
+            invoke_llm_with_text_delta(&self.llm, request, self.invocation_mode, on_text_delta)
+                .await?;
 
         parse_llm_workbench_response(&response.content, &context)
     }
@@ -204,10 +251,12 @@ impl LlmWorkbenchAgent {
         let mut tool_steps = Vec::new();
 
         for _ in 0..self.max_tool_rounds {
-            let response = self
-                .llm
-                .complete(self.llm_request(messages.clone(), &tools, max_output_tokens))
-                .await?;
+            let response = invoke_llm(
+                &self.llm,
+                self.llm_request(messages.clone(), &tools, max_output_tokens),
+                self.invocation_mode,
+            )
+            .await?;
 
             if response.tool_calls.is_empty() {
                 return Ok(parse_llm_workbench_response(&response.content, &context)?
@@ -236,10 +285,94 @@ impl LlmWorkbenchAgent {
             }
 
             if !proposals.is_empty() {
-                let response = self
-                    .llm
-                    .complete(self.no_tool_llm_request(messages.clone(), max_output_tokens))
-                    .await?;
+                let response = invoke_llm(
+                    &self.llm,
+                    self.no_tool_llm_request(messages.clone(), max_output_tokens),
+                    self.invocation_mode,
+                )
+                .await?;
+
+                if !response.tool_calls.is_empty() {
+                    bail!(
+                        "LLM workbench response requested tools after creating a confirmation proposal"
+                    );
+                }
+
+                let mut parsed = parse_llm_workbench_response(&response.content, &context)?;
+                parsed.actions.splice(0..0, proposals);
+                parsed.waiting_for_user = !parsed.actions.is_empty();
+                parsed.tool_steps = tool_steps;
+                return Ok(parsed);
+            }
+        }
+
+        bail!(
+            "LLM workbench exceeded maximum tool rounds ({})",
+            self.max_tool_rounds
+        )
+    }
+
+    async fn run_tool_loop_with_text_delta<F, Fut>(
+        &self,
+        context: LlmWorkbenchContext,
+        mut tools: ToolRegistry,
+        mut on_text_delta: F,
+    ) -> Result<WorkbenchResponse>
+    where
+        F: FnMut(String) -> Fut + Send,
+        Fut: Future<Output = ()> + Send,
+    {
+        register_workbench_proposal_tools(&mut tools);
+        let mut messages = vec![
+            LlmMessage::system(WORKBENCH_SYSTEM_PROMPT),
+            LlmMessage::user(workbench_context_payload(&context)?),
+        ];
+        let mut tool_steps = Vec::new();
+        let max_output_tokens = 1_200;
+
+        for _ in 0..self.max_tool_rounds {
+            let response = invoke_llm_with_text_delta(
+                &self.llm,
+                self.llm_request(messages.clone(), &tools, max_output_tokens),
+                self.invocation_mode,
+                &mut on_text_delta,
+            )
+            .await?;
+
+            if response.tool_calls.is_empty() {
+                return Ok(parse_llm_workbench_response(&response.content, &context)?
+                    .with_tool_steps(tool_steps));
+            }
+
+            messages.push(LlmMessage::assistant_with_response_items(
+                response.content.clone(),
+                response.tool_calls.clone(),
+                response.output_items.clone(),
+            ));
+
+            let mut proposals = Vec::new();
+            for call in &response.tool_calls {
+                let step = execute_workbench_tool_for_model(&tools, call, &context).await?;
+                messages.push(LlmMessage::tool_result(
+                    call.id.clone(),
+                    step.output.content.clone(),
+                ));
+
+                if let Some(proposal) = step.proposal.clone() {
+                    proposals.push(proposal);
+                }
+
+                tool_steps.push(step);
+            }
+
+            if !proposals.is_empty() {
+                let response = invoke_llm_with_text_delta(
+                    &self.llm,
+                    self.no_tool_llm_request(messages.clone(), max_output_tokens),
+                    self.invocation_mode,
+                    &mut on_text_delta,
+                )
+                .await?;
 
                 if !response.tool_calls.is_empty() {
                     bail!(
@@ -1467,6 +1600,43 @@ mod tests {
         }
     }
 
+    struct StreamingWorkbenchLlmClient {
+        events: Mutex<VecDeque<LlmEvent>>,
+        requests: Mutex<Vec<LlmRequest>>,
+        complete_calls: Mutex<usize>,
+    }
+
+    impl StreamingWorkbenchLlmClient {
+        fn new(events: Vec<LlmEvent>) -> Self {
+            Self {
+                events: Mutex::new(events.into()),
+                requests: Mutex::new(Vec::new()),
+                complete_calls: Mutex::new(0),
+            }
+        }
+    }
+
+    #[async_trait]
+    impl LlmClient for StreamingWorkbenchLlmClient {
+        async fn complete(&self, request: LlmRequest) -> Result<LlmResponse> {
+            self.requests.lock().unwrap().push(request);
+            *self.complete_calls.lock().unwrap() += 1;
+            Ok(LlmResponse::text("fallback"))
+        }
+
+        async fn stream(&self, request: LlmRequest) -> Result<LlmStream> {
+            self.requests.lock().unwrap().push(request);
+            let events = self
+                .events
+                .lock()
+                .unwrap()
+                .drain(..)
+                .map(Ok)
+                .collect::<Vec<_>>();
+            Ok(Box::pin(futures_util::stream::iter(events)))
+        }
+    }
+
     #[async_trait]
     impl LlmClient for ScriptedWorkbenchLlmClient {
         async fn complete(&self, request: LlmRequest) -> Result<LlmResponse> {
@@ -2331,6 +2501,41 @@ mod tests {
             .unwrap_err();
 
         assert!(error.to_string().contains("maximum tool rounds"));
+    }
+
+    #[tokio::test]
+    async fn workbench_streams_final_response_text_deltas() {
+        let client = Arc::new(StreamingWorkbenchLlmClient::new(vec![
+            LlmEvent::TextDelta("查询".to_owned()),
+            LlmEvent::TextDelta("完成。".to_owned()),
+            LlmEvent::Done,
+        ]));
+        let agent = LlmWorkbenchAgent::new(
+            client.clone(),
+            "chat-model",
+            liquid_llm::LlmProtocol::ChatCompletions,
+        )
+        .with_streaming_enabled(true);
+        let deltas = Arc::new(Mutex::new(Vec::new()));
+        let captured = deltas.clone();
+
+        let response = agent
+            .respond_with_tools_and_text_delta(llm_context(), ToolRegistry::new(), move |delta| {
+                let captured = captured.clone();
+                async move {
+                    captured.lock().unwrap().push(delta);
+                }
+            })
+            .await
+            .unwrap();
+
+        assert_eq!(response.content, "查询完成。");
+        assert_eq!(
+            *deltas.lock().unwrap(),
+            vec!["查询".to_owned(), "完成。".to_owned()]
+        );
+        assert_eq!(*client.complete_calls.lock().unwrap(), 0);
+        assert_eq!(client.requests.lock().unwrap().len(), 1);
     }
 
     #[tokio::test]

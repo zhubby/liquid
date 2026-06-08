@@ -40,6 +40,7 @@ pub struct LlmProviderSettings {
     pub base_url: String,
     pub model: String,
     pub api_mode: LlmProviderApiMode,
+    pub streaming_enabled: bool,
     pub has_api_key: bool,
 }
 
@@ -56,6 +57,9 @@ pub struct UpdateLlmProviderSettingsRequest {
     pub base_url: String,
     pub model: String,
     pub api_mode: LlmProviderApiMode,
+    #[serde(default)]
+    #[ts(optional)]
+    pub streaming_enabled: Option<bool>,
     #[ts(optional)]
     pub api_key: Option<String>,
 }
@@ -66,5 +70,6 @@ pub struct ResolvedLlmProviderSettings {
     pub base_url: String,
     pub model: String,
     pub api_mode: LlmProviderApiMode,
+    pub streaming_enabled: bool,
     pub api_key: Option<String>,
 }

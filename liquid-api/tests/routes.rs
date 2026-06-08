@@ -205,6 +205,7 @@ impl LiquidStore for TestStore {
             base_url: request.base_url,
             model: request.model,
             api_mode: request.api_mode,
+            streaming_enabled: request.streaming_enabled.unwrap_or(true),
             api_key,
         };
         let public = public_llm_settings(&resolved);
@@ -1610,6 +1611,42 @@ async fn spawn_openai_compatible_mock_with_content(
     spawn_openai_compatible_mock_with_contents([content.into()]).await
 }
 
+async fn spawn_openai_compatible_sse_mock(
+    body: impl Into<String>,
+) -> (String, Arc<Mutex<Option<Value>>>) {
+    let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let addr = listener.local_addr().unwrap();
+    let captured_body = Arc::new(Mutex::new(None));
+    let captured_for_task = captured_body.clone();
+    let body = body.into();
+
+    tokio::spawn(async move {
+        loop {
+            let Ok((mut socket, _addr)) = listener.accept().await else {
+                return;
+            };
+            let mut buffer = vec![0; 16 * 1024];
+            let Ok(read) = socket.read(&mut buffer).await else {
+                return;
+            };
+            let request = String::from_utf8_lossy(&buffer[..read]);
+            if let Some((_, body)) = request.split_once("\r\n\r\n")
+                && let Ok(json) = serde_json::from_str::<Value>(body)
+            {
+                *captured_for_task.lock().unwrap() = Some(json);
+            }
+            let response = format!(
+                "HTTP/1.1 200 OK\r\ncontent-type: text/event-stream\r\ncontent-length: {}\r\n\r\n{}",
+                body.len(),
+                body
+            );
+            let _ = socket.write_all(response.as_bytes()).await;
+        }
+    });
+
+    (format!("http://{addr}/v1/chat/completions"), captured_body)
+}
+
 async fn spawn_delayed_openai_compatible_mock_with_content(
     content: impl Into<String>,
 ) -> (
@@ -1996,6 +2033,7 @@ fn public_llm_settings(settings: &ResolvedLlmProviderSettings) -> LlmProviderSet
         base_url: settings.base_url.clone(),
         model: settings.model.clone(),
         api_mode: settings.api_mode,
+        streaming_enabled: settings.streaming_enabled,
         has_api_key: settings.api_key.is_some(),
     }
 }
@@ -2287,14 +2325,38 @@ async fn llm_provider_settings_round_trip_without_api_key_echo() {
     let payload = response_json(response).await;
     assert_eq!(payload["settings"]["provider"], "openai_compatible");
     assert_eq!(payload["settings"]["model"], "gpt-4.1");
+    assert_eq!(payload["settings"]["streaming_enabled"], true);
     assert_eq!(payload["settings"]["has_api_key"], true);
     assert!(payload["settings"].get("api_key").is_none());
 
     let response = app
+        .clone()
         .oneshot(auth_request("/api/v1/settings/llm-provider"))
         .await
         .unwrap();
     let payload = response_json(response).await;
+    assert_eq!(payload["settings"]["has_api_key"], true);
+    assert_eq!(payload["settings"]["streaming_enabled"], true);
+    assert!(payload["settings"].get("api_key").is_none());
+
+    let response = app
+        .clone()
+        .oneshot(auth_json_request(
+            "PUT",
+            "/api/v1/settings/llm-provider",
+            json!({
+                "provider": "openai_compatible",
+                "base_url": "https://api.openai.com/v1/chat/completions",
+                "model": "gpt-4.1",
+                "api_mode": "chat_completions",
+                "streaming_enabled": false
+            }),
+        ))
+        .await
+        .unwrap();
+    assert_eq!(response.status(), StatusCode::OK);
+    let payload = response_json(response).await;
+    assert_eq!(payload["settings"]["streaming_enabled"], false);
     assert_eq!(payload["settings"]["has_api_key"], true);
     assert!(payload["settings"].get("api_key").is_none());
 }
@@ -3450,6 +3512,7 @@ async fn chat_turn_uses_user_llm_provider_settings_when_configured() {
 
     let captured = captured_body.lock().unwrap().clone().unwrap();
     assert_eq!(captured["model"], "chat-model");
+    assert_eq!(captured["stream"], true);
     assert_eq!(captured["messages"][0]["role"], "system");
     assert!(
         captured["messages"][1]["content"]
@@ -3457,6 +3520,138 @@ async fn chat_turn_uses_user_llm_provider_settings_when_configured() {
             .unwrap()
             .contains("\"write_sql_execution\": false")
     );
+}
+
+#[tokio::test]
+async fn chat_turn_streams_provider_text_deltas_to_chat_sse() {
+    let app = test_app();
+    create_test_database(&app).await;
+    let (base_url, captured_body) = spawn_openai_compatible_sse_mock(
+        r#"data: {"choices":[{"delta":{"content":"hel"}}]}
+
+data: {"choices":[{"delta":{"content":"lo"}}]}
+
+data: [DONE]
+
+"#,
+    )
+    .await;
+
+    let settings_response = app
+        .clone()
+        .oneshot(auth_json_request(
+            "PUT",
+            "/api/v1/settings/llm-provider",
+            json!({
+                "provider": "openai_compatible",
+                "base_url": base_url,
+                "model": "chat-model",
+                "api_mode": "chat_completions",
+                "api_key": "sk-user"
+            }),
+        ))
+        .await
+        .unwrap();
+    assert_eq!(settings_response.status(), StatusCode::OK);
+
+    let conversation_response = app
+        .clone()
+        .oneshot(auth_json_request(
+            "POST",
+            "/api/v1/chat/conversations",
+            json!({ "title": "Provider chat" }),
+        ))
+        .await
+        .unwrap();
+    assert_eq!(conversation_response.status(), StatusCode::OK);
+
+    let turn_response = app
+        .clone()
+        .oneshot(auth_json_request(
+            "POST",
+            "/api/v1/chat/conversations/conversation-1/turns",
+            json!({
+                "message": "answer directly",
+                "managed_database_id": "db-1"
+            }),
+        ))
+        .await
+        .unwrap();
+    assert_eq!(turn_response.status(), StatusCode::OK);
+
+    let stream_response = app
+        .clone()
+        .oneshot(auth_request("/api/v1/chat/turns/turn-1/stream?after_seq=0"))
+        .await
+        .unwrap();
+    assert_eq!(stream_response.status(), StatusCode::OK);
+    let stream_body = axum::body::to_bytes(stream_response.into_body(), usize::MAX)
+        .await
+        .unwrap();
+    let stream_body = String::from_utf8(stream_body.to_vec()).unwrap();
+
+    let captured = captured_body.lock().unwrap().clone().unwrap();
+    assert_eq!(captured["stream"], true);
+    assert!(stream_body.matches(r#""type":"assistant_delta""#).count() >= 2);
+    assert!(stream_body.contains("hel"));
+    assert!(stream_body.contains("hello"));
+    assert!(stream_body.contains(r#""type":"assistant_done""#));
+}
+
+#[tokio::test]
+async fn chat_turn_respects_disabled_llm_provider_streaming_setting() {
+    let app = test_app();
+    create_test_database(&app).await;
+    let (base_url, captured_body) =
+        spawn_openai_compatible_mock_with_content("Configured complete reply.").await;
+
+    let settings_response = app
+        .clone()
+        .oneshot(auth_json_request(
+            "PUT",
+            "/api/v1/settings/llm-provider",
+            json!({
+                "provider": "openai_compatible",
+                "base_url": base_url,
+                "model": "chat-model",
+                "api_mode": "chat_completions",
+                "streaming_enabled": false,
+                "api_key": "sk-user"
+            }),
+        ))
+        .await
+        .unwrap();
+    assert_eq!(settings_response.status(), StatusCode::OK);
+
+    let conversation_response = app
+        .clone()
+        .oneshot(auth_json_request(
+            "POST",
+            "/api/v1/chat/conversations",
+            json!({ "title": "Provider chat" }),
+        ))
+        .await
+        .unwrap();
+    assert_eq!(conversation_response.status(), StatusCode::OK);
+
+    let turn_response = app
+        .clone()
+        .oneshot(auth_json_request(
+            "POST",
+            "/api/v1/chat/conversations/conversation-1/turns",
+            json!({
+                "message": "answer directly",
+                "managed_database_id": "db-1"
+            }),
+        ))
+        .await
+        .unwrap();
+    assert_eq!(turn_response.status(), StatusCode::OK);
+    tokio::time::sleep(std::time::Duration::from_millis(50)).await;
+
+    let captured = captured_body.lock().unwrap().clone().unwrap();
+    assert_eq!(captured["model"], "chat-model");
+    assert_eq!(captured["stream"], false);
 }
 
 #[tokio::test]

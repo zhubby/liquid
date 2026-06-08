@@ -7,5 +7,6 @@ export type LlmProviderSettings = {
   base_url: string;
   model: string;
   api_mode: LlmProviderApiMode;
+  streaming_enabled: boolean;
   has_api_key: boolean;
 };

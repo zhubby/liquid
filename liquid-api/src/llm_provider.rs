@@ -9,6 +9,7 @@ pub(crate) struct UserLlmProvider {
     pub(crate) client: Arc<dyn LlmClient>,
     pub(crate) model: String,
     pub(crate) protocol: LlmProtocol,
+    pub(crate) streaming_enabled: bool,
 }
 
 pub(crate) async fn user_llm_provider_for_user(
@@ -38,5 +39,6 @@ pub(crate) async fn user_llm_provider_for_user(
         client,
         model: settings.model,
         protocol,
+        streaming_enabled: settings.streaming_enabled,
     }))
 }

@@ -156,7 +156,8 @@ async fn sql_audit_agent_for_user(
     let Some(provider) = user_llm_provider_for_user(state, owner_user_id).await? else {
         return Ok(state.agent.clone());
     };
-    let agent = ToolCallingSqlAuditAgent::new(provider.client, provider.model, provider.protocol);
+    let agent = ToolCallingSqlAuditAgent::new(provider.client, provider.model, provider.protocol)
+        .with_streaming_enabled(provider.streaming_enabled);
 
     Ok(Arc::new(agent))
 }

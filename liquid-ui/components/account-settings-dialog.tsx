@@ -31,6 +31,7 @@ import {
   CardHeader,
   CardTitle,
 } from "@/components/ui/card";
+import { Switch } from "@/components/ui/switch";
 import {
   type CurrentUserResponse,
   type LlmProviderApiMode,
@@ -81,6 +82,7 @@ export function AccountSettingsDialog({
   const [model, setModel] = useState("");
   const [apiMode, setApiMode] =
     useState<LlmProviderApiMode>("chat_completions");
+  const [streamingEnabled, setStreamingEnabled] = useState(true);
   const [apiKey, setApiKey] = useState("");
   const [hasApiKey, setHasApiKey] = useState(false);
   const [isLoadingModel, setIsLoadingModel] = useState(true);
@@ -106,6 +108,7 @@ export function AccountSettingsDialog({
         setBaseUrl(response.settings.base_url);
         setModel(response.settings.model);
         setApiMode(response.settings.api_mode);
+        setStreamingEnabled(response.settings.streaming_enabled);
         setHasApiKey(response.settings.has_api_key);
       })
       .catch((error) => {
@@ -206,6 +209,7 @@ export function AccountSettingsDialog({
         base_url: baseUrl,
         model,
         api_mode: apiMode,
+        streaming_enabled: streamingEnabled,
       };
 
       if (apiKey.trim()) {
@@ -221,6 +225,7 @@ export function AccountSettingsDialog({
         },
       );
       setHasApiKey(Boolean(response.settings?.has_api_key));
+      setStreamingEnabled(response.settings?.streaming_enabled ?? true);
       setApiKey("");
       toast.success(t.settings.toasts.modelSaved);
     } catch (error) {
@@ -385,6 +390,8 @@ export function AccountSettingsDialog({
                   setModel={setModel}
                   apiMode={apiMode}
                   setApiMode={setApiMode}
+                  streamingEnabled={streamingEnabled}
+                  setStreamingEnabled={setStreamingEnabled}
                   apiKey={apiKey}
                   setApiKey={setApiKey}
                   hasApiKey={hasApiKey}
@@ -610,6 +617,8 @@ function ModelTab({
   setModel,
   apiMode,
   setApiMode,
+  streamingEnabled,
+  setStreamingEnabled,
   apiKey,
   setApiKey,
   hasApiKey,
@@ -623,6 +632,8 @@ function ModelTab({
   setModel: (value: string) => void;
   apiMode: LlmProviderApiMode;
   setApiMode: (value: LlmProviderApiMode) => void;
+  streamingEnabled: boolean;
+  setStreamingEnabled: (value: boolean) => void;
   apiKey: string;
   setApiKey: (value: string) => void;
   hasApiKey: boolean;
@@ -719,6 +730,21 @@ function ModelTab({
                   <option value="responses">responses</option>
                 </select>
               </div>
+            </div>
+            <div className="flex items-center justify-between gap-4 rounded-md border bg-background px-3 py-2">
+              <div className="min-w-0">
+                <div className="text-xs font-medium text-muted-foreground">
+                  {t.settings.model.streamingTitle}
+                </div>
+                <div className="mt-0.5 text-xs text-muted-foreground">
+                  {t.settings.model.streamingDescription}
+                </div>
+              </div>
+              <Switch
+                checked={streamingEnabled}
+                onCheckedChange={setStreamingEnabled}
+                aria-label={t.settings.model.streamingTitle}
+              />
             </div>
           </SettingsBlock>
 

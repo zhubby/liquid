@@ -232,9 +232,11 @@ async fn run_agent_turn_inner(
         anyhow::bail!(MISSING_LLM_PROVIDER_MESSAGE);
     };
     let tools = workbench_tool_registry(&state, &user.id, &turn).await?;
-    let agent = LlmWorkbenchAgent::new(provider.client, provider.model, provider.protocol);
+    let streaming_message_id = format!("stream-{turn_id}");
+    let agent = LlmWorkbenchAgent::new(provider.client, provider.model, provider.protocol)
+        .with_streaming_enabled(provider.streaming_enabled);
     let response = agent
-        .respond_with_tools(
+        .respond_with_tools_and_text_delta(
             LlmWorkbenchContext {
                 messages,
                 managed_database,
@@ -245,6 +247,38 @@ async fn run_agent_turn_inner(
                 recent_actions,
             },
             tools,
+            {
+                let state = state.clone();
+                let owner_user_id = user.id.clone();
+                let turn_id = turn_id.clone();
+                move |delta| {
+                    let state = state.clone();
+                    let owner_user_id = owner_user_id.clone();
+                    let turn_id = turn_id.clone();
+                    let streaming_message_id = streaming_message_id.clone();
+                    async move {
+                        if let Err(error) = append_event(
+                            &state,
+                            &owner_user_id,
+                            &turn_id,
+                            AgentEventType::AssistantDelta,
+                            json!({
+                                "message_id": streaming_message_id,
+                                "content": delta,
+                                "append": true,
+                            }),
+                        )
+                        .await
+                        {
+                            tracing::warn!(
+                                turn_id = %turn_id,
+                                error = %error,
+                                "failed to append streamed assistant delta"
+                            );
+                        }
+                    }
+                }
+            },
         )
         .await?;
 
@@ -1062,9 +1096,42 @@ pub(crate) async fn synthesize_action_observation(
         .get_agent_turn(owner_user_id, &action.turn_id)
         .await?;
     let context = load_llm_workbench_context(state, owner_user_id, &turn).await?;
-    let agent = LlmWorkbenchAgent::new(provider.client, provider.model, provider.protocol);
+    let streaming_message_id = format!("stream-{}", action.turn_id);
+    let agent = LlmWorkbenchAgent::new(provider.client, provider.model, provider.protocol)
+        .with_streaming_enabled(provider.streaming_enabled);
     let response = agent
-        .synthesize_observation(context, observation)
+        .synthesize_observation_with_text_delta(context, observation, {
+            let state = state.clone();
+            let owner_user_id = owner_user_id.to_owned();
+            let turn_id = action.turn_id.clone();
+            move |delta| {
+                let state = state.clone();
+                let owner_user_id = owner_user_id.clone();
+                let turn_id = turn_id.clone();
+                let streaming_message_id = streaming_message_id.clone();
+                async move {
+                    if let Err(error) = append_event(
+                        &state,
+                        &owner_user_id,
+                        &turn_id,
+                        AgentEventType::AssistantDelta,
+                        json!({
+                            "message_id": streaming_message_id,
+                            "content": delta,
+                            "append": true,
+                        }),
+                    )
+                    .await
+                    {
+                        tracing::warn!(
+                            turn_id = %turn_id,
+                            error = %error,
+                            "failed to append streamed assistant delta"
+                        );
+                    }
+                }
+            }
+        })
         .await
         .context("LLM observation synthesis failed")?;
 

@@ -1,5 +1,6 @@
 mod agent;
 mod database_operations;
+mod llm_invocation;
 mod mock;
 mod prompt;
 mod tools;

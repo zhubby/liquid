@@ -227,6 +227,7 @@ impl LlmResponse {
 pub enum LlmEvent {
     TextDelta(String),
     ToolCallDelta {
+        index: Option<usize>,
         id: Option<String>,
         name: Option<String>,
         arguments_delta: String,
@@ -703,7 +704,7 @@ fn sse_events(response: reqwest::Response, protocol: LlmProtocol) -> LlmStream {
             buffer.push_str(&String::from_utf8_lossy(&chunk));
 
             while let Some(frame) = next_sse_frame(&mut buffer) {
-                if let Some(event) = event_from_sse_frame(protocol, &frame)? {
+                for event in events_from_sse_frame(protocol, &frame)? {
                     let done = matches!(event, LlmEvent::Done);
                     yield event;
 
@@ -715,8 +716,7 @@ fn sse_events(response: reqwest::Response, protocol: LlmProtocol) -> LlmStream {
         }
 
         if !buffer.trim().is_empty() {
-            let event = event_from_sse_frame(protocol, &buffer)?;
-            if let Some(event) = event {
+            for event in events_from_sse_frame(protocol, &buffer)? {
                 yield event;
             }
         }
@@ -740,7 +740,7 @@ fn next_sse_frame(buffer: &mut String) -> Option<String> {
     Some(frame)
 }
 
-fn event_from_sse_frame(protocol: LlmProtocol, frame: &str) -> Result<Option<LlmEvent>> {
+fn events_from_sse_frame(protocol: LlmProtocol, frame: &str) -> Result<Vec<LlmEvent>> {
     let payload = frame
         .lines()
         .filter_map(|line| line.trim_start().strip_prefix("data:"))
@@ -749,23 +749,32 @@ fn event_from_sse_frame(protocol: LlmProtocol, frame: &str) -> Result<Option<Llm
         .join("\n");
 
     if payload.is_empty() {
-        return Ok(None);
+        let trimmed = frame.trim();
+        if trimmed.starts_with('{') {
+            let raw: Value = serde_json::from_str(trimmed)
+                .with_context(|| "failed to decode non-SSE LLM stream response JSON")?;
+            return Ok(vec![LlmEvent::MessageDone(response_from_value(
+                protocol, raw,
+            )?)]);
+        }
+
+        return Ok(Vec::new());
     }
 
     if payload == "[DONE]" {
-        return Ok(Some(LlmEvent::Done));
+        return Ok(vec![LlmEvent::Done]);
     }
 
     let raw: Value =
         serde_json::from_str(&payload).with_context(|| "failed to decode LLM stream event JSON")?;
 
     match protocol {
-        LlmProtocol::ChatCompletions => Ok(Some(chat_event_from_value(raw))),
-        LlmProtocol::Responses => Ok(Some(responses_event_from_value(raw))),
+        LlmProtocol::ChatCompletions => Ok(chat_events_from_value(raw)),
+        LlmProtocol::Responses => Ok(vec![responses_event_from_value(raw)]),
     }
 }
 
-fn chat_event_from_value(raw: Value) -> LlmEvent {
+fn chat_events_from_value(raw: Value) -> Vec<LlmEvent> {
     let choice = raw
         .get("choices")
         .and_then(Value::as_array)
@@ -776,33 +785,41 @@ fn chat_event_from_value(raw: Value) -> LlmEvent {
         .and_then(|delta| delta.get("content"))
         .and_then(Value::as_str)
     {
-        return LlmEvent::TextDelta(text.to_owned());
+        return vec![LlmEvent::TextDelta(text.to_owned())];
     }
 
-    if let Some(tool_delta) = delta
+    if let Some(tool_deltas) = delta
         .and_then(|delta| delta.get("tool_calls"))
         .and_then(Value::as_array)
-        .and_then(|tool_calls| tool_calls.first())
     {
-        let function = tool_delta.get("function").unwrap_or(&Value::Null);
-        return LlmEvent::ToolCallDelta {
-            id: tool_delta
-                .get("id")
-                .and_then(Value::as_str)
-                .map(str::to_owned),
-            name: function
-                .get("name")
-                .and_then(Value::as_str)
-                .map(str::to_owned),
-            arguments_delta: function
-                .get("arguments")
-                .and_then(Value::as_str)
-                .unwrap_or_default()
-                .to_owned(),
-        };
+        return tool_deltas
+            .iter()
+            .map(|tool_delta| {
+                let function = tool_delta.get("function").unwrap_or(&Value::Null);
+                LlmEvent::ToolCallDelta {
+                    index: tool_delta
+                        .get("index")
+                        .and_then(Value::as_u64)
+                        .map(|index| index as usize),
+                    id: tool_delta
+                        .get("id")
+                        .and_then(Value::as_str)
+                        .map(str::to_owned),
+                    name: function
+                        .get("name")
+                        .and_then(Value::as_str)
+                        .map(str::to_owned),
+                    arguments_delta: function
+                        .get("arguments")
+                        .and_then(Value::as_str)
+                        .unwrap_or_default()
+                        .to_owned(),
+                }
+            })
+            .collect();
     }
 
-    LlmEvent::RawJson(raw)
+    vec![LlmEvent::RawJson(raw)]
 }
 
 fn responses_event_from_value(raw: Value) -> LlmEvent {
@@ -813,6 +830,7 @@ fn responses_event_from_value(raw: Value) -> LlmEvent {
     {
         if event_type.contains("function_call_arguments") {
             return LlmEvent::ToolCallDelta {
+                index: None,
                 id: raw
                     .get("item_id")
                     .or_else(|| raw.get("call_id"))
@@ -1036,13 +1054,55 @@ mod tests {
 
     #[test]
     fn stream_frame_maps_chat_text_delta() {
-        let event = event_from_sse_frame(
+        let events = events_from_sse_frame(
             LlmProtocol::ChatCompletions,
             "event: message\ndata: {\"choices\":[{\"delta\":{\"content\":\"hi\"}}]}",
         )
-        .unwrap()
         .unwrap();
 
-        assert_eq!(event, LlmEvent::TextDelta("hi".to_owned()));
+        assert_eq!(events, vec![LlmEvent::TextDelta("hi".to_owned())]);
+    }
+
+    #[test]
+    fn stream_frame_maps_all_chat_tool_call_deltas() {
+        let events = events_from_sse_frame(
+            LlmProtocol::ChatCompletions,
+            r#"event: message
+data: {"choices":[{"delta":{"tool_calls":[{"index":0,"id":"call_1","function":{"name":"first","arguments":"{\""}},{"index":1,"id":"call_2","function":{"name":"second","arguments":"{\""}}]}}]}"#,
+        )
+        .unwrap();
+
+        assert_eq!(
+            events,
+            vec![
+                LlmEvent::ToolCallDelta {
+                    index: Some(0),
+                    id: Some("call_1".to_owned()),
+                    name: Some("first".to_owned()),
+                    arguments_delta: "{\"".to_owned(),
+                },
+                LlmEvent::ToolCallDelta {
+                    index: Some(1),
+                    id: Some("call_2".to_owned()),
+                    name: Some("second".to_owned()),
+                    arguments_delta: "{\"".to_owned(),
+                },
+            ]
+        );
+    }
+
+    #[test]
+    fn stream_frame_accepts_non_sse_json_response() {
+        let events = events_from_sse_frame(
+            LlmProtocol::ChatCompletions,
+            r#"{"choices":[{"message":{"content":"plain json"}}]}"#,
+        )
+        .unwrap();
+
+        assert_eq!(events.len(), 1);
+        let LlmEvent::MessageDone(response) = &events[0] else {
+            panic!("expected MessageDone");
+        };
+        assert_eq!(response.content, "plain json");
     }
 }

@@ -1450,8 +1450,17 @@ async fn chat_stream_events(
             let Some(delta) = payload_string(&event.payload, "content") else {
                 return Vec::new();
             };
-            assistant_content.clear();
-            assistant_content.push_str(&delta);
+            if event
+                .payload
+                .get("append")
+                .and_then(Value::as_bool)
+                .unwrap_or(false)
+            {
+                assistant_content.push_str(&delta);
+            } else {
+                assistant_content.clear();
+                assistant_content.push_str(&delta);
+            }
             let message_id = payload_string(&event.payload, "message_id")
                 .or_else(|| assistant_message_id.clone())
                 .unwrap_or_else(|| format!("stream-{turn_id}"));
