@@ -1,28 +1,38 @@
 # Development
 
-## Backend
+Liquid is a Rust workspace plus a Bun-managed Next.js app. Run Rust commands
+from the repository root and frontend commands from `liquid-ui`.
+
+## Requirements
+
+- Rust stable with Rust 2024 support.
+- Bun for frontend development.
+- PostgreSQL for the Liquid application database.
+- Docker, optional for local PostgreSQL and API image builds.
+- mdBook for documentation preview.
+- PostgreSQL client tools, optional for backup/restore worker development.
+
+## Backend Commands
+
+```bash
+cargo check --workspace
+cargo test --workspace
+cargo fmt --all
+cargo fmt --all --check
+cargo clippy --workspace --all-targets -- -D warnings
+```
+
+Start the API:
 
 ```bash
 cargo run -p liquid-cli -- server
 ```
 
-The API binds to `LIQUID_API_ADDR`, defaulting to `127.0.0.1:3001`.
-When `--config` is omitted, Liquid reads `~/.liquid/config.toml`. If the file
-does not exist, the CLI creates `~/.liquid/` and writes a default config file
-before loading it. You can also provide a TOML config file explicitly:
-
-```bash
-cargo run -p liquid-cli -- server --config liquid.toml
-```
-
-Run application database migrations without starting the API:
+Run migrations only:
 
 ```bash
 cargo run -p liquid-cli -- migrate
 ```
-
-`migrate` uses the same default config lookup and creation behavior as
-`server`.
 
 Print the binary version:
 
@@ -30,68 +40,121 @@ Print the binary version:
 cargo run -p liquid-cli -- version
 ```
 
-Example:
-
-```toml
-[api]
-addr = "127.0.0.1:3001"
-cors_origin = "http://localhost:3000"
-
-[database]
-url = "postgres://postgres:postgres@localhost:5432/liquid"
-max_connections = 5
-auto_migrate = true
-
-[auth]
-token_ttl_seconds = 604800
-
-[security]
-encryption_key = "replace-with-a-secret-key"
-
-[llm]
-base_url = "https://api.openai.com"
-api_mode = "chat_completions"
-
-[sql]
-metadata = "auto"
-execution = "readonly"
-managed_pool_max_connections = 2
-managed_pool_idle_ttl_seconds = 600
-managed_pool_reap_interval_seconds = 60
-managed_pool_acquire_timeout_seconds = 10
-```
-
-Environment variables override config file values. The Liquid application
-database stores users, auth tokens, and managed database connection records.
-Managed database passwords are encrypted with `LIQUID_ENCRYPTION_KEY`
-or `[security].encryption_key`.
-
-The backend uses the mock SQL audit agent unless both `OPENAI_API_KEY` and
-`OPENAI_MODEL` are set. OpenAI-compatible LLM settings are:
+## Frontend Commands
 
 ```bash
-export OPENAI_API_KEY=...
-export OPENAI_MODEL=gpt-5.4
-export OPENAI_BASE_URL=https://api.openai.com
-export OPENAI_API_MODE=chat_completions
+cd liquid-ui
+bun install
+bun run dev
+bun run lint
+bun run build
 ```
 
-`OPENAI_BASE_URL` defaults to `https://api.openai.com` and can be provided with
-or without a trailing `/v1`. `OPENAI_API_MODE` defaults to `chat_completions` and
-also supports `responses`.
+The frontend reads `NEXT_PUBLIC_API_BASE_URL`, defaulting to
+`http://localhost:3001`.
 
-Managed database SQL audit tools use the saved managed database records, not the
-process-level `DATABASE_URL`. SQL metadata collection is controlled by
-`LIQUID_SQL_METADATA=auto|off|required`, defaulting to `auto`.
-`LIQUID_SQL_EXECUTION=off` disables managed audit execution tools, `readonly`
-enables read-only execution, and `write_gated` exposes gated write execution for
-audited, user-approved statements. Each managed database instance gets a lazy
-SQLx pool that is closed after
-`LIQUID_SQL_MANAGED_POOL_IDLE_TTL_SECONDS` seconds without use.
-SQLx query logs are disabled by default; set `LIQUID_SQLX_LOGS=true` to enable
-the pretty SQLx query log layer while debugging.
+## Documentation Commands
 
-## Frontend
+Preview docs:
+
+```bash
+mdbook serve docs
+```
+
+Verify docs:
+
+```bash
+mdbook build docs
+```
+
+Every page under `docs/src` should be linked from `docs/src/SUMMARY.md`.
+
+## Type Contract Workflow
+
+Frontend API contracts are generated from Rust DTOs in `liquid-core`.
+
+When changing a type used by the frontend:
+
+1. Change the Rust DTO in `liquid-core`.
+2. Run:
+
+   ```bash
+   cargo test -p liquid-core
+   ```
+
+3. Review generated files under `liquid-ui/lib/generated/api-types`.
+4. Update frontend imports or rendering code as needed.
+5. Commit the Rust and generated TypeScript changes together.
+
+Do not edit generated API type files by hand.
+
+## Backend Development Patterns
+
+- Keep route handlers in `liquid-api` thin. Move persistent behavior to
+  `liquid-storage`, SQL analysis to `liquid-sql`, and agent/tool behavior to
+  `liquid-agent`.
+- Keep shared request and response DTOs in `liquid-core`.
+- Use `LiquidStore` in API code instead of reaching into concrete SQLx queries.
+- Use `ManagedDatabaseConnectionLoader` when a component needs target database
+  connection specs.
+- Keep LLM provider wire details inside `liquid-llm`.
+- Do not use `.unwrap()` or `.expect()` in production paths.
+- Prefer typed enums over string matching except at serialization, database, or
+  display boundaries.
+
+## Frontend Development Patterns
+
+- Use `apiRequest`, `apiRequestWithMeta`, and `apiStream` from
+  `liquid-ui/lib/api.ts`.
+- Import generated DTO types through `@/lib/api`.
+- Keep dashboard-specific composition in feature components.
+- Use existing `components/ui` primitives, lucide-react icons, and Recharts.
+- Keep the first authenticated screen operational: database selection followed by
+  the split workspace, not a marketing page.
+- For streamed chat changes, keep event handling compatible with
+  `ChatStreamEvent`.
+
+## Test Focus
+
+Use targeted tests for the layer being changed:
+
+| Change Area | Useful Verification |
+| --- | --- |
+| CLI/config startup | `cargo test -p liquid-cli`, `cargo test -p liquid-config`, manual `cargo run -p liquid-cli -- version`. |
+| API route behavior | `cargo test -p liquid-api`. |
+| SQL parsing or risk rules | `cargo test -p liquid-sql`. |
+| Storage queries or migrations | `cargo test -p liquid-storage` with a test PostgreSQL database. |
+| Contract DTOs | `cargo test -p liquid-core`. |
+| Frontend behavior | `bun run lint` and `bun run build` from `liquid-ui`. |
+| Docs | `mdbook build docs`. |
+
+The storage integration tests require PostgreSQL access. Use the default local
+database URL unless the test harness is configured otherwise:
+
+```text
+postgres://postgres:postgres@localhost:5432/liquid
+```
+
+## Local End-to-End Run
+
+Start local PostgreSQL:
+
+```bash
+docker run --name liquid-postgres \
+  -e POSTGRES_PASSWORD=postgres \
+  -e POSTGRES_DB=liquid \
+  -p 5432:5432 \
+  -d postgres:16
+```
+
+Run backend:
+
+```bash
+cargo run -p liquid-cli -- migrate
+cargo run -p liquid-cli -- server
+```
+
+Run frontend in another terminal:
 
 ```bash
 cd liquid-ui
@@ -99,24 +162,39 @@ bun install
 bun run dev
 ```
 
-The dashboard reads `NEXT_PUBLIC_API_BASE_URL`, defaulting to
-`http://localhost:3001`.
+Open `http://localhost:3000`, register a user, create a managed PostgreSQL
+database record, and enter the workspace.
 
-## API Type Contracts
+## Common Change Recipes
 
-Frontend API contracts are generated from `liquid-core` with ts-rs. Do not edit
-files under `liquid-ui/lib/generated/api-types` by hand.
+Add an API response field:
 
-After changing Rust DTOs used by the frontend, run:
+1. Add the field to the Rust type in `liquid-core`.
+2. Populate it in storage or API mapping code.
+3. Run `cargo test -p liquid-core`.
+4. Use the generated TypeScript field in frontend code.
+5. Run relevant backend tests and `bun run lint`.
 
-```bash
-cargo test -p liquid-core
-```
+Add a route:
 
-Commit the regenerated TypeScript files with the Rust contract change.
+1. Add route state and handler in `liquid-api`.
+2. Put durable behavior behind `LiquidStore` or another trait boundary.
+3. Add or update DTOs in `liquid-core`.
+4. Add route tests in `liquid-api/tests`.
+5. Update [API Reference](./api-reference.md).
 
-## Docs
+Add a storage-backed feature:
 
-```bash
-mdbook serve docs
-```
+1. Add a SQLx migration in `liquid-storage/migrations`.
+2. Add concrete storage functions and trait methods.
+3. Add storage tests.
+4. Expose typed DTOs from `liquid-core`.
+5. Wire API routes and frontend calls.
+6. Update [Data Model](./data-model.md).
+
+Add or change SQL safety behavior:
+
+1. Update `liquid-sql` parser or rule code.
+2. Add focused tests in `liquid-sql`.
+3. Update audit lifecycle behavior in `liquid-api` only if statuses change.
+4. Update [SQL Safety Model](./sql-safety-model.md).
