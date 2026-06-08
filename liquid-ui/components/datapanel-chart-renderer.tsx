@@ -48,6 +48,20 @@ import {
 type RowValue = Record<string, unknown>;
 type ChartRow = Record<string, string | number | null>;
 type ChartVariant = "card" | "preview";
+type ScatterAxisMode = "number" | "time" | "category";
+type ScatterXAxis = {
+  mode: ScatterAxisMode;
+  categories?: string[];
+};
+type ScatterXValue =
+  | { kind: "number"; value: number }
+  | { kind: "time"; label: string; value: number }
+  | { kind: "category"; label: string };
+type ScatterPoint = {
+  x: ScatterXValue;
+  y: number;
+  z: number | null;
+};
 
 type DatapanelChartRendererProps = {
   chart: DatapanelChartConfig;
@@ -294,7 +308,7 @@ function renderScatterChart(
     return <EmptyChart label={emptyLabel} />;
   }
 
-  const data = scatterRows(rows, xKey, yKey, chart.z_key);
+  const { rows: data, xAxis } = scatterRows(rows, xKey, yKey, chart.z_key);
 
   if (data.length === 0) {
     return <EmptyChart label={emptyLabel} />;
@@ -303,7 +317,7 @@ function renderScatterChart(
   return (
     <ChartShell>
       <ScatterChart data={data} margin={chartMargin(compact)}>
-        {scatterAxes(xKey, yKey, compact)}
+        {scatterAxes(xKey, yKey, compact, xAxis)}
         {chart.z_key ? (
           <ZAxis dataKey={chart.z_key} range={compact ? [24, 72] : [40, 180]} />
         ) : (
@@ -313,7 +327,7 @@ function renderScatterChart(
           name={yKey}
           data={data}
           fill={seriesColor(0)}
-          line={!compact}
+          line={!compact && xAxis.mode !== "category"}
           lineType="fitting"
           isAnimationActive={false}
         />
@@ -600,7 +614,14 @@ function renderComposedSeries(
   );
 }
 
-function scatterAxes(xKey: string, yKey: string, compact: boolean) {
+function scatterAxes(
+  xKey: string,
+  yKey: string,
+  compact: boolean,
+  xAxis: ScatterXAxis,
+) {
+  const isCategoryAxis = xAxis.mode === "category";
+
   return [
     <CartesianGrid
       key="grid"
@@ -612,6 +633,13 @@ function scatterAxes(xKey: string, yKey: string, compact: boolean) {
       key="x-axis"
       dataKey={xKey}
       type="number"
+      domain={
+        isCategoryAxis && xAxis.categories?.length
+          ? [0, Math.max(0, xAxis.categories.length - 1)]
+          : undefined
+      }
+      allowDecimals={!isCategoryAxis}
+      tickFormatter={scatterXAxisTickFormatter(xAxis, compact)}
       tickLine={false}
       axisLine={false}
       tick={{ fill: chartBase.text, fontSize: compact ? 10 : 12 }}
@@ -738,26 +766,50 @@ function scatterRows(
   xKey: string,
   yKey: string,
   zKey?: string,
-): ChartRow[] {
-  return rows.flatMap((row) => {
-    const x = finiteNumber(row[xKey]);
+): { rows: ChartRow[]; xAxis: ScatterXAxis } {
+  const points = rows.flatMap((row): ScatterPoint[] => {
+    const x = scatterXValue(row[xKey]);
     const y = finiteNumber(row[yKey]);
 
     if (x === null || y === null) {
       return [];
     }
 
+    return [
+      {
+        x,
+        y,
+        z: zKey ? finiteNumber(row[zKey]) ?? 1 : null,
+      },
+    ];
+  });
+
+  if (points.length === 0) {
+    return { rows: [], xAxis: { mode: "number" } };
+  }
+
+  const xAxis = scatterXAxis(points);
+  const categoryIndexes = new Map<string, number>();
+  const categories: string[] = [];
+
+  const nextRows = points.map((point) => {
     const next: ChartRow = {
-      [xKey]: x,
-      [yKey]: y,
+      [xKey]: scatterXCoordinate(point.x, xAxis, categoryIndexes, categories),
+      [yKey]: point.y,
     };
 
-    if (zKey) {
-      next[zKey] = finiteNumber(row[zKey]) ?? 1;
+    if (zKey && point.z !== null) {
+      next[zKey] = point.z;
     }
 
-    return [next];
+    return next;
   });
+
+  if (xAxis.mode === "category") {
+    xAxis.categories = categories;
+  }
+
+  return { rows: nextRows, xAxis };
 }
 
 function categoricalValueRows(
@@ -875,6 +927,117 @@ function finiteNumber(value: unknown): number | null {
   }
 
   return null;
+}
+
+function scatterXValue(value: unknown): ScatterXValue | null {
+  const numericValue = finiteNumber(value);
+
+  if (numericValue !== null) {
+    return { kind: "number", value: numericValue };
+  }
+
+  const label = labelValue(value);
+
+  if (label === null) {
+    return null;
+  }
+
+  const text = String(label);
+  const timestamp = Date.parse(text);
+
+  if (Number.isFinite(timestamp)) {
+    return { kind: "time", label: text, value: timestamp };
+  }
+
+  return { kind: "category", label: text };
+}
+
+function scatterXAxis(points: ScatterPoint[]): ScatterXAxis {
+  if (points.every((point) => point.x.kind === "number")) {
+    return { mode: "number" };
+  }
+
+  if (points.every((point) => point.x.kind === "time")) {
+    return { mode: "time" };
+  }
+
+  return { mode: "category" };
+}
+
+function scatterXCoordinate(
+  value: ScatterXValue,
+  xAxis: ScatterXAxis,
+  categoryIndexes: Map<string, number>,
+  categories: string[],
+): number {
+  if (xAxis.mode === "number" && value.kind === "number") {
+    return value.value;
+  }
+
+  if (xAxis.mode === "time" && value.kind === "time") {
+    return value.value;
+  }
+
+  const label = scatterXLabel(value);
+  let index = categoryIndexes.get(label);
+
+  if (index === undefined) {
+    index = categories.length;
+    categoryIndexes.set(label, index);
+    categories.push(label);
+  }
+
+  return index;
+}
+
+function scatterXLabel(value: ScatterXValue): string {
+  if (value.kind === "number") {
+    return String(value.value);
+  }
+
+  return value.label;
+}
+
+function scatterXAxisTickFormatter(xAxis: ScatterXAxis, compact: boolean) {
+  if (xAxis.mode === "time") {
+    return (value: string | number) => {
+      const timestamp = finiteNumber(value);
+      return timestamp === null ? "" : formatScatterTimeTick(timestamp, compact);
+    };
+  }
+
+  if (xAxis.mode === "category") {
+    return (value: string | number) => {
+      const index = finiteNumber(value);
+
+      if (index === null || !Number.isInteger(index)) {
+        return "";
+      }
+
+      return xAxis.categories?.[index] ?? "";
+    };
+  }
+
+  return undefined;
+}
+
+function formatScatterTimeTick(timestamp: number, compact: boolean) {
+  const date = new Date(timestamp);
+
+  if (Number.isNaN(date.getTime())) {
+    return "";
+  }
+
+  const datePart = date.toLocaleDateString(undefined, {
+    month: "2-digit",
+    day: "2-digit",
+  });
+  const timePart = date.toLocaleTimeString(undefined, {
+    hour: "2-digit",
+    minute: "2-digit",
+  });
+
+  return compact ? timePart : `${datePart} ${timePart}`;
 }
 
 function EmptyChart({ label }: { label: string }) {
