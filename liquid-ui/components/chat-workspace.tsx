@@ -1386,7 +1386,7 @@ function MessageBubble({
     <article
       className={cn(
         "group flex min-w-0 gap-3",
-        isUser && "justify-end text-right",
+        isUser && "justify-end",
       )}
     >
       {!isUser ? (
@@ -1407,8 +1407,7 @@ function MessageBubble({
       <div className={cn("min-w-0", isUser ? "max-w-[82%]" : "max-w-[92%]")}>
         <div
           className={cn(
-            "relative min-w-0 text-sm leading-6",
-            isUserSqlMessage && "text-left",
+            "relative min-w-0 text-left text-sm leading-6",
             isUser &&
               !isUserSqlMessage &&
               "rounded-lg bg-primary px-3 py-2 text-primary-foreground shadow-xs",
