@@ -2,6 +2,7 @@ mod agent_workbench;
 mod auth;
 mod crypto;
 mod database_backups;
+mod database_diagrams;
 mod datapanels;
 mod error;
 mod managed_databases;

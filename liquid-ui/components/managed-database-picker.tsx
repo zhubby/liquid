@@ -16,6 +16,7 @@ import {
   ChevronDown,
   ClipboardCheck,
   Database,
+  FileJson,
   KeyRound,
   Loader2,
   LogIn,
@@ -36,6 +37,7 @@ import { toast } from "sonner";
 import { AccountSettingsDialog } from "@/components/account-settings-dialog";
 import { AppTopNav } from "@/components/app-top-nav";
 import { DatabaseBackupHistory } from "@/components/database-backup-history";
+import { DatabaseDiagramWorkspace } from "@/components/database-diagram-workspace";
 import { SqlAuditHistory } from "@/components/sql-audit-history";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
@@ -83,7 +85,7 @@ type ManagedDatabaseForm = {
   ssl_mode: ManagedDatabase["ssl_mode"];
 };
 
-type ManagedDatabaseView = "overview" | "audits" | "backups";
+type ManagedDatabaseView = "overview" | "audits" | "backups" | "designs";
 
 const emptyManagedDatabaseForm: ManagedDatabaseForm = {
   name: "",
@@ -207,6 +209,13 @@ export function ManagedDatabasePicker({
       label: t.databasePicker.databaseOverview,
       description: t.databasePicker.connectionCount(databases.length),
       badge: String(databases.length),
+    },
+    {
+      value: "designs" as const,
+      icon: FileJson,
+      label: t.databasePicker.designMenu,
+      description: t.databasePicker.designMenuDescription,
+      badge: null,
     },
     {
       value: "audits" as const,
@@ -624,6 +633,9 @@ export function ManagedDatabasePicker({
             ) : null}
             {activeView === "backups" ? (
               <DatabaseBackupHistory token={token} databases={databases} />
+            ) : null}
+            {activeView === "designs" ? (
+              <DatabaseDiagramWorkspace token={token} />
             ) : null}
           </section>
         </div>

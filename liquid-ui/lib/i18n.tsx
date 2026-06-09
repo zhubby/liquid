@@ -102,6 +102,8 @@ const zhCN = {
     auditMenuDescription: "SQL 审计记录",
     backupMenu: "备份",
     backupMenuDescription: "备份记录",
+    designMenu: "数据库设计",
+    designMenuDescription: "ER 图与结构文档",
     themeShortcutLabel: (currentTheme: string) => `切换主题，当前${currentTheme}`,
     languageShortcutLabel: (nextLanguage: string) =>
       `切换语言到 ${nextLanguage}`,
@@ -773,6 +775,8 @@ const enUS: Messages = {
     auditMenuDescription: "SQL audit records",
     backupMenu: "Backups",
     backupMenuDescription: "Backup records",
+    designMenu: "Database design",
+    designMenuDescription: "ER diagrams and structure docs",
     themeShortcutLabel: (currentTheme: string) =>
       `Switch theme, currently ${currentTheme}`,
     languageShortcutLabel: (nextLanguage: string) =>

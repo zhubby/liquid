@@ -7,6 +7,7 @@ mod chat;
 mod chat_sql;
 mod cors;
 mod database_backups;
+mod database_diagrams;
 mod datapanels;
 mod error;
 mod health;
@@ -29,6 +30,7 @@ pub fn router(state: ApiState) -> Router {
         .merge(health::routes())
         .merge(chat::routes())
         .merge(database_backups::routes())
+        .merge(database_diagrams::routes())
         .merge(datapanels::routes())
         .merge(auth::routes())
         .merge(audit::routes())

@@ -3,15 +3,15 @@ use liquid_core::{
     AgentAction, AgentActionStatus, AgentConversation, AgentEventRecord, AgentEventType,
     AgentMessage, AgentMessageRole, AgentResourceKind, AgentTurn, AgentTurnStatus,
     ApproveSqlAuditRequest, AuthResponse, CreateAgentActionRequest, CreateAgentConversationRequest,
-    CreateAgentTurnRequest, CreateDatapanelCardRequest, CreateManagedDatabaseRequest,
-    CreateSqlAuditRequest, Datapanel, DatapanelCard, DatapanelCardLayoutUpdate, DatapanelExport,
-    DatapanelPreview, DatapanelPreviewLink, DatapanelQueryResult, LlmProviderSettings,
-    LoginRequest, ManagedDatabase, PublicUser, RegisterRequest, RejectSqlAuditRequest,
-    ResolvedLlmProviderSettings, SqlAuditExecutionResult, SqlAuditExecutionStatus,
-    SqlAuditLifecycleStatus, SqlAuditRecord, SqlAuditReport, SqlAuditStatus, SqlStatementKind,
-    UpdateAgentConversationRequest, UpdateCurrentUserRequest, UpdateDatapanelCardRequest,
-    UpdateDatapanelRequest, UpdateLlmProviderSettingsRequest, UpdateManagedDatabaseRequest,
-    UpdatePasswordRequest,
+    CreateAgentTurnRequest, CreateDatabaseDiagramRequest, CreateDatapanelCardRequest,
+    CreateManagedDatabaseRequest, CreateSqlAuditRequest, DatabaseDiagram, Datapanel, DatapanelCard,
+    DatapanelCardLayoutUpdate, DatapanelExport, DatapanelPreview, DatapanelPreviewLink,
+    DatapanelQueryResult, LlmProviderSettings, LoginRequest, ManagedDatabase, PublicUser,
+    RegisterRequest, RejectSqlAuditRequest, ResolvedLlmProviderSettings, SqlAuditExecutionResult,
+    SqlAuditExecutionStatus, SqlAuditLifecycleStatus, SqlAuditRecord, SqlAuditReport,
+    SqlAuditStatus, SqlStatementKind, UpdateAgentConversationRequest, UpdateCurrentUserRequest,
+    UpdateDatabaseDiagramRequest, UpdateDatapanelCardRequest, UpdateDatapanelRequest,
+    UpdateLlmProviderSettingsRequest, UpdateManagedDatabaseRequest, UpdatePasswordRequest,
 };
 use serde_json::Value;
 use time::OffsetDateTime;
@@ -103,6 +103,31 @@ pub trait LiquidStore: Send + Sync {
         request: UpdateManagedDatabaseRequest,
     ) -> Result<ManagedDatabase, StorageError>;
     async fn delete_managed_database(
+        &self,
+        owner_user_id: &str,
+        id: &str,
+    ) -> Result<(), StorageError>;
+    async fn list_database_diagrams(
+        &self,
+        owner_user_id: &str,
+    ) -> Result<Vec<DatabaseDiagram>, StorageError>;
+    async fn create_database_diagram(
+        &self,
+        owner_user_id: &str,
+        request: CreateDatabaseDiagramRequest,
+    ) -> Result<DatabaseDiagram, StorageError>;
+    async fn get_database_diagram(
+        &self,
+        owner_user_id: &str,
+        id: &str,
+    ) -> Result<DatabaseDiagram, StorageError>;
+    async fn update_database_diagram(
+        &self,
+        owner_user_id: &str,
+        id: &str,
+        request: UpdateDatabaseDiagramRequest,
+    ) -> Result<DatabaseDiagram, StorageError>;
+    async fn delete_database_diagram(
         &self,
         owner_user_id: &str,
         id: &str,

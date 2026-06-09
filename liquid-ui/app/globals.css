@@ -1,3 +1,4 @@
+@import "@xyflow/react/dist/style.css";
 @import "tailwindcss";
 
 @custom-variant dark (&:is(.dark *));
@@ -264,5 +265,152 @@
   .liquid-user-sql-highlight .hljs-quote {
     color: oklch(0.68 0 0);
     font-style: italic;
+  }
+}
+
+@layer components {
+  .database-diagram-flow {
+    background:
+      linear-gradient(
+        color-mix(in oklch, var(--border) 46%, transparent) 1px,
+        transparent 1px
+      ),
+      linear-gradient(
+        90deg,
+        color-mix(in oklch, var(--border) 46%, transparent) 1px,
+        transparent 1px
+      ),
+      linear-gradient(
+        color-mix(in oklch, var(--primary) 10%, transparent) 1px,
+        transparent 1px
+      ),
+      linear-gradient(
+        90deg,
+        color-mix(in oklch, var(--primary) 10%, transparent) 1px,
+        transparent 1px
+      ),
+      var(--background);
+    background-size: 28px 28px, 28px 28px, 112px 112px, 112px 112px, auto;
+  }
+
+  .database-diagram-flow .react-flow__pane {
+    cursor: grab;
+  }
+
+  .database-diagram-flow .react-flow__pane.dragging {
+    cursor: grabbing;
+  }
+
+  .database-diagram-flow .react-flow__background {
+    opacity: 0.42;
+  }
+
+  .database-diagram-flow .react-flow__controls,
+  .database-diagram-flow .react-flow__minimap {
+    overflow: hidden;
+    border: 1px solid var(--border);
+    border-radius: var(--radius-md);
+    background: color-mix(in oklch, var(--background) 92%, transparent);
+    box-shadow:
+      0 10px 25px rgb(15 23 42 / 8%),
+      0 2px 6px rgb(15 23 42 / 6%);
+  }
+
+  .database-diagram-flow .react-flow__controls-button {
+    border-bottom: 1px solid var(--border);
+    background: transparent;
+    color: var(--foreground);
+  }
+
+  .database-diagram-flow .react-flow__controls-button:hover {
+    background: var(--muted);
+  }
+
+  .database-diagram-flow .react-flow__controls-button svg {
+    fill: currentcolor;
+  }
+
+  .database-diagram-flow .react-flow__minimap {
+    background: color-mix(in oklch, var(--muted) 58%, var(--background));
+  }
+
+  .database-diagram-flow .react-flow__minimap-mask {
+    fill: color-mix(in oklch, var(--background) 78%, transparent);
+  }
+
+  .database-diagram-flow .react-flow__edge-path {
+    filter: drop-shadow(0 1px 1px rgb(15 23 42 / 10%));
+  }
+
+  .database-diagram-flow .react-flow__edge.selected .react-flow__edge-path,
+  .database-diagram-flow .react-flow__edge:focus .react-flow__edge-path {
+    filter: drop-shadow(0 3px 5px rgb(15 23 42 / 18%));
+  }
+
+  .database-diagram-node {
+    box-shadow:
+      0 16px 34px rgb(15 23 42 / 10%),
+      0 2px 8px rgb(15 23 42 / 8%);
+  }
+
+  .database-diagram-table-node {
+    background:
+      linear-gradient(
+        180deg,
+        color-mix(in oklch, var(--background) 97%, var(--muted)) 0%,
+        var(--background) 100%
+      );
+  }
+
+  .database-diagram-node:hover {
+    box-shadow:
+      0 20px 42px rgb(15 23 42 / 13%),
+      0 3px 10px rgb(15 23 42 / 9%);
+  }
+
+  .database-diagram-area-node {
+    box-shadow: inset 0 0 0 1px color-mix(in oklch, var(--background) 60%, transparent);
+  }
+
+  .database-diagram-handle {
+    width: 10px;
+    height: 10px;
+    border: 2px solid var(--background);
+    border-radius: 999px;
+    background: var(--primary);
+    opacity: 0.9;
+    box-shadow:
+      0 0 0 1px color-mix(in oklch, var(--primary) 35%, var(--border)),
+      0 2px 5px rgb(15 23 42 / 20%);
+    transition:
+      opacity 160ms ease,
+      transform 160ms ease;
+  }
+
+  .database-diagram-handle-left {
+    left: -5px;
+  }
+
+  .database-diagram-handle-right {
+    right: -5px;
+  }
+
+  .database-diagram-table-node:hover .database-diagram-handle,
+  .database-diagram-handle:hover {
+    opacity: 1;
+    transform: scale(1.18);
+  }
+
+  .database-diagram-flow .react-flow__connection-path {
+    stroke: var(--primary);
+    stroke-width: 2.5;
+    filter: drop-shadow(0 2px 4px rgb(15 23 42 / 16%));
+  }
+
+  @media (prefers-reduced-motion: reduce) {
+    .database-diagram-node,
+    .database-diagram-handle {
+      transition: none;
+    }
   }
 }

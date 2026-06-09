@@ -49,6 +49,7 @@ export type { CreateChatSqlExecutionRequest } from "./generated/api-types/Create
 export type { CreateChatTurnRequest } from "./generated/api-types/CreateChatTurnRequest";
 export type { CreateDatabaseBackupRequest } from "./generated/api-types/CreateDatabaseBackupRequest";
 export type { CreateDatabaseBackupScheduleRequest } from "./generated/api-types/CreateDatabaseBackupScheduleRequest";
+export type { CreateDatabaseDiagramRequest } from "./generated/api-types/CreateDatabaseDiagramRequest";
 export type { CreateDatabaseRestoreRequest } from "./generated/api-types/CreateDatabaseRestoreRequest";
 export type { CreateManagedDatabaseRequest } from "./generated/api-types/CreateManagedDatabaseRequest";
 export type { CreateSqlAuditRequest } from "./generated/api-types/CreateSqlAuditRequest";
@@ -62,6 +63,20 @@ export type { DatabaseBackupStorageKind } from "./generated/api-types/DatabaseBa
 export type { DatabaseBackupStorageMetadata } from "./generated/api-types/DatabaseBackupStorageMetadata";
 export type { DatabaseBackupStatus } from "./generated/api-types/DatabaseBackupStatus";
 export type { DatabaseBackupTrigger } from "./generated/api-types/DatabaseBackupTrigger";
+export type { DatabaseDiagram } from "./generated/api-types/DatabaseDiagram";
+export type { DatabaseDiagramArea } from "./generated/api-types/DatabaseDiagramArea";
+export type { DatabaseDiagramCardinality } from "./generated/api-types/DatabaseDiagramCardinality";
+export type { DatabaseDiagramColumn } from "./generated/api-types/DatabaseDiagramColumn";
+export type { DatabaseDiagramDocument } from "./generated/api-types/DatabaseDiagramDocument";
+export type { DatabaseDiagramEnum } from "./generated/api-types/DatabaseDiagramEnum";
+export type { DatabaseDiagramEnumValue } from "./generated/api-types/DatabaseDiagramEnumValue";
+export type { DatabaseDiagramIndex } from "./generated/api-types/DatabaseDiagramIndex";
+export type { DatabaseDiagramNote } from "./generated/api-types/DatabaseDiagramNote";
+export type { DatabaseDiagramPoint } from "./generated/api-types/DatabaseDiagramPoint";
+export type { DatabaseDiagramRelationship } from "./generated/api-types/DatabaseDiagramRelationship";
+export type { DatabaseDiagramRelationshipEndpoint } from "./generated/api-types/DatabaseDiagramRelationshipEndpoint";
+export type { DatabaseDiagramSize } from "./generated/api-types/DatabaseDiagramSize";
+export type { DatabaseDiagramTable } from "./generated/api-types/DatabaseDiagramTable";
 export type { DatabaseOperationEventRecord } from "./generated/api-types/DatabaseOperationEventRecord";
 export type { DatabaseOperationEventType } from "./generated/api-types/DatabaseOperationEventType";
 export type { DatabaseOperationKind } from "./generated/api-types/DatabaseOperationKind";
@@ -96,6 +111,7 @@ export type { SqlRollbackStatus } from "./generated/api-types/SqlRollbackStatus"
 export type { SqlStatementKind } from "./generated/api-types/SqlStatementKind";
 export type { UpdateChatConversationRequest } from "./generated/api-types/UpdateChatConversationRequest";
 export type { UpdateDatabaseBackupScheduleRequest } from "./generated/api-types/UpdateDatabaseBackupScheduleRequest";
+export type { UpdateDatabaseDiagramRequest } from "./generated/api-types/UpdateDatabaseDiagramRequest";
 export type { UpdateDatapanelCardRequest } from "./generated/api-types/UpdateDatapanelCardRequest";
 export type { UpdateDatapanelLayoutRequest } from "./generated/api-types/UpdateDatapanelLayoutRequest";
 export type { UpdateDatapanelRequest } from "./generated/api-types/UpdateDatapanelRequest";
@@ -114,8 +130,19 @@ export class ApiError extends Error {
   }
 }
 
-const API_BASE_URL =
-  process.env.NEXT_PUBLIC_API_BASE_URL ?? "http://localhost:3001";
+const configuredApiBaseUrl = process.env.NEXT_PUBLIC_API_BASE_URL;
+
+function apiBaseUrl(): string {
+  if (configuredApiBaseUrl) {
+    return configuredApiBaseUrl;
+  }
+
+  if (typeof window !== "undefined") {
+    return `${window.location.protocol}//${window.location.hostname}:3001`;
+  }
+
+  return "http://localhost:3001";
+}
 
 export async function apiRequest<T>(
   path: string,
@@ -135,7 +162,7 @@ export async function apiRequest<T>(
     headers.set("Authorization", `Bearer ${options.token}`);
   }
 
-  const response = await fetch(`${API_BASE_URL}${path}`, {
+  const response = await fetch(`${apiBaseUrl()}${path}`, {
     method: options.method ?? "GET",
     headers,
     body: options.body === undefined ? undefined : JSON.stringify(options.body),
@@ -170,7 +197,7 @@ export async function apiRequestWithMeta<T>(
     headers.set("Authorization", `Bearer ${options.token}`);
   }
 
-  const response = await fetch(`${API_BASE_URL}${path}`, {
+  const response = await fetch(`${apiBaseUrl()}${path}`, {
     method: options.method ?? "GET",
     headers,
     body: options.body === undefined ? undefined : JSON.stringify(options.body),
@@ -203,7 +230,7 @@ export async function apiStream<T>(
     headers.set("Authorization", `Bearer ${options.token}`);
   }
 
-  const response = await fetch(`${API_BASE_URL}${path}`, {
+  const response = await fetch(`${apiBaseUrl()}${path}`, {
     headers,
     signal: options.signal,
   });

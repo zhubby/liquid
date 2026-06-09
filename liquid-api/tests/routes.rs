@@ -29,20 +29,21 @@ use liquid_core::{
     AgentAction, AgentActionKind, AgentActionStatus, AgentConversation, AgentEventRecord,
     AgentEventType, AgentMessage, AgentMessageRole, AgentResourceKind, AgentTurn, AgentTurnStatus,
     ApproveSqlAuditRequest, AuditSummary, AuthResponse, CreateAgentActionRequest,
-    CreateAgentConversationRequest, CreateAgentTurnRequest, CreateDatapanelCardRequest,
-    CreateManagedDatabaseRequest, DatabaseBackupFormat, DatabaseBackupListFilters,
-    DatabaseBackupListPage, DatabaseBackupMetadataStore, DatabaseBackupMetadataStoreError,
-    DatabaseBackupRecord, DatabaseBackupStatus, DatabaseBackupTrigger, DatabaseRestoreRecord,
-    Datapanel, DatapanelCard, DatapanelCardLayoutUpdate, DatapanelExport, DatapanelPreview,
-    DatapanelPreviewLink, DatapanelQueryResult, LlmProviderSettings, LoginRequest, ManagedDatabase,
+    CreateAgentConversationRequest, CreateAgentTurnRequest, CreateDatabaseDiagramRequest,
+    CreateDatapanelCardRequest, CreateManagedDatabaseRequest, DatabaseBackupFormat,
+    DatabaseBackupListFilters, DatabaseBackupListPage, DatabaseBackupMetadataStore,
+    DatabaseBackupMetadataStoreError, DatabaseBackupRecord, DatabaseBackupStatus,
+    DatabaseBackupTrigger, DatabaseDiagram, DatabaseRestoreRecord, Datapanel, DatapanelCard,
+    DatapanelCardLayoutUpdate, DatapanelExport, DatapanelPreview, DatapanelPreviewLink,
+    DatapanelQueryResult, LlmProviderSettings, LoginRequest, ManagedDatabase,
     ManagedDatabaseConnectionLoader, ManagedDatabaseConnectionLoaderError,
     ManagedDatabaseConnectionSpec, ManagedDatabaseEngine, ManagedDatabasePoolKey,
     ManagedDatabasePoolPolicy, ManagedDatabaseSslMode, PublicUser, RegisterRequest,
     RejectSqlAuditRequest, ResolvedLlmProviderSettings, SqlAuditExecutionResult, SqlAuditRecord,
     SqlAuditReport, SqlAuditRequest, SqlAuditStatus, SqlRollbackPlan, SqlRollbackStatus,
     SqlStatementKind, UpdateAgentConversationRequest, UpdateCurrentUserRequest,
-    UpdateDatapanelCardRequest, UpdateDatapanelRequest, UpdateLlmProviderSettingsRequest,
-    UpdateManagedDatabaseRequest, UpdatePasswordRequest,
+    UpdateDatabaseDiagramRequest, UpdateDatapanelCardRequest, UpdateDatapanelRequest,
+    UpdateLlmProviderSettingsRequest, UpdateManagedDatabaseRequest, UpdatePasswordRequest,
 };
 use liquid_sql::{PgSqlAnalysisRequest, PgSqlStatementKind, analyze_postgres_sql};
 use liquid_storage::{
@@ -72,6 +73,7 @@ struct TestStore {
     turns: Mutex<Vec<AgentTurn>>,
     events: Mutex<Vec<AgentEventRecord>>,
     actions: Mutex<Vec<AgentAction>>,
+    database_diagrams: Mutex<Vec<DatabaseDiagram>>,
     panels: Mutex<Vec<Datapanel>>,
     panel_cards: Mutex<Vec<DatapanelCard>>,
     panel_previews: Mutex<Vec<TestDatapanelPreview>>,
@@ -98,6 +100,7 @@ impl Default for TestStore {
             turns: Mutex::new(Vec::new()),
             events: Mutex::new(Vec::new()),
             actions: Mutex::new(Vec::new()),
+            database_diagrams: Mutex::new(Vec::new()),
             panels: Mutex::new(Vec::new()),
             panel_cards: Mutex::new(Vec::new()),
             panel_previews: Mutex::new(Vec::new()),
@@ -352,6 +355,92 @@ impl LiquidStore for TestStore {
             *self.current_database_id.lock().unwrap() = None;
         }
 
+        Ok(())
+    }
+
+    async fn list_database_diagrams(
+        &self,
+        _owner_user_id: &str,
+    ) -> Result<Vec<DatabaseDiagram>, StorageError> {
+        Ok(self
+            .database_diagrams
+            .lock()
+            .unwrap()
+            .iter()
+            .cloned()
+            .collect())
+    }
+
+    async fn create_database_diagram(
+        &self,
+        _owner_user_id: &str,
+        request: CreateDatabaseDiagramRequest,
+    ) -> Result<DatabaseDiagram, StorageError> {
+        let mut diagrams = self.database_diagrams.lock().unwrap();
+        let diagram = DatabaseDiagram {
+            id: format!("diagram-{}", diagrams.len() + 1),
+            title: request.title,
+            description: request.description,
+            document: request.document.unwrap_or_default(),
+            created_at: time::OffsetDateTime::UNIX_EPOCH,
+            updated_at: time::OffsetDateTime::UNIX_EPOCH,
+        };
+        diagrams.push(diagram.clone());
+        Ok(diagram)
+    }
+
+    async fn get_database_diagram(
+        &self,
+        _owner_user_id: &str,
+        id: &str,
+    ) -> Result<DatabaseDiagram, StorageError> {
+        self.database_diagrams
+            .lock()
+            .unwrap()
+            .iter()
+            .find(|diagram| diagram.id == id)
+            .cloned()
+            .ok_or(StorageError::NotFound)
+    }
+
+    async fn update_database_diagram(
+        &self,
+        _owner_user_id: &str,
+        id: &str,
+        request: UpdateDatabaseDiagramRequest,
+    ) -> Result<DatabaseDiagram, StorageError> {
+        let mut diagrams = self.database_diagrams.lock().unwrap();
+        let Some(diagram) = diagrams.iter_mut().find(|diagram| diagram.id == id) else {
+            return Err(StorageError::NotFound);
+        };
+
+        if let Some(title) = request.title {
+            diagram.title = title;
+        }
+
+        if request.description.is_some() {
+            diagram.description = request
+                .description
+                .map(|value| value.trim().to_owned())
+                .filter(|value| !value.is_empty());
+        }
+
+        if let Some(document) = request.document {
+            diagram.document = document;
+        }
+
+        diagram.updated_at = time::OffsetDateTime::UNIX_EPOCH;
+        Ok(diagram.clone())
+    }
+
+    async fn delete_database_diagram(
+        &self,
+        owner_user_id: &str,
+        id: &str,
+    ) -> Result<(), StorageError> {
+        let diagram = self.get_database_diagram(owner_user_id, id).await?;
+        let mut diagrams = self.database_diagrams.lock().unwrap();
+        diagrams.retain(|item| item.id != diagram.id);
         Ok(())
     }
 
@@ -2361,6 +2450,129 @@ async fn create_test_database(app: &Router) {
         .unwrap();
 
     assert_eq!(response.status(), StatusCode::CREATED);
+}
+
+#[tokio::test]
+async fn database_diagram_routes_round_trip_document() {
+    let app = test_app();
+
+    let create_response = app
+        .clone()
+        .oneshot(auth_json_request(
+            "POST",
+            "/api/v1/database-diagrams",
+            json!({
+                "title": "Warehouse ERD",
+                "description": "Core warehouse model",
+                "document": test_diagram_document_json()
+            }),
+        ))
+        .await
+        .unwrap();
+    assert_eq!(create_response.status(), StatusCode::CREATED);
+    let created = response_json(create_response).await;
+    assert_eq!(created["id"], "diagram-1");
+    assert_eq!(created["document"]["tables"][0]["name"], "customers");
+
+    let update_response = app
+        .clone()
+        .oneshot(auth_json_request(
+            "PATCH",
+            "/api/v1/database-diagrams/diagram-1",
+            json!({
+                "title": "Warehouse logical model",
+                "document": {
+                    "version": 1,
+                    "database_engine": "postgres",
+                    "tables": [],
+                    "relationships": [],
+                    "notes": [],
+                    "areas": [],
+                    "enums": []
+                }
+            }),
+        ))
+        .await
+        .unwrap();
+    assert_eq!(update_response.status(), StatusCode::OK);
+    let updated = response_json(update_response).await;
+    assert_eq!(updated["title"], "Warehouse logical model");
+    assert_eq!(updated["document"]["tables"].as_array().unwrap().len(), 0);
+
+    let list_response = app
+        .clone()
+        .oneshot(auth_request("/api/v1/database-diagrams"))
+        .await
+        .unwrap();
+    assert_eq!(list_response.status(), StatusCode::OK);
+    let list = response_json(list_response).await;
+    assert_eq!(list.as_array().unwrap().len(), 1);
+    assert_eq!(list[0]["id"], "diagram-1");
+
+    let delete_response = app
+        .clone()
+        .oneshot(
+            Request::builder()
+                .method("DELETE")
+                .uri("/api/v1/database-diagrams/diagram-1")
+                .header(AUTHORIZATION, format!("Bearer {VALID_TOKEN}"))
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(delete_response.status(), StatusCode::NO_CONTENT);
+
+    let get_response = app
+        .oneshot(auth_request("/api/v1/database-diagrams/diagram-1"))
+        .await
+        .unwrap();
+    assert_eq!(get_response.status(), StatusCode::NOT_FOUND);
+}
+
+fn test_diagram_document_json() -> Value {
+    json!({
+        "version": 1,
+        "database_engine": "postgres",
+        "tables": [{
+            "id": "table_customers",
+            "name": "customers",
+            "schema": "public",
+            "position": { "x": 100, "y": 100 },
+            "color": "#2563eb",
+            "columns": [{
+                "id": "column_customers_id",
+                "name": "id",
+                "data_type": "uuid",
+                "nullable": false,
+                "primary_key": true,
+                "unique": true
+            }],
+            "indexes": []
+        }],
+        "relationships": [],
+        "notes": [{
+            "id": "note_1",
+            "title": "Scope",
+            "body": "Logical model",
+            "position": { "x": 420, "y": 100 }
+        }],
+        "areas": [{
+            "id": "area_1",
+            "title": "Core",
+            "position": { "x": 80, "y": 80 },
+            "size": { "width": 420, "height": 260 },
+            "color": "#e0f2fe"
+        }],
+        "enums": [{
+            "id": "enum_status",
+            "name": "order_status",
+            "values": [{
+                "id": "enum_value_pending",
+                "name": "pending"
+            }]
+        }]
+    })
 }
 
 #[tokio::test]

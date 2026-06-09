@@ -4,20 +4,20 @@ use liquid_core::{
     AgentMessage, AgentMessageRole, AgentResourceKind, AgentTurn, AgentTurnStatus,
     ApproveSqlAuditRequest, AuthResponse, CompleteDatabaseBackup, CreateAgentActionRequest,
     CreateAgentConversationRequest, CreateAgentTurnRequest, CreateDatabaseBackupScheduleRequest,
-    CreateDatapanelCardRequest, CreateManagedDatabaseRequest, DatabaseBackupListFilters,
-    DatabaseBackupListPage, DatabaseBackupMetadataStore, DatabaseBackupMetadataStoreError,
-    DatabaseBackupRecord, DatabaseBackupScheduleRecord, DatabaseBackupScheduleStatus,
-    DatabaseBackupStatus, DatabaseOperationEventRecord, DatabaseOperationEventType,
-    DatabaseOperationKind, DatabaseRestoreRecord, Datapanel, DatapanelCard,
-    DatapanelCardLayoutUpdate, DatapanelExport, DatapanelPreview, DatapanelPreviewLink,
-    DatapanelQueryResult, EnqueueDatabaseBackup, EnqueueDatabaseRestore, LlmProviderSettings,
-    LoginRequest, ManagedDatabase, ManagedDatabaseConnectionLoader,
-    ManagedDatabaseConnectionLoaderError, ManagedDatabaseConnectionSpec, ManagedDatabasePoolKey,
-    PublicUser, RegisterRequest, RejectSqlAuditRequest, ResolvedLlmProviderSettings,
-    SqlAuditExecutionResult, SqlAuditRecord, UpdateAgentConversationRequest,
-    UpdateCurrentUserRequest, UpdateDatabaseBackupScheduleRequest, UpdateDatapanelCardRequest,
-    UpdateDatapanelRequest, UpdateLlmProviderSettingsRequest, UpdateManagedDatabaseRequest,
-    UpdatePasswordRequest,
+    CreateDatabaseDiagramRequest, CreateDatapanelCardRequest, CreateManagedDatabaseRequest,
+    DatabaseBackupListFilters, DatabaseBackupListPage, DatabaseBackupMetadataStore,
+    DatabaseBackupMetadataStoreError, DatabaseBackupRecord, DatabaseBackupScheduleRecord,
+    DatabaseBackupScheduleStatus, DatabaseBackupStatus, DatabaseDiagram,
+    DatabaseOperationEventRecord, DatabaseOperationEventType, DatabaseOperationKind,
+    DatabaseRestoreRecord, Datapanel, DatapanelCard, DatapanelCardLayoutUpdate, DatapanelExport,
+    DatapanelPreview, DatapanelPreviewLink, DatapanelQueryResult, EnqueueDatabaseBackup,
+    EnqueueDatabaseRestore, LlmProviderSettings, LoginRequest, ManagedDatabase,
+    ManagedDatabaseConnectionLoader, ManagedDatabaseConnectionLoaderError,
+    ManagedDatabaseConnectionSpec, ManagedDatabasePoolKey, PublicUser, RegisterRequest,
+    RejectSqlAuditRequest, ResolvedLlmProviderSettings, SqlAuditExecutionResult, SqlAuditRecord,
+    UpdateAgentConversationRequest, UpdateCurrentUserRequest, UpdateDatabaseBackupScheduleRequest,
+    UpdateDatabaseDiagramRequest, UpdateDatapanelCardRequest, UpdateDatapanelRequest,
+    UpdateLlmProviderSettingsRequest, UpdateManagedDatabaseRequest, UpdatePasswordRequest,
 };
 use serde_json::Value;
 use sqlx::{
@@ -29,7 +29,7 @@ use std::str::FromStr;
 use crate::{
     agent_workbench, auth,
     crypto::PasswordCipher,
-    database_backups, datapanels,
+    database_backups, database_diagrams, datapanels,
     error::StorageError,
     managed_databases,
     options::StorageOptions,
@@ -570,6 +570,46 @@ impl LiquidStore for Storage {
         id: &str,
     ) -> Result<(), StorageError> {
         managed_databases::delete_managed_database(self, owner_user_id, id).await
+    }
+
+    async fn list_database_diagrams(
+        &self,
+        owner_user_id: &str,
+    ) -> Result<Vec<DatabaseDiagram>, StorageError> {
+        database_diagrams::list_database_diagrams(self, owner_user_id).await
+    }
+
+    async fn create_database_diagram(
+        &self,
+        owner_user_id: &str,
+        request: CreateDatabaseDiagramRequest,
+    ) -> Result<DatabaseDiagram, StorageError> {
+        database_diagrams::create_database_diagram(self, owner_user_id, request).await
+    }
+
+    async fn get_database_diagram(
+        &self,
+        owner_user_id: &str,
+        id: &str,
+    ) -> Result<DatabaseDiagram, StorageError> {
+        database_diagrams::get_database_diagram(self, owner_user_id, id).await
+    }
+
+    async fn update_database_diagram(
+        &self,
+        owner_user_id: &str,
+        id: &str,
+        request: UpdateDatabaseDiagramRequest,
+    ) -> Result<DatabaseDiagram, StorageError> {
+        database_diagrams::update_database_diagram(self, owner_user_id, id, request).await
+    }
+
+    async fn delete_database_diagram(
+        &self,
+        owner_user_id: &str,
+        id: &str,
+    ) -> Result<(), StorageError> {
+        database_diagrams::delete_database_diagram(self, owner_user_id, id).await
     }
 
     async fn create_sql_audit(
