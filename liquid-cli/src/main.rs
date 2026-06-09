@@ -15,8 +15,7 @@ use liquid_agent::{
     workbench_proposal_tool_names,
 };
 use liquid_config::{
-    LiquidConfig, LlmApiMode, SqlExecutionMode, SqlMetadataMode, WorkbenchConfig,
-    default_config_toml,
+    LiquidConfig, LlmApiMode, SqlExecutionMode, SqlMetadataMode, default_config_toml,
 };
 use liquid_llm::{LlmProtocol, OpenAiCompatibleClient, OpenAiCompatibleConfig};
 use liquid_storage::{Storage, StorageOptions};
@@ -518,16 +517,17 @@ fn workbench_config_summary(config: &LiquidConfig) -> String {
 fn backup_config_summary(config: &LiquidConfig) -> String {
     let Some(bucket) = config.database_backup.s3_bucket.as_deref() else {
         return format!(
-            "disabled work_dir={} concurrency={}",
+            "local work_dir={} concurrency={}",
             config.database_backup.work_dir, config.database_backup.worker_concurrency
         );
     };
 
     format!(
-        "enabled bucket={} region={} prefix={} concurrency={}",
+        "s3 bucket={} region={} prefix={} work_dir={} concurrency={}",
         bucket,
         config.database_backup.s3_region,
         config.database_backup.s3_prefix,
+        config.database_backup.work_dir,
         config.database_backup.worker_concurrency
     )
 }
@@ -1022,7 +1022,7 @@ mod tests {
                 s3_region: "us-east-1".to_owned(),
                 s3_endpoint: None,
                 s3_path_style: false,
-                work_dir: "/tmp/liquid-backups".to_owned(),
+                work_dir: "/Users/test/.liquid/backup".to_owned(),
                 worker_concurrency: 1,
             },
             llm: LlmConfig {
@@ -1031,7 +1031,7 @@ mod tests {
                 model: Some("gpt-test".to_owned()),
                 api_mode: LlmApiMode::ChatCompletions,
             },
-            workbench: WorkbenchConfig {
+            workbench: liquid_config::WorkbenchConfig {
                 max_tool_rounds: 10,
                 max_output_tokens: None,
             },

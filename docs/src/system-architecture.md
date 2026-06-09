@@ -15,7 +15,8 @@ flowchart LR
     Agent --> SQL["liquid-sql parser and rules"]
     Agent --> LLM["OpenAI-compatible provider"]
     API --> Worker["Backup/restore worker"]
-    Worker --> S3["S3-compatible object storage"]
+    Worker --> LocalFiles["Local backup files"]
+    Worker -. optional upload .-> S3["S3-compatible object storage"]
     Worker --> Target
 ```
 
@@ -29,7 +30,7 @@ flowchart LR
 | Managed database pool manager | Creates lazy SQLx pools for user-managed target databases and reaps idle pools. |
 | SQL audit agent | Uses deterministic SQL analysis and optional LLM tool calls to produce audit reports. |
 | Workbench agent | Streams assistant text, PostgreSQL tool progress, and proposed actions for chat turns. |
-| Backup worker | Claims queued backup or restore jobs and runs `pg_dump` or `pg_restore` when S3 backup storage is configured. This is backend foundation work; backup jobs are not exposed through REST routes yet. |
+| Backup worker | Claims queued backup or restore jobs and runs `pg_dump` or `pg_restore`, storing dumps locally and optionally uploading to S3. This is backend foundation work; backup jobs are not exposed through REST routes yet. |
 | Next.js dashboard | Renders authentication, database selection, chat, SQL mode, datapanel cards, settings, and API stream events. |
 
 ## Crate Boundaries
@@ -83,7 +84,7 @@ The `liquid server` command performs this sequence:
 7. Bind the Axum listener.
 8. Build the managed database pool manager and spawn its idle reaper.
 9. Mark stale agent turns failed.
-10. Spawn the backup/restore worker when `LIQUID_BACKUP_S3_BUCKET` is set.
+10. Spawn the backup/restore worker, with optional S3 upload when `LIQUID_BACKUP_S3_BUCKET` is set.
 11. Serve the router with CORS.
 
 ## Frontend Architecture

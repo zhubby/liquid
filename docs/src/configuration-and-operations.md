@@ -67,7 +67,7 @@ managed_pool_acquire_timeout_seconds = 10
 s3_prefix = "liquid/database-backups"
 s3_region = "us-east-1"
 s3_path_style = false
-work_dir = "/tmp/liquid-backups"
+work_dir = "~/.liquid/backup"
 worker_concurrency = 1
 ```
 
@@ -99,12 +99,12 @@ database passwords and user-level LLM API keys.
 | `LIQUID_SQL_MANAGED_POOL_REAP_INTERVAL_SECONDS` | `60` | Pool reaper interval. |
 | `LIQUID_SQL_MANAGED_POOL_ACQUIRE_TIMEOUT_SECONDS` | `10` | Target pool acquire timeout. |
 | `LIQUID_SQLX_LOGS` | `false` | Enable pretty SQLx query logs when truthy. |
-| `LIQUID_BACKUP_S3_BUCKET` | unset | Enables the backup/restore worker when set. |
+| `LIQUID_BACKUP_S3_BUCKET` | unset | Optional S3 bucket for backup uploads. Unset keeps backups local. |
 | `LIQUID_BACKUP_S3_PREFIX` | `liquid/database-backups` | S3 object key prefix. |
 | `LIQUID_BACKUP_S3_REGION` | `us-east-1` | S3 signing region. |
 | `LIQUID_BACKUP_S3_ENDPOINT` | unset | Optional S3-compatible endpoint. |
 | `LIQUID_BACKUP_S3_PATH_STYLE` | `false` | Use path-style S3 URLs. |
-| `LIQUID_BACKUP_WORK_DIR` | `/tmp/liquid-backups` | Local temporary directory for dump and restore files. |
+| `LIQUID_BACKUP_WORK_DIR` | `~/.liquid/backup` | Local backup root using `{owner_user_id}/{managed_database_id}/{backup_id}.dump`. |
 | `LIQUID_BACKUP_WORKER_CONCURRENCY` | `1` | Number of database operation worker tasks. |
 
 Boolean environment variables accept `1`, `true`, `yes`, `on`, `0`, `false`,
@@ -125,8 +125,14 @@ the user configures a provider.
 
 ## Backup Worker Configuration
 
-The backup/restore worker starts only when `LIQUID_BACKUP_S3_BUCKET` is set.
-It also requires AWS-compatible credentials in the process environment:
+The backup/restore worker starts with local storage by default. It stores backup
+files under `LIQUID_BACKUP_WORK_DIR` using
+`{owner_user_id}/{managed_database_id}/{backup_id}.dump`.
+
+When `LIQUID_BACKUP_S3_BUCKET` is set, the worker also uploads completed dumps
+to S3-compatible storage, records the S3 bucket/key/version metadata, and keeps
+the local file as a copy. S3 mode requires AWS-compatible credentials in the
+process environment:
 
 ```bash
 export AWS_ACCESS_KEY_ID=...
@@ -139,7 +145,8 @@ Runtime requirements:
 - `pg_dump` for backups,
 - `pg_restore` for restores,
 - writable `LIQUID_BACKUP_WORK_DIR`,
-- network access to the managed database and S3-compatible endpoint.
+- network access to the managed database,
+- network access to the S3-compatible endpoint when S3 upload is configured.
 
 The current Docker runtime image installs only `ca-certificates`; add PostgreSQL
 client tools to the runtime image before relying on backup/restore inside that

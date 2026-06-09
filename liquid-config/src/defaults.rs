@@ -14,7 +14,7 @@ pub(crate) const DEFAULT_SQL_MANAGED_POOL_ACQUIRE_TIMEOUT_SECONDS: u64 = 10;
 pub(crate) const DEFAULT_BACKUP_S3_PREFIX: &str = "liquid/database-backups";
 pub(crate) const DEFAULT_BACKUP_S3_REGION: &str = "us-east-1";
 pub(crate) const DEFAULT_BACKUP_S3_PATH_STYLE: bool = false;
-pub(crate) const DEFAULT_BACKUP_WORK_DIR: &str = "/tmp/liquid-backups";
+pub(crate) const DEFAULT_BACKUP_WORK_DIR: &str = "~/.liquid/backup";
 pub(crate) const DEFAULT_BACKUP_WORKER_CONCURRENCY: usize = 1;
 
 pub fn default_config_toml() -> String {

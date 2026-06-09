@@ -194,18 +194,22 @@ The implemented backend foundation works as follows:
 
 1. Database operation tool implementations can create queued `database_backups`
    or `database_restore_jobs` rows through `DatabaseBackupMetadataStore`.
-2. When `LIQUID_BACKUP_S3_BUCKET` is set, API startup creates an
-   `S3BackupObjectStore` and spawns `DatabaseOperationWorker` tasks.
+2. API startup spawns `DatabaseOperationWorker` tasks. When
+   `LIQUID_BACKUP_S3_BUCKET` is set, the worker also receives an
+   `S3BackupObjectStore`.
 3. The worker marks stale jobs failed, then repeatedly claims the next queued
    backup or restore.
 4. A backup job:
    - loads the managed database connection,
    - runs `pg_dump --format=custom --no-owner --no-acl`,
    - computes SHA-256,
-   - uploads to S3-compatible storage,
-   - records bucket, key, size, checksum, and tool version metadata.
+   - stores the dump under
+     `{LIQUID_BACKUP_WORK_DIR}/{owner_user_id}/{managed_database_id}/{backup_id}.dump`,
+   - uploads to S3-compatible storage when configured,
+   - records either local path metadata or S3 bucket/key metadata plus size,
+     checksum, and tool versions.
 5. A restore job:
-   - downloads the backup object,
+   - copies the local backup file or downloads the S3 backup object,
    - loads the target managed database connection,
    - runs `pg_restore --clean --if-exists --single-transaction --no-owner
      --no-acl --exit-on-error`,

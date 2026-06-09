@@ -1,4 +1,7 @@
-use std::{env, path::Path};
+use std::{
+    env,
+    path::{Path, PathBuf},
+};
 
 use anyhow::{Context, Result};
 
@@ -162,6 +165,7 @@ impl LiquidConfig {
             file_backup.work_dir,
             DEFAULT_BACKUP_WORK_DIR.to_owned(),
         );
+        let backup_work_dir = expand_backup_work_dir(&backup_work_dir)?;
         let backup_worker_concurrency = parse_usize(
             "LIQUID_BACKUP_WORKER_CONCURRENCY",
             get("LIQUID_BACKUP_WORKER_CONCURRENCY"),
@@ -246,6 +250,20 @@ fn env_or_file(
         .or(file_value)
         .and_then(non_empty)
         .unwrap_or(default_value)
+}
+
+fn expand_backup_work_dir(value: &str) -> Result<String> {
+    let Some(rest) = value.strip_prefix("~/") else {
+        return Ok(value.to_owned());
+    };
+
+    let home = env::var_os("HOME")
+        .or_else(|| env::var_os("USERPROFILE"))
+        .map(PathBuf::from)
+        .filter(|path| !path.as_os_str().is_empty())
+        .context("could not determine user home directory for LIQUID_BACKUP_WORK_DIR")?;
+
+    Ok(home.join(rest).display().to_string())
 }
 
 fn parse_u32(

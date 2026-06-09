@@ -149,12 +149,13 @@ The frontend renders layout using a 12-column grid. Card layout is stored as
 
 | Table | Purpose |
 | --- | --- |
-| `database_backups` | Queued/running/succeeded/failed/deleted PostgreSQL dump jobs and S3 object metadata. |
+| `database_backups` | Queued/running/succeeded/failed/deleted PostgreSQL dump jobs and local or S3 storage metadata. |
 | `database_restore_jobs` | Queued/running/succeeded/failed/deleted restore jobs tied to a backup and target database snapshot. |
 
 Backup format is currently only `postgres_custom`, created by `pg_dump
---format=custom`. Backup object metadata includes bucket, key, optional version
-id, optional ETag, size, and SHA-256 checksum.
+--format=custom`. Backup storage metadata records `storage_kind` as `local` or
+`s3`. Local backups store `local_path`; S3 backups store bucket, key, optional
+version id, optional ETag, size, and SHA-256 checksum.
 
 Both backup and restore records keep source or target managed database snapshots
 so job history remains meaningful even if the managed database record later

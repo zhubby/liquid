@@ -1,7 +1,7 @@
 use liquid_core::{
     CompleteDatabaseBackup, DatabaseBackupFormat, DatabaseBackupMetadataStoreError,
-    DatabaseBackupObjectMetadata, DatabaseBackupRecord, DatabaseBackupStatus,
-    DatabaseRestoreRecord, ManagedDatabaseSnapshot,
+    DatabaseBackupRecord, DatabaseBackupStatus, DatabaseBackupStorageKind,
+    DatabaseBackupStorageMetadata, DatabaseRestoreRecord, ManagedDatabaseSnapshot,
 };
 use serde_json::Value;
 use sqlx::Row;
@@ -58,6 +58,8 @@ pub(crate) async fn create_database_backup(
             source_managed_database_username,
             source_managed_database_ssl_mode,
             format,
+            storage_kind,
+            local_path,
             s3_bucket,
             s3_key,
             s3_version_id,
@@ -126,6 +128,8 @@ pub(crate) async fn list_database_backups(
             source_managed_database_username,
             source_managed_database_ssl_mode,
             format,
+            storage_kind,
+            local_path,
             s3_bucket,
             s3_key,
             s3_version_id,
@@ -194,6 +198,8 @@ pub(crate) async fn delete_database_backup(
             source_managed_database_username,
             source_managed_database_ssl_mode,
             format,
+            storage_kind,
+            local_path,
             s3_bucket,
             s3_key,
             s3_version_id,
@@ -423,6 +429,8 @@ pub(crate) async fn claim_next_database_backup(
             source_managed_database_username,
             source_managed_database_ssl_mode,
             format,
+            storage_kind,
+            local_path,
             s3_bucket,
             s3_key,
             s3_version_id,
@@ -476,14 +484,16 @@ pub(crate) async fn complete_database_backup(
         set status = 'succeeded',
             phase = 'succeeded',
             progress_percent = 100,
-            s3_bucket = $2,
-            s3_key = $3,
-            s3_version_id = $4,
-            s3_etag = $5,
-            size_bytes = $6,
-            checksum_sha256 = $7,
-            postgres_server_version = $8,
-            pg_dump_version = $9,
+            storage_kind = $2,
+            local_path = $3,
+            s3_bucket = $4,
+            s3_key = $5,
+            s3_version_id = $6,
+            s3_etag = $7,
+            size_bytes = $8,
+            checksum_sha256 = $9,
+            postgres_server_version = $10,
+            pg_dump_version = $11,
             heartbeat_at = now(),
             completed_at = now(),
             error = null,
@@ -502,6 +512,8 @@ pub(crate) async fn complete_database_backup(
             source_managed_database_username,
             source_managed_database_ssl_mode,
             format,
+            storage_kind,
+            local_path,
             s3_bucket,
             s3_key,
             s3_version_id,
@@ -524,6 +536,8 @@ pub(crate) async fn complete_database_backup(
         "#,
     )
     .bind(id)
+    .bind(result.storage_kind.as_str())
+    .bind(result.local_path)
     .bind(result.bucket)
     .bind(result.key)
     .bind(result.version_id)
@@ -571,6 +585,8 @@ pub(crate) async fn fail_database_backup(
             source_managed_database_username,
             source_managed_database_ssl_mode,
             format,
+            storage_kind,
+            local_path,
             s3_bucket,
             s3_key,
             s3_version_id,
@@ -898,6 +914,8 @@ async fn update_backup_progress_row(
             source_managed_database_username,
             source_managed_database_ssl_mode,
             format,
+            storage_kind,
+            local_path,
             s3_bucket,
             s3_key,
             s3_version_id,
@@ -950,6 +968,8 @@ async fn fetch_database_backup(
             source_managed_database_username,
             source_managed_database_ssl_mode,
             format,
+            storage_kind,
+            local_path,
             s3_bucket,
             s3_key,
             s3_version_id,
@@ -1042,6 +1062,8 @@ struct DatabaseBackupRow {
     source_managed_database_username: String,
     source_managed_database_ssl_mode: String,
     format: String,
+    storage_kind: Option<String>,
+    local_path: Option<String>,
     s3_bucket: Option<String>,
     s3_key: Option<String>,
     s3_version_id: Option<String>,
@@ -1077,6 +1099,8 @@ impl<'r> sqlx::FromRow<'r, sqlx::postgres::PgRow> for DatabaseBackupRow {
             source_managed_database_username: row.try_get("source_managed_database_username")?,
             source_managed_database_ssl_mode: row.try_get("source_managed_database_ssl_mode")?,
             format: row.try_get("format")?,
+            storage_kind: row.try_get("storage_kind")?,
+            local_path: row.try_get("local_path")?,
             s3_bucket: row.try_get("s3_bucket")?,
             s3_key: row.try_get("s3_key")?,
             s3_version_id: row.try_get("s3_version_id")?,
@@ -1104,17 +1128,16 @@ impl TryFrom<DatabaseBackupRow> for DatabaseBackupRecord {
     type Error = StorageError;
 
     fn try_from(row: DatabaseBackupRow) -> Result<Self, Self::Error> {
-        let object = match (row.s3_bucket, row.s3_key) {
-            (Some(bucket), Some(key)) => Some(DatabaseBackupObjectMetadata {
-                bucket,
-                key,
-                version_id: row.s3_version_id,
-                etag: row.s3_etag,
-                size_bytes: row.size_bytes,
-                checksum_sha256: row.checksum_sha256,
-            }),
-            _ => None,
-        };
+        let storage = database_backup_storage_metadata(
+            row.storage_kind,
+            row.local_path,
+            row.s3_bucket,
+            row.s3_key,
+            row.s3_version_id,
+            row.s3_etag,
+            row.size_bytes,
+            row.checksum_sha256,
+        )?;
 
         Ok(Self {
             id: row.id,
@@ -1133,7 +1156,7 @@ impl TryFrom<DatabaseBackupRow> for DatabaseBackupRecord {
             status: parse_backup_status(&row.status)?,
             phase: row.phase,
             progress_percent: row.progress_percent,
-            object,
+            storage,
             postgres_server_version: row.postgres_server_version,
             pg_dump_version: row.pg_dump_version,
             error: row.error,
@@ -1264,6 +1287,65 @@ fn parse_backup_status(value: &str) -> Result<DatabaseBackupStatus, StorageError
     }
 }
 
+fn parse_backup_storage_kind(value: &str) -> Result<DatabaseBackupStorageKind, StorageError> {
+    match value {
+        "local" => Ok(DatabaseBackupStorageKind::Local),
+        "s3" => Ok(DatabaseBackupStorageKind::S3),
+        other => Err(StorageError::Validation(format!(
+            "unsupported database backup storage kind: {other}"
+        ))),
+    }
+}
+
+fn database_backup_storage_metadata(
+    storage_kind: Option<String>,
+    local_path: Option<String>,
+    bucket: Option<String>,
+    key: Option<String>,
+    version_id: Option<String>,
+    etag: Option<String>,
+    size_bytes: Option<i64>,
+    checksum_sha256: Option<String>,
+) -> Result<Option<DatabaseBackupStorageMetadata>, StorageError> {
+    let Some(kind) = storage_kind else {
+        return Ok(None);
+    };
+    let kind = parse_backup_storage_kind(&kind)?;
+
+    match kind {
+        DatabaseBackupStorageKind::Local => {
+            let Some(local_path) = local_path else {
+                return Ok(None);
+            };
+            Ok(Some(DatabaseBackupStorageMetadata {
+                kind,
+                local_path: Some(local_path),
+                bucket: None,
+                key: None,
+                version_id: None,
+                etag: None,
+                size_bytes,
+                checksum_sha256,
+            }))
+        }
+        DatabaseBackupStorageKind::S3 => {
+            let (Some(bucket), Some(key)) = (bucket, key) else {
+                return Ok(None);
+            };
+            Ok(Some(DatabaseBackupStorageMetadata {
+                kind,
+                local_path,
+                bucket: Some(bucket),
+                key: Some(key),
+                version_id,
+                etag,
+                size_bytes,
+                checksum_sha256,
+            }))
+        }
+    }
+}
+
 pub(crate) fn metadata_store_error(error: StorageError) -> DatabaseBackupMetadataStoreError {
     match error {
         StorageError::NotFound => DatabaseBackupMetadataStoreError::NotFound,
@@ -1291,7 +1373,7 @@ mod tests {
     }
 
     #[test]
-    fn backup_record_omits_incomplete_object_metadata() {
+    fn backup_record_omits_incomplete_storage_metadata() {
         let now = OffsetDateTime::UNIX_EPOCH;
         let record = DatabaseBackupRecord::try_from(DatabaseBackupRow {
             id: "backup-1".to_owned(),
@@ -1305,6 +1387,8 @@ mod tests {
             source_managed_database_username: "postgres".to_owned(),
             source_managed_database_ssl_mode: "prefer".to_owned(),
             format: "postgres_custom".to_owned(),
+            storage_kind: Some("s3".to_owned()),
+            local_path: None,
             s3_bucket: Some("bucket".to_owned()),
             s3_key: None,
             s3_version_id: None,
@@ -1327,6 +1411,6 @@ mod tests {
         })
         .unwrap();
 
-        assert!(record.object.is_none());
+        assert!(record.storage.is_none());
     }
 }

@@ -58,9 +58,17 @@ pub struct ManagedDatabaseSnapshot {
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, TS)]
 #[ts(export)]
-pub struct DatabaseBackupObjectMetadata {
-    pub bucket: String,
-    pub key: String,
+pub struct DatabaseBackupStorageMetadata {
+    pub kind: DatabaseBackupStorageKind,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[ts(optional)]
+    pub local_path: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[ts(optional)]
+    pub bucket: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[ts(optional)]
+    pub key: Option<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     #[ts(optional)]
     pub version_id: Option<String>,
@@ -75,6 +83,23 @@ pub struct DatabaseBackupObjectMetadata {
     pub checksum_sha256: Option<String>,
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, TS)]
+#[serde(rename_all = "snake_case")]
+#[ts(export)]
+pub enum DatabaseBackupStorageKind {
+    Local,
+    S3,
+}
+
+impl DatabaseBackupStorageKind {
+    pub fn as_str(self) -> &'static str {
+        match self {
+            Self::Local => "local",
+            Self::S3 => "s3",
+        }
+    }
+}
+
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, TS)]
 #[ts(export)]
 pub struct DatabaseBackupRecord {
@@ -87,7 +112,7 @@ pub struct DatabaseBackupRecord {
     pub progress_percent: i32,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     #[ts(optional)]
-    pub object: Option<DatabaseBackupObjectMetadata>,
+    pub storage: Option<DatabaseBackupStorageMetadata>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     #[ts(optional)]
     pub postgres_server_version: Option<String>,
@@ -185,8 +210,10 @@ pub struct DatabaseRestoreRecord {
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct CompleteDatabaseBackup {
-    pub bucket: String,
-    pub key: String,
+    pub storage_kind: DatabaseBackupStorageKind,
+    pub local_path: Option<String>,
+    pub bucket: Option<String>,
+    pub key: Option<String>,
     pub version_id: Option<String>,
     pub etag: Option<String>,
     pub size_bytes: i64,

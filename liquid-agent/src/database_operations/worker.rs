@@ -9,8 +9,9 @@ use anyhow::{Context, Result, anyhow, bail};
 use async_trait::async_trait;
 use liquid_core::{
     CompleteDatabaseBackup, DatabaseBackupMetadataStore, DatabaseBackupRecord,
-    DatabaseBackupStatus, DatabaseRestoreRecord, ManagedDatabaseConnectionLoader,
-    ManagedDatabaseEngine, ManagedDatabasePoolKey,
+    DatabaseBackupStatus, DatabaseBackupStorageKind, DatabaseBackupStorageMetadata,
+    DatabaseRestoreRecord, ManagedDatabaseConnectionLoader, ManagedDatabaseEngine,
+    ManagedDatabasePoolKey,
 };
 use sha2::{Digest, Sha256};
 use tokio::{process::Command, task::JoinHandle};
@@ -132,7 +133,7 @@ impl DatabaseProcessExecutor for DefaultDatabaseProcessExecutor {
 pub struct DatabaseOperationWorker {
     metadata_store: Arc<dyn DatabaseBackupMetadataStore>,
     connection_loader: Arc<dyn ManagedDatabaseConnectionLoader>,
-    object_store: Arc<dyn BackupObjectStore>,
+    object_store: Option<Arc<dyn BackupObjectStore>>,
     process_executor: Arc<dyn DatabaseProcessExecutor>,
     config: DatabaseBackupWorkerConfig,
 }
@@ -141,7 +142,7 @@ impl DatabaseOperationWorker {
     pub fn new(
         metadata_store: Arc<dyn DatabaseBackupMetadataStore>,
         connection_loader: Arc<dyn ManagedDatabaseConnectionLoader>,
-        object_store: Arc<dyn BackupObjectStore>,
+        object_store: Option<Arc<dyn BackupObjectStore>>,
         process_executor: Arc<dyn DatabaseProcessExecutor>,
         config: DatabaseBackupWorkerConfig,
     ) -> Self {
@@ -233,7 +234,15 @@ impl DatabaseOperationWorker {
                 )
             })?;
 
-        let file_path = self.temp_path("backup", &backup.id);
+        let file_path = self.local_backup_path(backup);
+        if let Some(parent) = file_path.parent() {
+            tokio::fs::create_dir_all(parent).await.with_context(|| {
+                format!(
+                    "failed to create backup file directory: {}",
+                    parent.display()
+                )
+            })?;
+        }
         self.metadata_store
             .update_database_backup_progress(&backup.id, "dumping", 10)
             .await?;
@@ -257,29 +266,40 @@ impl DatabaseOperationWorker {
         let checksum_sha256 = sha256_file(&file_path).await?;
 
         self.metadata_store
-            .update_database_backup_progress(&backup.id, "uploading", 70)
+            .update_database_backup_progress(&backup.id, "storing", 70)
             .await?;
-        let object_key = self.object_key(backup);
-        let object = self
-            .object_store
-            .put_object(&object_key, &file_path)
-            .await?;
+        let complete = if let Some(object_store) = self.object_store.as_deref() {
+            let object_key = self.object_key(backup);
+            let object = object_store.put_object(&object_key, &file_path).await?;
+            CompleteDatabaseBackup {
+                storage_kind: DatabaseBackupStorageKind::S3,
+                local_path: None,
+                bucket: Some(object.bucket),
+                key: Some(object.key),
+                version_id: object.version_id,
+                etag: object.etag,
+                size_bytes,
+                checksum_sha256,
+                postgres_server_version: dump.postgres_server_version,
+                pg_dump_version: dump.pg_dump_version,
+            }
+        } else {
+            CompleteDatabaseBackup {
+                storage_kind: DatabaseBackupStorageKind::Local,
+                local_path: Some(file_path.display().to_string()),
+                bucket: None,
+                key: None,
+                version_id: None,
+                etag: None,
+                size_bytes,
+                checksum_sha256,
+                postgres_server_version: dump.postgres_server_version,
+                pg_dump_version: dump.pg_dump_version,
+            }
+        };
         self.metadata_store
-            .complete_database_backup(
-                &backup.id,
-                CompleteDatabaseBackup {
-                    bucket: object.bucket,
-                    key: object.key,
-                    version_id: object.version_id,
-                    etag: object.etag,
-                    size_bytes,
-                    checksum_sha256,
-                    postgres_server_version: dump.postgres_server_version,
-                    pg_dump_version: dump.pg_dump_version,
-                },
-            )
+            .complete_database_backup(&backup.id, complete)
             .await?;
-        let _ = tokio::fs::remove_file(file_path).await;
 
         Ok(())
     }
@@ -312,18 +332,15 @@ impl DatabaseOperationWorker {
             .get_database_backup(&restore.owner_user_id, &restore.backup_id)
             .await?;
         ensure_status(backup.status, DatabaseBackupStatus::Succeeded, "backup")?;
-        let object = backup
-            .object
-            .ok_or_else(|| anyhow!("backup metadata does not include an S3 object"))?;
+        let storage = backup
+            .storage
+            .ok_or_else(|| anyhow!("backup metadata does not include storage metadata"))?;
 
         let file_path = self.temp_path("restore", &restore.id);
         self.metadata_store
-            .update_database_restore_progress(&restore.id, "downloading", 10)
+            .update_database_restore_progress(&restore.id, "loading", 10)
             .await?;
-        self.object_store
-            .get_object(&object.key, &file_path)
-            .await
-            .with_context(|| format!("failed to download backup object {}", object.key))?;
+        self.load_restore_file(&storage, &file_path).await?;
 
         self.metadata_store
             .update_database_restore_progress(&restore.id, "verifying", 30)
@@ -332,12 +349,12 @@ impl DatabaseOperationWorker {
             .await
             .with_context(|| format!("failed to stat restore file: {}", file_path.display()))?;
         let size_bytes = i64::try_from(file_meta.len()).unwrap_or(i64::MAX);
-        if let Some(expected_size) = object.size_bytes
+        if let Some(expected_size) = storage.size_bytes
             && size_bytes != expected_size
         {
             bail!("downloaded backup size mismatch: expected {expected_size}, got {size_bytes}");
         }
-        if let Some(expected_checksum) = object.checksum_sha256.as_deref() {
+        if let Some(expected_checksum) = storage.checksum_sha256.as_deref() {
             let actual_checksum = sha256_file(&file_path).await?;
             if actual_checksum != expected_checksum {
                 bail!(
@@ -372,16 +389,21 @@ impl DatabaseOperationWorker {
     fn object_key(&self, backup: &DatabaseBackupRecord) -> String {
         let prefix = self.config.object_key_prefix.trim_matches('/');
         if prefix.is_empty() {
-            return format!(
-                "{}/{}/{}.dump",
-                backup.owner_user_id, backup.source.id, backup.id
-            );
+            return self.relative_backup_path(backup);
         }
 
+        format!("{}/{}", prefix, self.relative_backup_path(backup))
+    }
+
+    fn relative_backup_path(&self, backup: &DatabaseBackupRecord) -> String {
         format!(
-            "{}/{}/{}/{}.dump",
-            prefix, backup.owner_user_id, backup.source.id, backup.id
+            "{}/{}/{}.dump",
+            backup.owner_user_id, backup.source.id, backup.id
         )
+    }
+
+    fn local_backup_path(&self, backup: &DatabaseBackupRecord) -> PathBuf {
+        self.config.work_dir.join(self.relative_backup_path(backup))
     }
 
     fn temp_path(&self, kind: &str, id: &str) -> PathBuf {
@@ -389,6 +411,40 @@ impl DatabaseOperationWorker {
         self.config
             .work_dir
             .join(format!("{kind}-{id}-{timestamp}.dump"))
+    }
+
+    async fn load_restore_file(
+        &self,
+        storage: &DatabaseBackupStorageMetadata,
+        file_path: &Path,
+    ) -> Result<()> {
+        match storage.kind {
+            DatabaseBackupStorageKind::Local => {
+                let local_path = storage
+                    .local_path
+                    .as_deref()
+                    .ok_or_else(|| anyhow!("local backup metadata does not include a path"))?;
+                tokio::fs::copy(local_path, file_path)
+                    .await
+                    .with_context(|| format!("failed to copy local backup file {local_path}"))?;
+                Ok(())
+            }
+            DatabaseBackupStorageKind::S3 => {
+                let object_store = self
+                    .object_store
+                    .as_deref()
+                    .ok_or_else(|| anyhow!("S3 backup storage is not configured"))?;
+                let key = storage
+                    .key
+                    .as_deref()
+                    .ok_or_else(|| anyhow!("S3 backup metadata does not include an object key"))?;
+                object_store
+                    .get_object(key, file_path)
+                    .await
+                    .with_context(|| format!("failed to download backup object {key}"))?;
+                Ok(())
+            }
+        }
     }
 }
 
@@ -487,12 +543,77 @@ mod tests {
         let worker = DatabaseOperationWorker::new(
             Arc::new(NullMetadataStore),
             Arc::new(NullConnectionLoader),
-            Arc::new(NullObjectStore),
+            None,
             Arc::new(NullExecutor),
             DatabaseBackupWorkerConfig::new("worker", "/tmp")
                 .with_object_key_prefix("liquid/backups/"),
         );
-        let backup = DatabaseBackupRecord {
+        let backup = test_backup();
+
+        assert_eq!(
+            worker.object_key(&backup),
+            "liquid/backups/user-1/db-1/backup-1.dump"
+        );
+    }
+
+    #[test]
+    fn local_backup_path_uses_work_dir_owner_database_and_backup() {
+        let worker = DatabaseOperationWorker::new(
+            Arc::new(NullMetadataStore),
+            Arc::new(NullConnectionLoader),
+            None,
+            Arc::new(NullExecutor),
+            DatabaseBackupWorkerConfig::new("worker", "/tmp/liquid-backups"),
+        );
+        let backup = test_backup();
+
+        assert_eq!(
+            worker.local_backup_path(&backup),
+            PathBuf::from("/tmp/liquid-backups/user-1/db-1/backup-1.dump")
+        );
+    }
+
+    #[tokio::test]
+    async fn load_restore_file_copies_local_backup_to_temp_path() {
+        let root = std::env::temp_dir().join(format!(
+            "liquid-local-restore-{}",
+            time::OffsetDateTime::now_utc().unix_timestamp_nanos()
+        ));
+        tokio::fs::create_dir_all(&root).await.unwrap();
+        let source = root.join("source.dump");
+        let target = root.join("restore.dump");
+        tokio::fs::write(&source, b"dump").await.unwrap();
+        let worker = DatabaseOperationWorker::new(
+            Arc::new(NullMetadataStore),
+            Arc::new(NullConnectionLoader),
+            None,
+            Arc::new(NullExecutor),
+            DatabaseBackupWorkerConfig::new("worker", &root),
+        );
+
+        worker
+            .load_restore_file(
+                &DatabaseBackupStorageMetadata {
+                    kind: DatabaseBackupStorageKind::Local,
+                    local_path: Some(source.display().to_string()),
+                    bucket: None,
+                    key: None,
+                    version_id: None,
+                    etag: None,
+                    size_bytes: Some(4),
+                    checksum_sha256: None,
+                },
+                &target,
+            )
+            .await
+            .unwrap();
+
+        assert_eq!(tokio::fs::read(&target).await.unwrap(), b"dump");
+        let _ = tokio::fs::remove_dir_all(root).await;
+    }
+
+    fn test_backup() -> DatabaseBackupRecord {
+        DatabaseBackupRecord {
             id: "backup-1".to_owned(),
             owner_user_id: "user-1".to_owned(),
             source: liquid_core::ManagedDatabaseSnapshot {
@@ -509,7 +630,7 @@ mod tests {
             status: DatabaseBackupStatus::Running,
             phase: "running".to_owned(),
             progress_percent: 1,
-            object: None,
+            storage: None,
             postgres_server_version: None,
             pg_dump_version: None,
             error: None,
@@ -520,12 +641,7 @@ mod tests {
             completed_at: None,
             created_at: time::OffsetDateTime::UNIX_EPOCH,
             updated_at: time::OffsetDateTime::UNIX_EPOCH,
-        };
-
-        assert_eq!(
-            worker.object_key(&backup),
-            "liquid/backups/user-1/db-1/backup-1.dump"
-        );
+        }
     }
 
     struct NullMetadataStore;
@@ -682,35 +798,6 @@ mod tests {
             liquid_core::ManagedDatabaseConnectionSpec,
             liquid_core::ManagedDatabaseConnectionLoaderError,
         > {
-            unreachable!()
-        }
-    }
-
-    struct NullObjectStore;
-
-    #[async_trait]
-    impl BackupObjectStore for NullObjectStore {
-        fn bucket(&self) -> &str {
-            "bucket"
-        }
-
-        async fn put_object(
-            &self,
-            _key: &str,
-            _file_path: &Path,
-        ) -> Result<super::super::object_store::ObjectStoreWriteResult> {
-            unreachable!()
-        }
-
-        async fn get_object(
-            &self,
-            _key: &str,
-            _file_path: &Path,
-        ) -> Result<super::super::object_store::ObjectStoreReadResult> {
-            unreachable!()
-        }
-
-        async fn delete_object(&self, _key: &str) -> Result<()> {
             unreachable!()
         }
     }

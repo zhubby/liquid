@@ -43,7 +43,7 @@ The core product capabilities are:
 | Approval and execution | Lets SELECT audits materialize read-only results and gates write execution behind audit approval and `LIQUID_SQL_EXECUTION=write_gated`. |
 | AI workspace | Streams agent turns over SSE, records tool activity, and persists proposed actions. |
 | Datapanels | Saves table or chart cards backed by SELECT queries, refreshes results, exports panels, and exposes public preview slugs. |
-| Database operations | Provides storage, worker, and internal tool foundations for S3-backed PostgreSQL dump and restore jobs when backup storage is configured. These jobs are not exposed as first-class REST routes yet. |
+| Database operations | Provides storage, worker, and internal tool foundations for local PostgreSQL dump and restore jobs with optional S3 upload. These jobs are not exposed as first-class REST routes yet. |
 
 ## Repository Map
 

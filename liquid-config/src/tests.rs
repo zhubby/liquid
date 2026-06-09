@@ -33,6 +33,8 @@ fn llm_defaults_to_openai_compatible_chat_completions() {
     assert_eq!(config.sql_execution, SqlExecutionMode::Readonly);
     assert_eq!(config.database_backup.s3_bucket, None);
     assert_eq!(config.database_backup.s3_prefix, DEFAULT_BACKUP_S3_PREFIX);
+    assert!(PathBuf::from(&config.database_backup.work_dir).is_absolute());
+    assert!(config.database_backup.work_dir.ends_with(".liquid/backup"));
     assert_eq!(
         config.database_backup.worker_concurrency,
         DEFAULT_BACKUP_WORKER_CONCURRENCY

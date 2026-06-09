@@ -52,8 +52,9 @@ export type { CreateSqlAuditRequest } from "./generated/api-types/CreateSqlAudit
 export type { CurrentManagedDatabaseResponse } from "./generated/api-types/CurrentManagedDatabaseResponse";
 export type { CurrentUserResponse } from "./generated/api-types/CurrentUserResponse";
 export type { DatabaseBackupFormat } from "./generated/api-types/DatabaseBackupFormat";
-export type { DatabaseBackupObjectMetadata } from "./generated/api-types/DatabaseBackupObjectMetadata";
 export type { DatabaseBackupRecord } from "./generated/api-types/DatabaseBackupRecord";
+export type { DatabaseBackupStorageKind } from "./generated/api-types/DatabaseBackupStorageKind";
+export type { DatabaseBackupStorageMetadata } from "./generated/api-types/DatabaseBackupStorageMetadata";
 export type { DatabaseBackupStatus } from "./generated/api-types/DatabaseBackupStatus";
 export type { DatabaseRestoreRecord } from "./generated/api-types/DatabaseRestoreRecord";
 export type { LoginRequest } from "./generated/api-types/LoginRequest";

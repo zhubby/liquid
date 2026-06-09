@@ -52,16 +52,20 @@ fn spawn_database_operation_worker(
     config: &LiquidConfig,
     store: Arc<Storage>,
 ) -> anyhow::Result<()> {
-    let Some(bucket) = config.database_backup.s3_bucket.clone() else {
-        return Ok(());
-    };
-
-    let s3_config =
-        S3BackupObjectStoreConfig::new(bucket, config.database_backup.s3_region.clone())
-            .with_prefix(config.database_backup.s3_prefix.clone())
-            .with_endpoint(config.database_backup.s3_endpoint.clone())
-            .with_path_style(config.database_backup.s3_path_style);
-    let object_store = Arc::new(S3BackupObjectStore::from_env(s3_config)?);
+    let object_store = config
+        .database_backup
+        .s3_bucket
+        .clone()
+        .map(|bucket| {
+            let s3_config =
+                S3BackupObjectStoreConfig::new(bucket, config.database_backup.s3_region.clone())
+                    .with_prefix(config.database_backup.s3_prefix.clone())
+                    .with_endpoint(config.database_backup.s3_endpoint.clone())
+                    .with_path_style(config.database_backup.s3_path_style);
+            S3BackupObjectStore::from_env(s3_config)
+                .map(|store| Arc::new(store) as Arc<dyn liquid_agent::BackupObjectStore>)
+        })
+        .transpose()?;
     let metadata_store: Arc<dyn DatabaseBackupMetadataStore> = store.clone();
     let connection_loader: Arc<dyn ManagedDatabaseConnectionLoader> = store;
     let worker_config = DatabaseBackupWorkerConfig::new(
