@@ -19,17 +19,29 @@ use super::{
     response::WorkbenchActionSuggestion,
 };
 
+const WORKBENCH_PROPOSAL_TOOL_NAMES: &[&str] = &[
+    "propose_sql_operation",
+    "propose_datapanel_card_action",
+    "propose_sql_audit_decision",
+];
+
 pub(super) fn register_workbench_proposal_tools(tools: &mut ToolRegistry) {
     tools.register(ProposeSqlOperationTool);
     tools.register(ProposeDatapanelCardActionTool);
     tools.register(ProposeSqlAuditDecisionTool);
 }
 
+pub(super) fn workbench_proposal_tool_names() -> Vec<String> {
+    let mut names = WORKBENCH_PROPOSAL_TOOL_NAMES
+        .iter()
+        .map(|name| (*name).to_owned())
+        .collect::<Vec<_>>();
+    names.sort();
+    names
+}
+
 pub(super) fn is_workbench_proposal_tool(name: &str) -> bool {
-    matches!(
-        name,
-        "propose_sql_operation" | "propose_datapanel_card_action" | "propose_sql_audit_decision"
-    )
+    WORKBENCH_PROPOSAL_TOOL_NAMES.contains(&name)
 }
 
 pub(super) fn proposal_tool_call_to_suggestion(

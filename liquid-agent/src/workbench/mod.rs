@@ -35,6 +35,10 @@ use serde_json::json;
 
 const DEFAULT_MAX_WORKBENCH_TOOL_ROUNDS: usize = 6;
 
+pub fn workbench_proposal_tool_names() -> Vec<String> {
+    proposal_tools::workbench_proposal_tool_names()
+}
+
 #[derive(Debug, Clone)]
 pub struct WorkbenchContext {
     pub message: String,
@@ -191,6 +195,14 @@ mod tests {
     use liquid_llm::{
         LlmClient, LlmEvent, LlmRequest, LlmResponse, LlmStream, MessageRole, ToolCall,
     };
+
+    #[test]
+    fn workbench_proposal_tool_names_match_registered_tools() {
+        let mut tools = ToolRegistry::new();
+        register_workbench_proposal_tools(&mut tools);
+
+        assert_eq!(workbench_proposal_tool_names(), tools.tool_names());
+    }
 
     #[derive(Debug)]
     struct CapturingLlmClient {

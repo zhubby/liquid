@@ -25,4 +25,5 @@ pub use types::{AgentEvent, AgentStream, ToolOutput};
 pub use workbench::{
     LlmWorkbenchAgent, LlmWorkbenchContext, RuleBasedWorkbenchAgent, WorkbenchActionSuggestion,
     WorkbenchContext, WorkbenchResponse, WorkbenchToolStep, parse_llm_workbench_response,
+    workbench_proposal_tool_names,
 };

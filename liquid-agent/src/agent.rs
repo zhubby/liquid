@@ -9,7 +9,11 @@ use liquid_llm::{LlmClient, LlmMessage, LlmProtocol, LlmRequest};
 use crate::{
     llm_invocation::{LlmInvocationMode, invoke_llm},
     prompt::{audit_messages, parse_audit_report},
-    tools::{ToolRegistry, execution::execute_tool_for_model, sets::sql_risk_tools},
+    tools::{
+        ToolRegistry,
+        execution::execute_tool_for_model,
+        sets::{sql_risk_tool_names, sql_risk_tools},
+    },
     types::{AgentEvent, AgentStream},
 };
 
@@ -53,7 +57,7 @@ impl ToolCallingSqlAuditAgent {
     }
 
     pub fn default_tool_names() -> Vec<String> {
-        sql_risk_tools(None, false).tool_names()
+        sql_risk_tool_names()
     }
 
     pub fn with_tools(mut self, tools: ToolRegistry) -> Self {

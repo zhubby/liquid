@@ -9,7 +9,11 @@ use std::{
 
 use anyhow::Context;
 use clap::{Args, Parser, Subcommand};
-use liquid_agent::{MockSqlAuditAgent, SqlAuditAgent, ToolCallingSqlAuditAgent};
+use liquid_agent::{
+    MockSqlAuditAgent, PostgresToolExecutionMode, SqlAuditAgent, ToolCallingSqlAuditAgent,
+    tools::sets::{sql_audit_tool_names, workbench_readonly_postgres_tool_names},
+    workbench_proposal_tool_names,
+};
 use liquid_config::{
     LiquidConfig, LlmApiMode, SqlExecutionMode, SqlMetadataMode, default_config_toml,
 };
@@ -110,6 +114,9 @@ async fn run_server(args: ConfigArgs) -> anyhow::Result<()> {
     let started = Instant::now();
     let (agent, agent_info) = build_agent(&loaded.config).await?;
     print_startup_step("agent", agent_info.summary(), started.elapsed());
+    for detail in agent_info.tool_set_summaries() {
+        print_startup_detail(detail);
+    }
 
     let server_url = server_url(&loaded.config);
     print_startup_step("http", format!("starting at {server_url}"), Duration::ZERO);
@@ -234,6 +241,7 @@ async fn build_agent(
             AgentStartupInfo::Mock {
                 reason: "OPENAI_API_KEY unset",
                 tool_calling_tool_names: ToolCallingSqlAuditAgent::default_tool_names(),
+                request_scoped_tool_sets: request_scoped_tool_sets(config),
             },
         ));
     };
@@ -244,6 +252,7 @@ async fn build_agent(
             AgentStartupInfo::Mock {
                 reason: "OPENAI_MODEL unset",
                 tool_calling_tool_names: ToolCallingSqlAuditAgent::default_tool_names(),
+                request_scoped_tool_sets: request_scoped_tool_sets(config),
             },
         ));
     };
@@ -267,8 +276,15 @@ async fn build_agent(
             api_mode: config.llm.api_mode,
             base_url: config.llm.base_url.clone(),
             tool_names,
+            request_scoped_tool_sets: request_scoped_tool_sets(config),
         },
     ))
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+struct AgentToolSetStartupInfo {
+    label: &'static str,
+    tool_names: Vec<String>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -276,30 +292,27 @@ enum AgentStartupInfo {
     Mock {
         reason: &'static str,
         tool_calling_tool_names: Vec<String>,
+        request_scoped_tool_sets: Vec<AgentToolSetStartupInfo>,
     },
     OpenAiCompatible {
         model: String,
         api_mode: LlmApiMode,
         base_url: String,
         tool_names: Vec<String>,
+        request_scoped_tool_sets: Vec<AgentToolSetStartupInfo>,
     },
 }
 
 impl AgentStartupInfo {
     fn summary(&self) -> String {
         match self {
-            Self::Mock {
-                reason,
-                tool_calling_tool_names,
-            } => format!(
-                "mock SQL audit agent ({reason}) active_tools=[] tool_calling_tools={}",
-                registered_tools_label(tool_calling_tool_names)
-            ),
+            Self::Mock { reason, .. } => format!("mock SQL audit agent ({reason}) active_tools=[]"),
             Self::OpenAiCompatible {
                 model,
                 api_mode,
                 base_url,
                 tool_names,
+                ..
             } => format!(
                 "OpenAI-compatible model={} api_mode={} base_url={} active_tools={}",
                 model,
@@ -309,6 +322,35 @@ impl AgentStartupInfo {
             ),
         }
     }
+
+    fn tool_set_summaries(&self) -> Vec<String> {
+        let (tool_calling_tool_names, request_scoped_tool_sets) = match self {
+            Self::Mock {
+                tool_calling_tool_names,
+                request_scoped_tool_sets,
+                ..
+            } => (tool_calling_tool_names, request_scoped_tool_sets),
+            Self::OpenAiCompatible {
+                tool_names,
+                request_scoped_tool_sets,
+                ..
+            } => (tool_names, request_scoped_tool_sets),
+        };
+
+        let mut summaries = vec![format!(
+            "tool_calling_default={}",
+            registered_tools_label(tool_calling_tool_names)
+        )];
+        summaries.extend(request_scoped_tool_sets.iter().map(|tool_set| {
+            format!(
+                "{}={}",
+                tool_set.label,
+                registered_tools_label(&tool_set.tool_names)
+            )
+        }));
+
+        summaries
+    }
 }
 
 fn registered_tools_label(tool_names: &[String]) -> String {
@@ -317,6 +359,31 @@ fn registered_tools_label(tool_names: &[String]) -> String {
     }
 
     format!("[{}]", tool_names.join(", "))
+}
+
+fn request_scoped_tool_sets(config: &LiquidConfig) -> Vec<AgentToolSetStartupInfo> {
+    let mut workbench_tool_names = workbench_readonly_postgres_tool_names();
+    workbench_tool_names.extend(workbench_proposal_tool_names());
+    workbench_tool_names.sort();
+
+    vec![
+        AgentToolSetStartupInfo {
+            label: "managed_database_audit",
+            tool_names: sql_audit_tool_names(postgres_tool_execution_mode(config.sql_execution)),
+        },
+        AgentToolSetStartupInfo {
+            label: "workbench",
+            tool_names: workbench_tool_names,
+        },
+    ]
+}
+
+fn postgres_tool_execution_mode(mode: SqlExecutionMode) -> PostgresToolExecutionMode {
+    match mode {
+        SqlExecutionMode::Off => PostgresToolExecutionMode::Off,
+        SqlExecutionMode::Readonly => PostgresToolExecutionMode::Readonly,
+        SqlExecutionMode::WriteGated => PostgresToolExecutionMode::WriteGated,
+    }
 }
 
 fn print_server_startup_overview(config: &LiquidConfig, config_path: &Path) {
@@ -372,6 +439,10 @@ fn print_startup_step(label: &str, detail: String, duration: Duration) {
         "  [ok] {label:<12} {detail} ({})",
         format_duration(duration)
     );
+}
+
+fn print_startup_detail(detail: String) {
+    println!("       {detail}");
 }
 
 fn format_duration(duration: Duration) -> String {
@@ -780,6 +851,7 @@ mod tests {
             api_mode: LlmApiMode::Responses,
             base_url: "https://user:llm-secret@example.test/v1".to_owned(),
             tool_names: vec!["inspect_sql_risk".to_owned(), "pg_list_schemas".to_owned()],
+            request_scoped_tool_sets: test_tool_sets(),
         };
 
         let summary = info.summary();
@@ -795,13 +867,19 @@ mod tests {
         let info = AgentStartupInfo::Mock {
             reason: "OPENAI_MODEL unset",
             tool_calling_tool_names: vec!["inspect_sql_risk".to_owned()],
+            request_scoped_tool_sets: test_tool_sets(),
         };
 
         let summary = info.summary();
+        let tool_set_summaries = info.tool_set_summaries();
 
         assert!(summary.contains("mock SQL audit agent (OPENAI_MODEL unset)"));
         assert!(summary.contains("active_tools=[]"));
-        assert!(summary.contains("tool_calling_tools=[inspect_sql_risk]"));
+        assert!(tool_set_summaries.contains(&"tool_calling_default=[inspect_sql_risk]".to_owned()));
+        assert!(
+            tool_set_summaries
+                .contains(&"managed_database_audit=[inspect_sql_risk, pg_list_schemas]".to_owned())
+        );
     }
 
     #[test]
@@ -890,6 +968,13 @@ mod tests {
             .as_nanos();
 
         env::temp_dir().join(format!("{name}-{}-{nanos}", process::id()))
+    }
+
+    fn test_tool_sets() -> Vec<AgentToolSetStartupInfo> {
+        vec![AgentToolSetStartupInfo {
+            label: "managed_database_audit",
+            tool_names: vec!["inspect_sql_risk".to_owned(), "pg_list_schemas".to_owned()],
+        }]
     }
 
     fn test_config() -> LiquidConfig {
