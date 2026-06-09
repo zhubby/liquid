@@ -2,6 +2,7 @@
 import type { ChatErrorCode } from "./ChatErrorCode";
 import type { ChatStreamStage } from "./ChatStreamStage";
 import type { DatapanelQueryResult } from "./DatapanelQueryResult";
+import type { SqlRollbackPlan } from "./SqlRollbackPlan";
 import type { SqlStatementKind } from "./SqlStatementKind";
 
 export type ChatMessagePart =
@@ -16,6 +17,7 @@ export type ChatMessagePart =
     sql: string;
     result: DatapanelQueryResult;
     saveable?: boolean;
+    rollback?: SqlRollbackPlan;
   }
   | {
     "kind": "sql_execution_summary";
@@ -24,6 +26,7 @@ export type ChatMessagePart =
     statement_kind: SqlStatementKind;
     affected_rows?: number;
     elapsed_ms: number;
+    rollback?: SqlRollbackPlan;
   }
   | { "kind": "action_ref"; action_id: string }
   | { "kind": "error"; code: ChatErrorCode; message: string }

@@ -117,6 +117,7 @@ async fn sql_audit_store_persists_and_transitions_records() {
                 elapsed_ms: 10,
                 risk_floor: 80,
                 findings: json!([]),
+                rollback: None,
             },
         )
         .await
@@ -243,6 +244,7 @@ async fn sql_audit_store_filters_and_paginates_records() {
                 elapsed_ms: 12,
                 risk_floor: 20,
                 findings: json!({}),
+                rollback: None,
             },
         )
         .await

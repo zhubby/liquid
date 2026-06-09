@@ -80,6 +80,28 @@ List query parameters:
 
 List responses include `X-Total-Count`, `X-Page`, and `X-Page-Size` headers.
 
+`SqlAuditExecutionResult` includes rollback metadata when a write execution has
+completed:
+
+```json
+{
+  "statement_kind": "update",
+  "affected_rows": 3,
+  "elapsed_ms": 42,
+  "risk_floor": 40,
+  "findings": [],
+  "rollback": {
+    "status": "generated",
+    "sql": "with rollback_rows as (...) ...",
+    "generated_at": "2026-06-09T10:00:00Z"
+  }
+}
+```
+
+`rollback.status` is `generated`, `unsupported`, or `failed`. Unsupported and
+failed plans include `reason` instead of `sql`. Older records may omit
+`rollback` because it is stored in the existing `execution_result` JSONB value.
+
 ## Chat and Workbench
 
 | Method | Path | Auth | Purpose |
@@ -111,6 +133,16 @@ Conversation query parameters:
 
 The stream endpoint emits typed `ChatStreamEvent` JSON frames and `ping` keepalive
 frames.
+
+SQL mode assistant message parts may include rollback metadata:
+
+- `query_result_table.rollback` for write statements with `RETURNING`,
+- `sql_execution_summary.rollback` for write statements summarized by affected
+  row count.
+
+SELECT query results omit `rollback`. Unsupported rollback generation does not
+change whether the SQL statement commits; it is reported with
+`status: "unsupported"` and a reason.
 
 ## Datapanels
 

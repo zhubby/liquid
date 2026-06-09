@@ -8,6 +8,7 @@ import {
   ChevronLeft,
   ChevronRight,
   ClipboardCheck,
+  Copy,
   FileText,
   Loader2,
   RefreshCw,
@@ -30,6 +31,7 @@ import {
   type SqlAuditExecutionStatus,
   type SqlAuditLifecycleStatus,
   type SqlAuditRecord,
+  type SqlRollbackPlan,
   type SqlAuditStatus,
   apiRequest,
   apiRequestWithMeta,
@@ -1075,11 +1077,17 @@ function AuditDetailDialog({
                       </div>
                     ) : null}
                     {record.execution_result ? (
-                      <pre className="max-h-52 max-w-full overflow-auto rounded-md border bg-muted/50 p-3 text-xs leading-5">
-                        <code className="font-mono">
-                          {JSON.stringify(record.execution_result, null, 2)}
-                        </code>
-                      </pre>
+                      <>
+                        <RollbackPlanDetail
+                          rollback={record.execution_result.rollback}
+                          locale={locale}
+                        />
+                        <pre className="max-h-52 max-w-full overflow-auto rounded-md border bg-muted/50 p-3 text-xs leading-5">
+                          <code className="font-mono">
+                            {JSON.stringify(record.execution_result, null, 2)}
+                          </code>
+                        </pre>
+                      </>
                     ) : !record.execution_error ? (
                       <p className="text-sm text-muted-foreground">
                         {t.auditHistory.noValue}
@@ -1092,6 +1100,85 @@ function AuditDetailDialog({
           )}
         </CardContent>
       </Card>
+    </div>
+  );
+}
+
+function RollbackPlanDetail({
+  rollback,
+  locale,
+}: {
+  rollback?: SqlRollbackPlan | null;
+  locale: string;
+}) {
+  const { t } = useI18n();
+
+  if (!rollback) {
+    return null;
+  }
+
+  const copySql = async () => {
+    if (!rollback.sql) {
+      return;
+    }
+
+    try {
+      await navigator.clipboard.writeText(rollback.sql);
+      toast.success(t.auditHistory.rollbackCopied);
+    } catch (error) {
+      toast.error(error instanceof Error ? error.message : t.workspace.copyFailed);
+    }
+  };
+
+  return (
+    <div className="space-y-2 rounded-md border bg-background p-3">
+      <div className="flex flex-wrap items-center gap-2">
+        <RotateCcw className="size-4 text-muted-foreground" aria-hidden />
+        <span className="text-xs font-medium uppercase text-muted-foreground">
+          {t.auditHistory.rollbackTitle}
+        </span>
+        <Badge variant="outline" className="font-mono">
+          {t.auditHistory.rollbackStatuses[rollback.status]}
+        </Badge>
+      </div>
+      {rollback.reason ? (
+        <p className="break-words text-xs leading-5 text-muted-foreground">
+          <span className="font-medium text-foreground">
+            {t.auditHistory.rollbackReason}
+          </span>{" "}
+          {rollback.reason}
+        </p>
+      ) : null}
+      {rollback.generated_at ? (
+        <p className="text-xs text-muted-foreground">
+          <span className="font-medium text-foreground">
+            {t.auditHistory.rollbackGeneratedAt}
+          </span>{" "}
+          {formatDateTime(rollback.generated_at, locale)}
+        </p>
+      ) : null}
+      {rollback.sql ? (
+        <div className="overflow-hidden rounded-md border bg-muted/50">
+          <div className="flex h-8 items-center justify-between border-b bg-muted px-3">
+            <span className="text-[11px] font-medium uppercase text-muted-foreground">
+              {t.auditHistory.rollbackSql}
+            </span>
+            <Button
+              type="button"
+              variant="ghost"
+              size="sm"
+              className="h-7 rounded-md px-2 text-xs"
+              onClick={() => void copySql()}
+            >
+              <Copy className="size-3.5" aria-hidden />
+              {t.workspace.copy}
+            </Button>
+          </div>
+          <pre className="max-h-52 overflow-auto p-3 text-xs leading-5">
+            <code className="font-mono">{rollback.sql}</code>
+          </pre>
+        </div>
+      ) : null}
     </div>
   );
 }

@@ -140,7 +140,10 @@ Write execution:
 3. Runs the approved SQL with write-gated PostgreSQL tooling.
 4. Completes with statement kind, affected rows, elapsed time, risk floor, and
    execution findings, or records an execution error.
-5. Deterministic rejection errors are returned as conflicts.
+5. Stores rollback metadata in `execution_result.rollback`. Generated rollback
+   SQL is stored in the existing JSONB result; unsupported and failed generation
+   store a status plus reason.
+6. Deterministic rejection errors are returned as conflicts.
 
 ## SQL Mode Flow
 
@@ -156,9 +159,15 @@ The API:
 5. Executes SELECT through the read-only datapanel materialization path.
 6. Executes mutation statements with a 5 second statement timeout and lock
    timeout.
-7. Commits successful mutation statements.
-8. Appends an assistant message containing either query results, a summary, or an
+7. Captures rollback metadata for write statements using the same
+   rollback-aware executor as approved SQL audits.
+8. Commits successful mutation statements.
+9. Appends an assistant message containing either query results, a summary, or an
    error.
+
+Rollback metadata is persisted on SQL mode assistant message parts. SELECT
+results have no rollback plan. Unsupported rollback generation is displayed to
+the user but does not convert SQL mode into an approval flow.
 
 ## Datapanel Flow
 

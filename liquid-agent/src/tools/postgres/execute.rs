@@ -2,6 +2,7 @@ use std::time::Instant;
 
 use anyhow::{Result, anyhow, bail};
 use async_trait::async_trait;
+use liquid_core::{SqlRollbackPlan, SqlRollbackStatus};
 use liquid_llm::ToolDefinition;
 use liquid_sql::{PgSqlAnalysis, PgSqlRiskSeverity, PgSqlStatementKind};
 use pg_query::NodeEnum;
@@ -13,6 +14,7 @@ use crate::{tools::AgentTool, types::ToolOutput};
 use super::{
     args::{elapsed_ms, limit_arg, required_string_arg, validate_single_statement},
     config::{PostgresToolConfig, PostgresToolContext},
+    rollback::{PostgresWriteExecutionMode, execute_write_sql_with_rollback},
 };
 
 #[derive(Debug, Clone)]
@@ -160,6 +162,7 @@ impl AgentTool for PgExecuteWriteSqlTool {
             "elapsed_ms": result.elapsed_ms,
             "risk_floor": result.risk_floor,
             "findings": result.analysis.findings,
+            "rollback": result.rollback,
         })))
     }
 }
@@ -171,6 +174,7 @@ pub struct ApprovedWriteExecutionResult {
     pub elapsed_ms: u64,
     pub risk_floor: u8,
     pub analysis: PgSqlAnalysis,
+    pub rollback: SqlRollbackPlan,
 }
 
 pub async fn execute_approved_write_sql_with_config(
@@ -215,26 +219,38 @@ pub(super) async fn execute_approved_write_sql(
     }
 
     let risk_floor = analysis.risk_floor();
-    let started_at = Instant::now();
-    let result = if statement_requires_autocommit(&executable_sql)? {
-        execute_autocommit_write_sql(context, &executable_sql).await?
+    let (affected_rows, elapsed_ms, rollback) = if statement_requires_autocommit(&executable_sql)? {
+        let started_at = Instant::now();
+        let result = execute_autocommit_write_sql(context, &executable_sql).await?;
+        (
+            result.rows_affected(),
+            elapsed_ms(started_at),
+            SqlRollbackPlan {
+                status: SqlRollbackStatus::Unsupported,
+                sql: None,
+                reason: Some(
+                    "rollback generation is unsupported for autocommit statements".to_owned(),
+                ),
+                generated_at: None,
+            },
+        )
     } else {
-        let mut transaction = context.pool.begin().await?;
-        set_tool_timeouts(&mut transaction, context).await?;
-        let result = sqlx::query(&executable_sql)
-            .execute(&mut *transaction)
-            .await?;
-        transaction.commit().await?;
-        result
+        let result = execute_write_sql_with_rollback(
+            context,
+            &executable_sql,
+            PostgresWriteExecutionMode::Summary,
+        )
+        .await?;
+        (result.affected_rows, result.elapsed_ms, result.rollback)
     };
-    let elapsed_ms = elapsed_ms(started_at);
 
     Ok(ApprovedWriteExecutionResult {
         statement_kind,
-        affected_rows: result.rows_affected(),
+        affected_rows,
         elapsed_ms,
         risk_floor,
         analysis,
+        rollback,
     })
 }
 
@@ -288,7 +304,7 @@ pub(super) async fn readonly_transaction(
     Ok(transaction)
 }
 
-async fn set_tool_timeouts(
+pub(super) async fn set_tool_timeouts(
     transaction: &mut sqlx::Transaction<'_, sqlx::Postgres>,
     context: &PostgresToolContext,
 ) -> Result<()> {

@@ -81,6 +81,8 @@ export type { SqlAuditRecord } from "./generated/api-types/SqlAuditRecord";
 export type { SqlAuditReport } from "./generated/api-types/SqlAuditReport";
 export type { SqlAuditRequest } from "./generated/api-types/SqlAuditRequest";
 export type { SqlAuditStatus } from "./generated/api-types/SqlAuditStatus";
+export type { SqlRollbackPlan } from "./generated/api-types/SqlRollbackPlan";
+export type { SqlRollbackStatus } from "./generated/api-types/SqlRollbackStatus";
 export type { SqlStatementKind } from "./generated/api-types/SqlStatementKind";
 export type { UpdateChatConversationRequest } from "./generated/api-types/UpdateChatConversationRequest";
 export type { UpdateDatapanelCardRequest } from "./generated/api-types/UpdateDatapanelCardRequest";

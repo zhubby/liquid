@@ -20,7 +20,7 @@ use liquid_core::{
     ChatSqlExecutionResponse, ChatStreamEvent, ChatStreamStage, ChatToolStatus, ChatTurn,
     ChatTurnDashboardContext, CreateAgentConversationRequest, CreateAgentTurnRequest,
     CreateChatConversationRequest, CreateChatSqlExecutionRequest, CreateChatTurnRequest,
-    DatapanelQueryResult, ManagedDatabase, ManagedDatabasePoolKey, SqlAuditRecord,
+    DatapanelQueryResult, ManagedDatabase, ManagedDatabasePoolKey, SqlAuditRecord, SqlRollbackPlan,
     SqlStatementKind, UpdateAgentConversationRequest, UpdateChatConversationRequest,
 };
 use liquid_storage::StorageError;
@@ -334,6 +334,7 @@ fn sql_execution_assistant_message(
             statement_kind,
             result,
             saveable,
+            rollback,
         }) => {
             let content = format!(
                 "SQL execution completed. Returned {} {}.",
@@ -348,6 +349,7 @@ fn sql_execution_assistant_message(
                     "sql": sql,
                     "result": result,
                     "saveable": saveable,
+                    "rollback": rollback,
                 }],
             });
 
@@ -357,6 +359,7 @@ fn sql_execution_assistant_message(
             statement_kind,
             affected_rows,
             elapsed_ms,
+            rollback,
         }) => {
             let content = format!(
                 "SQL execution completed. Statement `{}` affected {}.",
@@ -373,6 +376,7 @@ fn sql_execution_assistant_message(
                     "statement_kind": statement_kind,
                     "affected_rows": affected_rows,
                     "elapsed_ms": elapsed_ms,
+                    "rollback": rollback,
                 }],
             });
 
@@ -1805,6 +1809,8 @@ struct QueryResultTablePartMetadata {
     result: DatapanelQueryResult,
     #[serde(default = "default_true")]
     saveable: bool,
+    #[serde(default)]
+    rollback: Option<SqlRollbackPlan>,
 }
 
 fn query_result_table_parts(metadata: Option<&Value>) -> Vec<ChatMessagePart> {
@@ -1821,6 +1827,7 @@ fn query_result_table_parts(metadata: Option<&Value>) -> Vec<ChatMessagePart> {
             sql: part.sql,
             result: part.result,
             saveable: (!part.saveable).then_some(false),
+            rollback: part.rollback,
         })
         .collect()
 }
@@ -1833,6 +1840,8 @@ struct SqlExecutionSummaryPartMetadata {
     #[serde(default)]
     affected_rows: Option<i64>,
     elapsed_ms: i64,
+    #[serde(default)]
+    rollback: Option<SqlRollbackPlan>,
 }
 
 fn sql_execution_summary_parts(metadata: Option<&Value>) -> Vec<ChatMessagePart> {
@@ -1850,6 +1859,7 @@ fn sql_execution_summary_parts(metadata: Option<&Value>) -> Vec<ChatMessagePart>
             statement_kind: part.statement_kind,
             affected_rows: part.affected_rows,
             elapsed_ms: part.elapsed_ms,
+            rollback: part.rollback,
         })
         .collect()
 }

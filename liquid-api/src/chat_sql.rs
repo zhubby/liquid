@@ -1,17 +1,20 @@
-use std::{future::Future, pin::Pin, time::Instant};
+use std::{future::Future, pin::Pin};
 
 use anyhow::{Context, Result, anyhow, bail};
-use liquid_core::{DatapanelQueryResult, SqlStatementKind};
+use liquid_agent::{
+    PostgresToolConfig, PostgresToolExecutionMode, PostgresWriteExecutionMode,
+    execute_write_sql_with_rollback_with_config,
+};
+use liquid_core::{DatapanelQueryResult, SqlRollbackPlan, SqlStatementKind};
 use liquid_sql::{PgSqlAnalysisRequest, PgSqlStatementKind, analyze_postgres_sql};
 use pg_query::NodeEnum;
 use serde_json::Value;
-use sqlx::{PgPool, Postgres, Row, Transaction};
+use sqlx::PgPool;
 use time::OffsetDateTime;
 
 use crate::datapanels::materialize_datapanel_query_with_pool;
 
 const DEFAULT_CHAT_SQL_QUERY_LIMIT: usize = 100;
-const MAX_CHAT_SQL_QUERY_LIMIT: usize = 1_000;
 
 pub type ChatSqlExecutionFuture<'a> =
     Pin<Box<dyn Future<Output = Result<ChatSqlExecutionOutcome>> + Send + 'a>>;
@@ -22,11 +25,13 @@ pub enum ChatSqlExecutionOutcome {
         statement_kind: SqlStatementKind,
         result: DatapanelQueryResult,
         saveable: bool,
+        rollback: Option<SqlRollbackPlan>,
     },
     Summary {
         statement_kind: SqlStatementKind,
         affected_rows: Option<i64>,
         elapsed_ms: i64,
+        rollback: Option<SqlRollbackPlan>,
     },
 }
 
@@ -59,20 +64,50 @@ async fn execute_chat_sql(pool: PgPool, sql: &str) -> Result<ChatSqlExecutionOut
             statement_kind: validated.statement_kind,
             result,
             saveable: true,
+            rollback: None,
         });
     }
 
     if statement_has_returning(&validated.executable_sql)? {
-        let result = materialize_returning_statement(pool, &validated.executable_sql).await?;
+        let execution = execute_chat_write_sql(
+            pool,
+            &validated.executable_sql,
+            PostgresWriteExecutionMode::ReturningRows {
+                limit: DEFAULT_CHAT_SQL_QUERY_LIMIT,
+            },
+        )
+        .await?;
+        let rows = execution.returned_rows.unwrap_or_default();
+        let result = DatapanelQueryResult {
+            columns: json_columns(&rows),
+            row_count: rows.len().min(i32::MAX as usize) as i32,
+            rows,
+            truncated: execution.returned_rows_truncated,
+            elapsed_ms: execution.elapsed_ms.min(i64::MAX as u64) as i64,
+            refreshed_at: OffsetDateTime::now_utc(),
+        };
 
         return Ok(ChatSqlExecutionOutcome::Query {
             statement_kind: validated.statement_kind,
             result,
             saveable: false,
+            rollback: Some(execution.rollback),
         });
     }
 
-    execute_statement_summary(pool, &validated.executable_sql, validated.statement_kind).await
+    let execution = execute_chat_write_sql(
+        pool,
+        &validated.executable_sql,
+        PostgresWriteExecutionMode::Summary,
+    )
+    .await?;
+
+    Ok(ChatSqlExecutionOutcome::Summary {
+        statement_kind: validated.statement_kind,
+        affected_rows: Some(execution.affected_rows.min(i64::MAX as u64) as i64),
+        elapsed_ms: execution.elapsed_ms.min(i64::MAX as u64) as i64,
+        rollback: Some(execution.rollback),
+    })
 }
 
 struct ValidatedChatSql {
@@ -116,92 +151,18 @@ fn validate_chat_sql(sql: &str) -> Result<ValidatedChatSql> {
     })
 }
 
-async fn materialize_returning_statement(
+async fn execute_chat_write_sql(
     pool: PgPool,
     executable_sql: &str,
-) -> Result<DatapanelQueryResult> {
-    let started_at = Instant::now();
-    let fetch_limit = DEFAULT_CHAT_SQL_QUERY_LIMIT
-        .saturating_add(1)
-        .min(MAX_CHAT_SQL_QUERY_LIMIT + 1);
-    let wrapped_sql = format!(
-        "with liquid_mutation as ({}) select to_jsonb(liquid_row) as row from liquid_mutation liquid_row limit {}",
-        executable_sql, fetch_limit
-    );
-    let mut transaction = pool
-        .begin()
-        .await
-        .context("failed to start SQL execution transaction")?;
-
-    set_transaction_timeouts(&mut transaction).await?;
-    let rows = sqlx::query(&wrapped_sql)
-        .fetch_all(&mut *transaction)
-        .await
-        .context("SQL execution failed")?;
-    transaction
-        .commit()
-        .await
-        .context("failed to commit SQL execution transaction")?;
-
-    let mut row_values = rows
-        .into_iter()
-        .map(|row| row.get::<Value, _>("row"))
-        .collect::<Vec<_>>();
-    let truncated = row_values.len() > DEFAULT_CHAT_SQL_QUERY_LIMIT;
-
-    if truncated {
-        row_values.truncate(DEFAULT_CHAT_SQL_QUERY_LIMIT);
-    }
-
-    Ok(DatapanelQueryResult {
-        columns: json_columns(&row_values),
-        row_count: row_values.len() as i32,
-        rows: row_values,
-        truncated,
-        elapsed_ms: elapsed_ms(started_at),
-        refreshed_at: OffsetDateTime::now_utc(),
-    })
-}
-
-async fn execute_statement_summary(
-    pool: PgPool,
-    executable_sql: &str,
-    statement_kind: SqlStatementKind,
-) -> Result<ChatSqlExecutionOutcome> {
-    let started_at = Instant::now();
-    let mut transaction = pool
-        .begin()
-        .await
-        .context("failed to start SQL execution transaction")?;
-
-    set_transaction_timeouts(&mut transaction).await?;
-    let result = sqlx::query(executable_sql)
-        .execute(&mut *transaction)
-        .await
-        .context("SQL execution failed")?;
-    transaction
-        .commit()
-        .await
-        .context("failed to commit SQL execution transaction")?;
-
-    Ok(ChatSqlExecutionOutcome::Summary {
-        statement_kind,
-        affected_rows: Some(result.rows_affected().min(i64::MAX as u64) as i64),
-        elapsed_ms: elapsed_ms(started_at),
-    })
-}
-
-async fn set_transaction_timeouts(transaction: &mut Transaction<'_, Postgres>) -> Result<()> {
-    sqlx::query("set local statement_timeout = '5s'")
-        .execute(&mut **transaction)
-        .await
-        .context("failed to set SQL statement timeout")?;
-    sqlx::query("set local lock_timeout = '5s'")
-        .execute(&mut **transaction)
-        .await
-        .context("failed to set SQL lock timeout")?;
-
-    Ok(())
+    mode: PostgresWriteExecutionMode,
+) -> Result<liquid_agent::PostgresWriteExecutionResult> {
+    execute_write_sql_with_rollback_with_config(
+        PostgresToolConfig::new(Some(pool), false, PostgresToolExecutionMode::WriteGated),
+        executable_sql,
+        mode,
+    )
+    .await
+    .context("SQL execution failed")
 }
 
 fn statement_has_returning(sql: &str) -> Result<bool> {
@@ -268,8 +229,4 @@ fn sql_statement_kind_from_pg(kind: &PgSqlStatementKind) -> SqlStatementKind {
         PgSqlStatementKind::Control => SqlStatementKind::Control,
         PgSqlStatementKind::Other => SqlStatementKind::Other,
     }
-}
-
-fn elapsed_ms(started_at: Instant) -> i64 {
-    started_at.elapsed().as_millis().min(i64::MAX as u128) as i64
 }

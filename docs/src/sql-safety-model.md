@@ -141,6 +141,8 @@ Execution:
 - Other accepted statements execute directly and return a summary with affected
   rows.
 - Mutation execution sets `statement_timeout = '5s'` and `lock_timeout = '5s'`.
+- Accepted write statements include rollback metadata in the persisted chat
+  message. Unsupported rollback generation does not block the SQL execution.
 
 Because SQL mode can commit, UI placement and user education should treat it as
 an operator tool, not as a preview-only query box.
@@ -155,11 +157,42 @@ Approved write execution goes through SQL audit records:
 3. `LIQUID_SQL_EXECUTION` must be `write_gated`.
 4. The audit execution status moves to `executing`.
 5. The write executor performs its own deterministic checks.
-6. Success stores `SqlAuditExecutionResult`.
+6. Success stores `SqlAuditExecutionResult`, including rollback metadata when
+   available.
 7. Failure stores `execution_error`.
 
 Snapshot matching prevents a user from auditing SQL against one connection and
 executing it later against a changed host, database name, username, or SSL mode.
+
+## Rollback SQL Generation
+
+Liquid generates rollback SQL at execution time for a conservative PostgreSQL
+DML subset. It does not use MySQL binlogs or an external backup database.
+
+Rollback plans have one of three statuses:
+
+| Status | Meaning |
+| --- | --- |
+| `generated` | Rollback SQL was generated and stored with the execution result. |
+| `unsupported` | The SQL still executed, but v1 cannot reliably generate rollback SQL. |
+| `failed` | Rollback generation failed, so Liquid executed the original SQL and recorded the failure reason. |
+
+Supported v1 cases are single-table DML with a primary key:
+
+- `INSERT` without `ON CONFLICT DO UPDATE` and without user `RETURNING`.
+- `UPDATE` without CTEs or `FROM`, when primary key columns are not updated.
+- `DELETE` without CTEs or `USING`.
+
+For `UPDATE` and `DELETE`, Liquid captures old rows inside the execution
+transaction before running the mutation. For supported `INSERT`, Liquid captures
+inserted rows through `RETURNING`. Generated rollback SQL uses
+`jsonb_to_recordset` with typed column lists and primary-key predicates instead
+of hand-concatenated values.
+
+Rollback generation is capped at 1000 affected row snapshots. DDL, complex DML,
+missing primary keys, primary-key updates, `INSERT ... RETURNING`, and statements
+over the snapshot cap are marked `unsupported` while the original SQL continues
+according to the user's execution choice.
 
 ## LLM Safety Boundary
 

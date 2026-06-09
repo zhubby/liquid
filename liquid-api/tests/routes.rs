@@ -36,10 +36,10 @@ use liquid_core::{
     ManagedDatabaseConnectionLoaderError, ManagedDatabaseConnectionSpec, ManagedDatabaseEngine,
     ManagedDatabasePoolKey, ManagedDatabasePoolPolicy, ManagedDatabaseSslMode, PublicUser,
     RegisterRequest, RejectSqlAuditRequest, ResolvedLlmProviderSettings, SqlAuditExecutionResult,
-    SqlAuditRecord, SqlAuditReport, SqlAuditRequest, SqlAuditStatus, SqlStatementKind,
-    UpdateAgentConversationRequest, UpdateCurrentUserRequest, UpdateDatapanelCardRequest,
-    UpdateDatapanelRequest, UpdateLlmProviderSettingsRequest, UpdateManagedDatabaseRequest,
-    UpdatePasswordRequest,
+    SqlAuditRecord, SqlAuditReport, SqlAuditRequest, SqlAuditStatus, SqlRollbackPlan,
+    SqlRollbackStatus, SqlStatementKind, UpdateAgentConversationRequest, UpdateCurrentUserRequest,
+    UpdateDatapanelCardRequest, UpdateDatapanelRequest, UpdateLlmProviderSettingsRequest,
+    UpdateManagedDatabaseRequest, UpdatePasswordRequest,
 };
 use liquid_sql::{PgSqlAnalysisRequest, PgSqlStatementKind, analyze_postgres_sql};
 use liquid_storage::{
@@ -1536,8 +1536,18 @@ impl ApprovedSqlExecutor for FakeApprovedSqlExecutor {
                 elapsed_ms: 7,
                 risk_floor: analysis.risk_floor(),
                 analysis,
+                rollback: test_rollback_plan(),
             })
         })
+    }
+}
+
+fn test_rollback_plan() -> SqlRollbackPlan {
+    SqlRollbackPlan {
+        status: SqlRollbackStatus::Unsupported,
+        sql: None,
+        reason: Some("rollback is unsupported in this test".to_owned()),
+        generated_at: None,
     }
 }
 
@@ -2955,6 +2965,7 @@ async fn chat_sql_execution_persists_select_result_table_without_llm_provider() 
                 refreshed_at: time::OffsetDateTime::UNIX_EPOCH,
             },
             saveable: true,
+            rollback: None,
         }),
     ]));
     let app = test_app_with_agent_store_executors(
@@ -3028,6 +3039,7 @@ async fn chat_sql_execution_persists_update_summary() {
             statement_kind: SqlStatementKind::Update,
             affected_rows: Some(3),
             elapsed_ms: 9,
+            rollback: Some(test_rollback_plan()),
         }),
     ]));
     let app = test_app_with_agent_store_executors(
@@ -3064,6 +3076,10 @@ async fn chat_sql_execution_persists_update_summary() {
     );
     assert_eq!(payload["assistant_message"]["parts"][1]["affected_rows"], 3);
     assert_eq!(payload["assistant_message"]["parts"][1]["elapsed_ms"], 9);
+    assert_eq!(
+        payload["assistant_message"]["parts"][1]["rollback"]["status"],
+        "unsupported"
+    );
 }
 
 #[tokio::test]
@@ -3081,6 +3097,7 @@ async fn chat_sql_execution_marks_returning_results_not_saveable() {
                 refreshed_at: time::OffsetDateTime::UNIX_EPOCH,
             },
             saveable: false,
+            rollback: Some(test_rollback_plan()),
         }),
     ]));
     let app = test_app_with_agent_store_executors(
@@ -3111,6 +3128,10 @@ async fn chat_sql_execution_marks_returning_results_not_saveable() {
         "query_result_table"
     );
     assert_eq!(payload["assistant_message"]["parts"][1]["saveable"], false);
+    assert_eq!(
+        payload["assistant_message"]["parts"][1]["rollback"]["status"],
+        "unsupported"
+    );
 }
 
 #[tokio::test]
@@ -4238,6 +4259,10 @@ async fn applying_chat_sql_execution_action_executes_after_audit_approval() {
     assert_eq!(audit["sql"], "CREATE DATABASE test1;");
     assert_eq!(audit["status"], "executed");
     assert_eq!(audit["execution_result"]["affected_rows"], 1);
+    assert_eq!(
+        audit["execution_result"]["rollback"]["status"],
+        "unsupported"
+    );
 }
 
 #[tokio::test]
@@ -5805,6 +5830,10 @@ async fn sql_audit_approve_and_execute_runs_once_when_write_gated() {
     let payload = response_json(execute_response).await;
     assert_eq!(payload["status"], "executed");
     assert_eq!(payload["execution_result"]["affected_rows"], 1);
+    assert_eq!(
+        payload["execution_result"]["rollback"]["status"],
+        "unsupported"
+    );
 
     let repeat_response = app
         .oneshot(

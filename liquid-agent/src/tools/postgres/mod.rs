@@ -4,6 +4,7 @@ pub(super) mod config;
 pub(super) mod describe;
 pub(super) mod execute;
 pub(super) mod explain;
+pub(super) mod rollback;
 
 pub use config::{PostgresToolConfig, PostgresToolExecutionMode};
 
@@ -13,6 +14,10 @@ pub(super) use describe::PgDescribeRelationTool;
 pub use execute::{ApprovedWriteExecutionResult, execute_approved_write_sql_with_config};
 pub(super) use execute::{PgExecuteReadonlySqlTool, PgExecuteWriteSqlTool};
 pub(super) use explain::PgExplainSqlTool;
+pub use rollback::{
+    PostgresWriteExecutionMode, PostgresWriteExecutionResult,
+    execute_write_sql_with_rollback_with_config,
+};
 
 #[cfg(test)]
 mod tests {

@@ -17,8 +17,9 @@ pub use liquid_core::{SqlAuditFinding, SqlAuditReport, SqlAuditRequest};
 pub use mock::MockSqlAuditAgent;
 pub use tools::{
     AgentTool, ApprovedWriteExecutionResult, DatabaseOperationToolContext, PostgresToolConfig,
-    PostgresToolExecutionMode, SqlRiskInspectionTool, ToolRegistry,
-    execute_approved_write_sql_with_config,
+    PostgresToolExecutionMode, PostgresWriteExecutionMode, PostgresWriteExecutionResult,
+    SqlRiskInspectionTool, ToolRegistry, execute_approved_write_sql_with_config,
+    execute_write_sql_with_rollback_with_config,
 };
 pub use types::{AgentEvent, AgentStream, ToolOutput};
 pub use workbench::{

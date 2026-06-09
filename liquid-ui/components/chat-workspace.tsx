@@ -64,6 +64,7 @@ import {
   type ManagedDatabase,
   type PublicUser,
   type SaveDatapanelTableCardRequest,
+  type SqlRollbackPlan,
   apiRequest,
   apiStream,
 } from "@/lib/api";
@@ -1611,6 +1612,7 @@ function QueryResultTableCard({
       <div className="border-t bg-muted/20 px-3 py-2">
         <CodeBlock code={part.sql} language="sql" />
       </div>
+      <RollbackPlanPanel rollback={part.rollback} />
     </article>
   );
 }
@@ -1655,7 +1657,45 @@ function SqlExecutionSummaryCard({
       <div className="border-t-0 bg-muted/20 px-3 py-2">
         <CodeBlock code={part.sql} language="sql" />
       </div>
+      <RollbackPlanPanel rollback={part.rollback} />
     </article>
+  );
+}
+
+function RollbackPlanPanel({
+  rollback,
+}: {
+  rollback?: SqlRollbackPlan | null;
+}) {
+  const { t } = useI18n();
+
+  if (!rollback) {
+    return null;
+  }
+
+  return (
+    <div className="border-t bg-background px-3 py-3">
+      <div className="mb-2 flex flex-wrap items-center gap-2">
+        <RotateCcw className="size-4 text-muted-foreground" aria-hidden />
+        <span className="text-xs font-medium uppercase text-muted-foreground">
+          {t.workspace.rollbackTitle}
+        </span>
+        <Badge variant="outline" className="font-mono">
+          {t.workspace.rollbackStatuses[rollback.status]}
+        </Badge>
+        {rollback.generated_at ? (
+          <span className="text-xs text-muted-foreground">
+            {rollback.generated_at}
+          </span>
+        ) : null}
+      </div>
+      {rollback.reason ? (
+        <p className="mb-2 break-words text-xs leading-5 text-muted-foreground">
+          {rollback.reason}
+        </p>
+      ) : null}
+      {rollback.sql ? <CodeBlock code={rollback.sql} language="sql" /> : null}
+    </div>
   );
 }
 

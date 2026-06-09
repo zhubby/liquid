@@ -12,7 +12,17 @@ import {
   useRef,
   useState,
 } from "react";
-import { ArrowLeft, Bot, Loader2, Plus } from "lucide-react";
+import { useTheme } from "next-themes";
+import {
+  ArrowLeft,
+  Bot,
+  Languages,
+  Loader2,
+  Monitor,
+  Moon,
+  Plus,
+  Sun,
+} from "lucide-react";
 import { toast } from "sonner";
 
 import { DatapanelWorkspacePanel } from "@/components/datapanel";
@@ -41,9 +51,12 @@ type AuditDashboardProps = {
   onDatabaseExit: () => void;
 };
 
+type ThemeShortcut = "system" | "light" | "dark";
+
 const MIN_AI_WIDTH = 320;
 const MIN_BI_WIDTH = 520;
 const DEFAULT_AI_PERCENT = 38;
+const themeShortcutOrder: ThemeShortcut[] = ["system", "light", "dark"];
 
 export function AuditDashboard({
   token,
@@ -397,7 +410,33 @@ function IconSidebar({
   onSelectWorkspace: (conversation: ChatConversation) => void;
   onDatabaseExit: () => void;
 }) {
-  const { t } = useI18n();
+  const { locale, setLocale, t } = useI18n();
+  const { theme, setTheme } = useTheme();
+  const selectedTheme: ThemeShortcut =
+    theme === "light" || theme === "dark" || theme === "system"
+      ? theme
+      : "system";
+  const ThemeShortcutIcon =
+    selectedTheme === "dark" ? Moon : selectedTheme === "light" ? Sun : Monitor;
+  const nextLocale = locale === "zh-CN" ? "en-US" : "zh-CN";
+  const nextLanguageLabel = nextLocale === "zh-CN" ? "中文" : "English";
+  const themeShortcutLabel = t.databasePicker.themeShortcutLabel(
+    t.settings.preferences.themeBadges[selectedTheme],
+  );
+  const languageShortcutLabel =
+    t.databasePicker.languageShortcutLabel(nextLanguageLabel);
+
+  const handleThemeShortcut = () => {
+    const currentIndex = themeShortcutOrder.indexOf(selectedTheme);
+    const nextTheme =
+      themeShortcutOrder[(currentIndex + 1) % themeShortcutOrder.length];
+
+    setTheme(nextTheme);
+  };
+
+  const handleLanguageShortcut = () => {
+    setLocale(nextLocale);
+  };
 
   return (
     <TooltipProvider delayDuration={250}>
@@ -445,6 +484,16 @@ function IconSidebar({
           />
         </nav>
         <div className="flex w-full flex-col items-center gap-2 border-t border-sidebar-border py-3">
+          <SidebarIcon
+            icon={<ThemeShortcutIcon className="size-5" aria-hidden />}
+            label={themeShortcutLabel}
+            onClick={handleThemeShortcut}
+          />
+          <SidebarIcon
+            icon={<Languages className="size-5" aria-hidden />}
+            label={languageShortcutLabel}
+            onClick={handleLanguageShortcut}
+          />
           <Tooltip>
             <TooltipTrigger asChild>
               <Button

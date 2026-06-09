@@ -358,6 +358,7 @@ pub(crate) async fn execute_sql_audit_for_user(
                                 ))
                             },
                         )?,
+                        rollback: Some(result.rollback.clone()),
                     },
                 )
                 .await?;

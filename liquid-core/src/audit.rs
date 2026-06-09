@@ -244,6 +244,34 @@ pub struct RejectSqlAuditRequest {
     pub comment: Option<String>,
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, TS)]
+#[serde(rename_all = "snake_case")]
+#[ts(export)]
+pub enum SqlRollbackStatus {
+    Generated,
+    Unsupported,
+    Failed,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, TS)]
+#[ts(export)]
+pub struct SqlRollbackPlan {
+    pub status: SqlRollbackStatus,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[ts(optional)]
+    pub sql: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[ts(optional)]
+    pub reason: Option<String>,
+    #[serde(
+        default,
+        with = "time::serde::rfc3339::option",
+        skip_serializing_if = "Option::is_none"
+    )]
+    #[ts(optional, type = "string")]
+    pub generated_at: Option<OffsetDateTime>,
+}
+
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, TS)]
 #[ts(export)]
 pub struct SqlAuditExecutionResult {
@@ -254,6 +282,9 @@ pub struct SqlAuditExecutionResult {
     #[serde(default)]
     #[ts(type = "unknown")]
     pub findings: Value,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[ts(optional)]
+    pub rollback: Option<SqlRollbackPlan>,
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize, TS)]
