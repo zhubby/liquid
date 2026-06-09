@@ -10,9 +10,10 @@ use async_trait::async_trait;
 use liquid_core::{
     CompleteDatabaseBackup, DatabaseBackupMetadataStore, DatabaseBackupRecord,
     DatabaseBackupStatus, DatabaseBackupStorageKind, DatabaseBackupStorageMetadata,
-    DatabaseRestoreRecord, ManagedDatabaseConnectionLoader, ManagedDatabaseEngine,
-    ManagedDatabasePoolKey,
+    DatabaseOperationEventType, DatabaseOperationKind, DatabaseRestoreRecord,
+    ManagedDatabaseConnectionLoader, ManagedDatabaseEngine, ManagedDatabasePoolKey,
 };
+use serde_json::json;
 use sha2::{Digest, Sha256};
 use tokio::{process::Command, task::JoinHandle};
 
@@ -215,10 +216,19 @@ impl DatabaseOperationWorker {
         if let Err(error) = self.run_backup(&backup).await {
             let error = truncate_error(&error.to_string());
             tracing::error!(backup_id = %backup.id, error = %error, "database backup failed");
-            let _ = self
+            if let Ok(failed) = self
                 .metadata_store
                 .fail_database_backup(&backup.id, error)
+                .await
+            {
+                self.append_operation_event(
+                    DatabaseOperationKind::Backup,
+                    &failed.id,
+                    DatabaseOperationEventType::Failed,
+                    json!({ "backup": failed }),
+                )
                 .await;
+            }
         }
     }
 
@@ -297,9 +307,17 @@ impl DatabaseOperationWorker {
                 pg_dump_version: dump.pg_dump_version,
             }
         };
-        self.metadata_store
+        let completed = self
+            .metadata_store
             .complete_database_backup(&backup.id, complete)
             .await?;
+        self.append_operation_event(
+            DatabaseOperationKind::Backup,
+            &completed.id,
+            DatabaseOperationEventType::Succeeded,
+            json!({ "backup": completed }),
+        )
+        .await;
 
         Ok(())
     }
@@ -308,10 +326,19 @@ impl DatabaseOperationWorker {
         if let Err(error) = self.run_restore(&restore).await {
             let error = truncate_error(&error.to_string());
             tracing::error!(restore_id = %restore.id, error = %error, "database restore failed");
-            let _ = self
+            if let Ok(failed) = self
                 .metadata_store
                 .fail_database_restore(&restore.id, error)
+                .await
+            {
+                self.append_operation_event(
+                    DatabaseOperationKind::Restore,
+                    &failed.id,
+                    DatabaseOperationEventType::Failed,
+                    json!({ "restore": failed }),
+                )
                 .await;
+            }
         }
     }
 
@@ -378,12 +405,42 @@ impl DatabaseOperationWorker {
             .restore_postgres(&spec, &file_path)
             .await
             .map_err(|error| anyhow!(redact(&error.to_string(), &spec.password)))?;
-        self.metadata_store
+        let completed = self
+            .metadata_store
             .complete_database_restore(&restore.id)
             .await?;
+        self.append_operation_event(
+            DatabaseOperationKind::Restore,
+            &completed.id,
+            DatabaseOperationEventType::Succeeded,
+            json!({ "restore": completed }),
+        )
+        .await;
         let _ = tokio::fs::remove_file(file_path).await;
 
         Ok(())
+    }
+
+    async fn append_operation_event(
+        &self,
+        operation_kind: DatabaseOperationKind,
+        operation_id: &str,
+        event_type: DatabaseOperationEventType,
+        payload: serde_json::Value,
+    ) {
+        if let Err(error) = self
+            .metadata_store
+            .append_database_operation_event(operation_kind, operation_id, event_type, payload)
+            .await
+        {
+            tracing::warn!(
+                operation_kind = %operation_kind.as_str(),
+                operation_id,
+                event_type = %event_type.as_str(),
+                error = %error,
+                "failed to append database operation event"
+            );
+        }
     }
 
     fn object_key(&self, backup: &DatabaseBackupRecord) -> String {
@@ -630,6 +687,11 @@ mod tests {
             status: DatabaseBackupStatus::Running,
             phase: "running".to_owned(),
             progress_percent: 1,
+            schedule_id: None,
+            trigger: liquid_core::DatabaseBackupTrigger::Immediate,
+            scheduled_for: None,
+            conversation_id: None,
+            created_from_turn_id: None,
             storage: None,
             postgres_server_version: None,
             pg_dump_version: None,

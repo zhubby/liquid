@@ -1,6 +1,6 @@
 use anyhow::{Result, bail};
 use async_trait::async_trait;
-use liquid_core::AgentActionKind;
+use liquid_core::{AgentActionKind, AgentResourceKind};
 use liquid_llm::{ToolCall, ToolDefinition};
 use serde::Deserialize;
 use serde_json::{Value, json};
@@ -23,12 +23,14 @@ const WORKBENCH_PROPOSAL_TOOL_NAMES: &[&str] = &[
     "propose_sql_operation",
     "propose_datapanel_card_action",
     "propose_sql_audit_decision",
+    "propose_database_restore",
 ];
 
 pub(super) fn register_workbench_proposal_tools(tools: &mut ToolRegistry) {
     tools.register(ProposeSqlOperationTool);
     tools.register(ProposeDatapanelCardActionTool);
     tools.register(ProposeSqlAuditDecisionTool);
+    tools.register(ProposeDatabaseRestoreTool);
 }
 
 pub(super) fn workbench_proposal_tool_names() -> Vec<String> {
@@ -82,6 +84,27 @@ pub(super) fn proposal_tool_call_to_suggestion(
                 args.sql_audit_id,
                 context,
             )
+        }
+        "propose_database_restore" => {
+            let args: ProposeDatabaseRestoreArgs = serde_json::from_str(&call.arguments)?;
+            if !args.confirm_destructive_restore {
+                bail!("propose_database_restore requires confirm_destructive_restore=true");
+            }
+
+            Ok(WorkbenchActionSuggestion {
+                kind: AgentActionKind::StartDatabaseRestore,
+                title: args.title,
+                description: args.description,
+                payload: json!({
+                    "backup_id": args.backup_id,
+                    "target_managed_database_id": args.target_managed_database_id,
+                    "purpose": args.purpose,
+                    "confirm_destructive_restore": true,
+                }),
+                resource_kind: Some(AgentResourceKind::DatabaseRestore),
+                resource_id: None,
+                requires_confirmation: true,
+            })
         }
         _ => bail!("unsupported workbench proposal tool: {}", call.name),
     }
@@ -284,6 +307,65 @@ impl AgentTool for ProposeSqlAuditDecisionTool {
     }
 }
 
+#[derive(Debug, Default, Clone)]
+struct ProposeDatabaseRestoreTool;
+
+#[async_trait]
+impl AgentTool for ProposeDatabaseRestoreTool {
+    fn definition(&self) -> ToolDefinition {
+        ToolDefinition::new(
+            "propose_database_restore",
+            "Create a user-confirmed destructive PostgreSQL database restore proposal. This queues restore work only after confirmation.",
+            json!({
+                "type": "object",
+                "properties": {
+                    "title": { "type": "string" },
+                    "description": { "type": "string" },
+                    "backup_id": {
+                        "type": "string",
+                        "description": "Succeeded backup id to restore from."
+                    },
+                    "target_managed_database_id": {
+                        "type": "string",
+                        "description": "Managed database id to restore into."
+                    },
+                    "purpose": {
+                        "type": "string",
+                        "description": "Human-readable reason for the destructive restore."
+                    },
+                    "confirm_destructive_restore": {
+                        "type": "boolean",
+                        "description": "Must be true to acknowledge that restore may delete or replace target database objects."
+                    }
+                },
+                "required": [
+                    "title",
+                    "description",
+                    "backup_id",
+                    "target_managed_database_id",
+                    "purpose",
+                    "confirm_destructive_restore"
+                ],
+                "additionalProperties": false
+            }),
+        )
+    }
+
+    async fn execute(&self, arguments: Value) -> Result<ToolOutput> {
+        let args: ProposeDatabaseRestoreArgs = serde_json::from_value(arguments)?;
+        if !args.confirm_destructive_restore {
+            bail!("propose_database_restore requires confirm_destructive_restore=true");
+        }
+
+        Ok(ToolOutput::json(json!({
+            "ok": true,
+            "type": "action_proposal",
+            "kind": "start_database_restore",
+            "title": args.title,
+        })))
+    }
+}
+
 #[derive(Debug, Deserialize)]
 #[serde(deny_unknown_fields)]
 struct ProposeSqlOperationArgs {
@@ -305,6 +387,16 @@ struct ProposeSqlAuditDecisionArgs {
     title: String,
     description: String,
     sql_audit_id: String,
+}
+
+#[derive(Debug, Deserialize)]
+struct ProposeDatabaseRestoreArgs {
+    title: String,
+    description: String,
+    backup_id: String,
+    target_managed_database_id: String,
+    purpose: String,
+    confirm_destructive_restore: bool,
 }
 
 #[derive(Debug, Clone, Copy, Deserialize)]

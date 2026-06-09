@@ -9,9 +9,11 @@ mod workbench;
 
 pub use agent::{SqlAuditAgent, ToolCallingSqlAuditAgent};
 pub use database_operations::{
-    BackupObjectStore, DatabaseBackupWorkerConfig, DatabaseDumpResult, DatabaseOperationWorker,
+    BackupObjectStore, DatabaseBackupScheduler, DatabaseBackupSchedulerConfig,
+    DatabaseBackupWorkerConfig, DatabaseDumpResult, DatabaseOperationWorker,
     DatabaseProcessExecutor, DatabaseRestoreResult, DefaultDatabaseProcessExecutor,
     ObjectStoreReadResult, ObjectStoreWriteResult, S3BackupObjectStore, S3BackupObjectStoreConfig,
+    next_backup_run_at, validate_backup_schedule,
 };
 pub use liquid_core::{SqlAuditFinding, SqlAuditReport, SqlAuditRequest};
 pub use mock::MockSqlAuditAgent;

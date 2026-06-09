@@ -5,6 +5,10 @@ use liquid_agent::{
     execute_approved_write_sql_with_config,
 };
 use liquid_config::WorkbenchConfig;
+use liquid_core::{
+    CompleteDatabaseBackup, DatabaseBackupMetadataStore, DatabaseBackupMetadataStoreError,
+    DatabaseBackupRecord, DatabaseBackupStatus, DatabaseRestoreRecord,
+};
 use liquid_core::{ManagedDatabaseConnectionLoader, ManagedDatabasePoolPolicy};
 use liquid_storage::{LiquidStore, ManagedDatabasePoolManager};
 use sqlx::PgPool;
@@ -62,6 +66,7 @@ impl ManagedDatabaseConnectionTester for DefaultManagedDatabaseConnectionTester 
 pub struct ApiState {
     pub(crate) agent: Arc<dyn SqlAuditAgent>,
     pub(crate) store: Arc<dyn LiquidStore>,
+    pub(crate) database_backups: Arc<dyn DatabaseBackupMetadataStore>,
     pub(crate) managed_database_pools: Arc<ManagedDatabasePoolManager>,
     pub(crate) sql_metadata_required: bool,
     pub(crate) sql_execution: PostgresToolExecutionMode,
@@ -184,11 +189,164 @@ impl ApiState {
             chat_sql_executor,
             managed_database_connection_tester,
             workbench: WorkbenchConfig::default(),
+            database_backups: Arc::new(UnsupportedDatabaseBackupStore),
         }
     }
 
     pub fn with_workbench_config(mut self, workbench: WorkbenchConfig) -> Self {
         self.workbench = workbench;
         self
+    }
+
+    pub fn with_database_backup_store(
+        mut self,
+        database_backups: Arc<dyn DatabaseBackupMetadataStore>,
+    ) -> Self {
+        self.database_backups = database_backups;
+        self
+    }
+}
+
+#[derive(Debug)]
+struct UnsupportedDatabaseBackupStore;
+
+#[async_trait::async_trait]
+impl DatabaseBackupMetadataStore for UnsupportedDatabaseBackupStore {
+    async fn create_database_backup(
+        &self,
+        _owner_user_id: &str,
+        _source_managed_database_id: &str,
+        _purpose: Option<String>,
+    ) -> Result<DatabaseBackupRecord, DatabaseBackupMetadataStoreError> {
+        Err(DatabaseBackupMetadataStoreError::Backend(
+            "database backups are not configured".to_owned(),
+        ))
+    }
+
+    async fn get_database_backup(
+        &self,
+        _owner_user_id: &str,
+        _id: &str,
+    ) -> Result<DatabaseBackupRecord, DatabaseBackupMetadataStoreError> {
+        Err(DatabaseBackupMetadataStoreError::NotFound)
+    }
+
+    async fn list_database_backups(
+        &self,
+        _owner_user_id: &str,
+        _source_managed_database_id: Option<&str>,
+        _status: Option<DatabaseBackupStatus>,
+        _limit: i64,
+    ) -> Result<Vec<DatabaseBackupRecord>, DatabaseBackupMetadataStoreError> {
+        Ok(Vec::new())
+    }
+
+    async fn delete_database_backup(
+        &self,
+        _owner_user_id: &str,
+        _id: &str,
+    ) -> Result<DatabaseBackupRecord, DatabaseBackupMetadataStoreError> {
+        Err(DatabaseBackupMetadataStoreError::NotFound)
+    }
+
+    async fn create_database_restore(
+        &self,
+        _owner_user_id: &str,
+        _backup_id: &str,
+        _target_managed_database_id: &str,
+        _purpose: String,
+    ) -> Result<DatabaseRestoreRecord, DatabaseBackupMetadataStoreError> {
+        Err(DatabaseBackupMetadataStoreError::Backend(
+            "database restores are not configured".to_owned(),
+        ))
+    }
+
+    async fn get_database_restore(
+        &self,
+        _owner_user_id: &str,
+        _id: &str,
+    ) -> Result<DatabaseRestoreRecord, DatabaseBackupMetadataStoreError> {
+        Err(DatabaseBackupMetadataStoreError::NotFound)
+    }
+
+    async fn list_database_restores(
+        &self,
+        _owner_user_id: &str,
+        _backup_id: Option<&str>,
+        _target_managed_database_id: Option<&str>,
+        _status: Option<DatabaseBackupStatus>,
+        _limit: i64,
+    ) -> Result<Vec<DatabaseRestoreRecord>, DatabaseBackupMetadataStoreError> {
+        Ok(Vec::new())
+    }
+
+    async fn claim_next_database_backup(
+        &self,
+        _worker_id: &str,
+    ) -> Result<Option<DatabaseBackupRecord>, DatabaseBackupMetadataStoreError> {
+        Ok(None)
+    }
+
+    async fn update_database_backup_progress(
+        &self,
+        _id: &str,
+        _phase: &str,
+        _progress_percent: i32,
+    ) -> Result<DatabaseBackupRecord, DatabaseBackupMetadataStoreError> {
+        Err(DatabaseBackupMetadataStoreError::NotFound)
+    }
+
+    async fn complete_database_backup(
+        &self,
+        _id: &str,
+        _result: CompleteDatabaseBackup,
+    ) -> Result<DatabaseBackupRecord, DatabaseBackupMetadataStoreError> {
+        Err(DatabaseBackupMetadataStoreError::NotFound)
+    }
+
+    async fn fail_database_backup(
+        &self,
+        _id: &str,
+        _error: String,
+    ) -> Result<DatabaseBackupRecord, DatabaseBackupMetadataStoreError> {
+        Err(DatabaseBackupMetadataStoreError::NotFound)
+    }
+
+    async fn claim_next_database_restore(
+        &self,
+        _worker_id: &str,
+    ) -> Result<Option<DatabaseRestoreRecord>, DatabaseBackupMetadataStoreError> {
+        Ok(None)
+    }
+
+    async fn update_database_restore_progress(
+        &self,
+        _id: &str,
+        _phase: &str,
+        _progress_percent: i32,
+    ) -> Result<DatabaseRestoreRecord, DatabaseBackupMetadataStoreError> {
+        Err(DatabaseBackupMetadataStoreError::NotFound)
+    }
+
+    async fn complete_database_restore(
+        &self,
+        _id: &str,
+    ) -> Result<DatabaseRestoreRecord, DatabaseBackupMetadataStoreError> {
+        Err(DatabaseBackupMetadataStoreError::NotFound)
+    }
+
+    async fn fail_database_restore(
+        &self,
+        _id: &str,
+        _error: String,
+    ) -> Result<DatabaseRestoreRecord, DatabaseBackupMetadataStoreError> {
+        Err(DatabaseBackupMetadataStoreError::NotFound)
+    }
+
+    async fn fail_stale_database_jobs(
+        &self,
+        _stale_after_seconds: i64,
+    ) -> Result<u64, DatabaseBackupMetadataStoreError> {
+        Ok(0)
     }
 }

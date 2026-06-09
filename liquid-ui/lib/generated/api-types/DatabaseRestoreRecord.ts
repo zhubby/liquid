@@ -13,6 +13,8 @@ export type DatabaseRestoreRecord = {
   phase: string;
   progress_percent: number;
   restore_options: unknown;
+  conversation_id?: string;
+  created_from_turn_id?: string;
   error?: string;
   purpose?: string;
   worker_id?: string;

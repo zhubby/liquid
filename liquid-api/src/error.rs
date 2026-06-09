@@ -56,6 +56,14 @@ impl ApiError {
         }
     }
 
+    pub(crate) fn not_found(message: impl Into<String>) -> Self {
+        Self {
+            status: StatusCode::NOT_FOUND,
+            message: message.into(),
+            details: None,
+        }
+    }
+
     pub(crate) fn conflict(message: impl Into<String>) -> Self {
         Self {
             status: StatusCode::CONFLICT,

@@ -4,9 +4,9 @@ use ts_rs::TS;
 
 use crate::{
     AgentActionKind, AgentActionStatus, AgentActiveView, AgentDateRange, AgentMessageRole,
-    AgentResourceKind, AgentTurnStatus, DatapanelCardKind, DatapanelChartConfig,
-    DatapanelQueryResult, ManagedDatabaseEngine, ManagedDatabaseSslMode, SqlRollbackPlan,
-    SqlStatementKind,
+    AgentResourceKind, AgentTurnStatus, DatabaseBackupRecord, DatabaseRestoreRecord,
+    DatapanelCardKind, DatapanelChartConfig, DatapanelQueryResult, ManagedDatabaseEngine,
+    ManagedDatabaseSslMode, SqlRollbackPlan, SqlStatementKind,
 };
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, TS)]
@@ -179,6 +179,12 @@ pub enum ChatMessagePart {
         #[serde(default, skip_serializing_if = "Option::is_none")]
         #[ts(optional)]
         rollback: Option<SqlRollbackPlan>,
+    },
+    DatabaseBackupStatus {
+        backup: DatabaseBackupRecord,
+    },
+    DatabaseRestoreStatus {
+        restore: DatabaseRestoreRecord,
     },
     ActionRef {
         action_id: String,

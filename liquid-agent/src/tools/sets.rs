@@ -2,9 +2,11 @@ use sqlx::PgPool;
 
 use super::{
     database_operations::{
-        DatabaseOperationToolContext, PgDeleteDatabaseBackupTool, PgGetDatabaseBackupTool,
-        PgGetDatabaseRestoreTool, PgListDatabaseBackupsTool, PgListDatabaseRestoresTool,
-        PgStartDatabaseBackupTool, PgStartDatabaseRestoreTool,
+        DatabaseOperationToolContext, PgCreateDatabaseBackupScheduleTool,
+        PgDeleteDatabaseBackupScheduleTool, PgDeleteDatabaseBackupTool, PgGetDatabaseBackupTool,
+        PgGetDatabaseRestoreTool, PgListDatabaseBackupSchedulesTool, PgListDatabaseBackupsTool,
+        PgListDatabaseRestoresTool, PgStartDatabaseBackupTool, PgStartDatabaseRestoreTool,
+        PgUpdateDatabaseBackupScheduleTool,
     },
     postgres::{
         PgDescribeRelationTool, PgExecuteReadonlySqlTool, PgExecuteWriteSqlTool, PgExplainSqlTool,
@@ -29,6 +31,10 @@ const DATABASE_OPERATION_TOOL_NAMES: &[&str] = &[
     "pg_get_database_backup",
     "pg_list_database_backups",
     "pg_delete_database_backup",
+    "pg_create_database_backup_schedule",
+    "pg_list_database_backup_schedules",
+    "pg_update_database_backup_schedule",
+    "pg_delete_database_backup_schedule",
     "pg_start_database_restore",
     "pg_get_database_restore",
     "pg_list_database_restores",
@@ -136,9 +142,25 @@ pub fn database_operation_tools(context: DatabaseOperationToolContext) -> ToolRe
     registry.register(PgGetDatabaseBackupTool::new(context.clone()));
     registry.register(PgListDatabaseBackupsTool::new(context.clone()));
     registry.register(PgDeleteDatabaseBackupTool::new(context.clone()));
+    registry.register(PgCreateDatabaseBackupScheduleTool::new(context.clone()));
+    registry.register(PgListDatabaseBackupSchedulesTool::new(context.clone()));
+    registry.register(PgUpdateDatabaseBackupScheduleTool::new(context.clone()));
+    registry.register(PgDeleteDatabaseBackupScheduleTool::new(context.clone()));
     registry.register(PgStartDatabaseRestoreTool::new(context.clone()));
     registry.register(PgGetDatabaseRestoreTool::new(context.clone()));
     registry.register(PgListDatabaseRestoresTool::new(context));
+    registry
+}
+
+pub fn workbench_database_backup_tools(context: DatabaseOperationToolContext) -> ToolRegistry {
+    let mut registry = ToolRegistry::new();
+    registry.register(PgStartDatabaseBackupTool::new(context.clone()));
+    registry.register(PgGetDatabaseBackupTool::new(context.clone()));
+    registry.register(PgListDatabaseBackupsTool::new(context.clone()));
+    registry.register(PgCreateDatabaseBackupScheduleTool::new(context.clone()));
+    registry.register(PgListDatabaseBackupSchedulesTool::new(context.clone()));
+    registry.register(PgUpdateDatabaseBackupScheduleTool::new(context.clone()));
+    registry.register(PgDeleteDatabaseBackupScheduleTool::new(context));
     registry
 }
 

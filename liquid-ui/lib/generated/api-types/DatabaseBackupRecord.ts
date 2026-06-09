@@ -2,6 +2,7 @@
 import type { DatabaseBackupFormat } from "./DatabaseBackupFormat";
 import type { DatabaseBackupStatus } from "./DatabaseBackupStatus";
 import type { DatabaseBackupStorageMetadata } from "./DatabaseBackupStorageMetadata";
+import type { DatabaseBackupTrigger } from "./DatabaseBackupTrigger";
 import type { ManagedDatabaseSnapshot } from "./ManagedDatabaseSnapshot";
 
 export type DatabaseBackupRecord = {
@@ -12,6 +13,11 @@ export type DatabaseBackupRecord = {
   status: DatabaseBackupStatus;
   phase: string;
   progress_percent: number;
+  schedule_id?: string;
+  trigger: DatabaseBackupTrigger;
+  scheduled_for?: string;
+  conversation_id?: string;
+  created_from_turn_id?: string;
   storage?: DatabaseBackupStorageMetadata;
   postgres_server_version?: string;
   pg_dump_version?: string;

@@ -4,15 +4,18 @@ use anyhow::Context;
 use liquid_agent::{
     LlmWorkbenchAgent, LlmWorkbenchContext, PostgresToolConfig, PostgresToolExecutionMode,
     ToolRegistry, WorkbenchResponse, WorkbenchToolStep,
-    tools::sets::workbench_readonly_postgres_tools,
+    tools::{
+        DatabaseOperationToolContext,
+        sets::{workbench_database_backup_tools, workbench_readonly_postgres_tools},
+    },
 };
 use liquid_core::{
     AgentAction, AgentActionKind, AgentEventRecord, AgentEventType, AgentMessageRole,
     AgentResourceKind, AgentTurn, AgentTurnStatus, ApproveSqlAuditRequest,
     CreateAgentActionRequest, CreateDatapanelCardRequest, CreateSqlAuditRequest, Datapanel,
     DatapanelCard, DatapanelCardKind, DatapanelCardLayout, DatapanelChartConfig,
-    DatapanelChartType, DatapanelQueryResult, ManagedDatabasePoolKey, PublicUser,
-    RejectSqlAuditRequest, SqlAuditRecord, SqlAuditStatus,
+    DatapanelChartType, DatapanelQueryResult, EnqueueDatabaseRestore, ManagedDatabasePoolKey,
+    PublicUser, RejectSqlAuditRequest, SqlAuditRecord, SqlAuditStatus,
 };
 use liquid_storage::SqlAuditListFilters;
 use serde::{Deserialize, Serialize};
@@ -52,6 +55,14 @@ struct CreateSqlAuditActionPayload {
 #[derive(Debug, Deserialize)]
 struct SqlAuditActionPayload {
     sql_audit_id: String,
+}
+
+#[derive(Debug, Deserialize)]
+struct StartDatabaseRestoreActionPayload {
+    backup_id: String,
+    target_managed_database_id: String,
+    purpose: String,
+    confirm_destructive_restore: bool,
 }
 
 #[derive(Debug, Clone, Deserialize, Serialize)]
@@ -300,22 +311,27 @@ async fn workbench_tool_registry(
     owner_user_id: &str,
     turn: &AgentTurn,
 ) -> anyhow::Result<ToolRegistry> {
-    let Some(managed_database_id) = turn.managed_database_id.as_deref() else {
-        return Ok(ToolRegistry::new());
-    };
-    let pool = state
-        .managed_database_pools
-        .get_pool(ManagedDatabasePoolKey::new(
-            owner_user_id.to_owned(),
-            managed_database_id.to_owned(),
-        ))
-        .await?;
+    let mut registry = ToolRegistry::new();
+    if let Some(managed_database_id) = turn.managed_database_id.as_deref() {
+        let pool = state
+            .managed_database_pools
+            .get_pool(ManagedDatabasePoolKey::new(
+                owner_user_id.to_owned(),
+                managed_database_id.to_owned(),
+            ))
+            .await?;
+        registry.extend(workbench_readonly_postgres_tools(PostgresToolConfig::new(
+            Some(pool),
+            state.sql_metadata_required,
+            PostgresToolExecutionMode::Readonly,
+        )));
+    }
+    registry.extend(workbench_database_backup_tools(
+        DatabaseOperationToolContext::new(owner_user_id, state.database_backups.clone())
+            .with_chat_context(Some(turn.conversation_id.clone()), Some(turn.id.clone())),
+    ));
 
-    Ok(workbench_readonly_postgres_tools(PostgresToolConfig::new(
-        Some(pool),
-        state.sql_metadata_required,
-        PostgresToolExecutionMode::Readonly,
-    )))
+    Ok(registry)
 }
 
 async fn persist_workbench_response(
@@ -916,11 +932,41 @@ async fn apply_agent_action_inner(
                 AgentEventType::ResourceUpdated,
             ))
         }
+        AgentActionKind::StartDatabaseRestore => {
+            let payload: StartDatabaseRestoreActionPayload =
+                serde_json::from_value(action.payload.clone())
+                    .map_err(|error| ApiError::bad_request(error.to_string()))?;
+            if !payload.confirm_destructive_restore {
+                return Err(ApiError::bad_request(
+                    "confirm_destructive_restore must be true",
+                ));
+            }
+            let restore = state
+                .database_backups
+                .enqueue_database_restore(
+                    owner_user_id,
+                    EnqueueDatabaseRestore {
+                        backup_id: payload.backup_id,
+                        target_managed_database_id: payload.target_managed_database_id,
+                        purpose: payload.purpose,
+                        conversation_id: Some(action.conversation_id.clone()),
+                        created_from_turn_id: Some(action.turn_id.clone()),
+                    },
+                )
+                .await
+                .map_err(|error| ApiError::internal(anyhow::anyhow!(error.to_string())))?;
+
+            Ok((
+                AgentResourceKind::DatabaseRestore,
+                restore.id.clone(),
+                AgentEventType::ResourceCreated,
+                serde_json::json!({ "restore": restore }),
+            ))
+        }
         AgentActionKind::CreateManagedDatabase
         | AgentActionKind::UpdateManagedDatabase
         | AgentActionKind::DeleteManagedDatabase
-        | AgentActionKind::StartDatabaseBackup
-        | AgentActionKind::StartDatabaseRestore => Err(ApiError::conflict(
+        | AgentActionKind::StartDatabaseBackup => Err(ApiError::conflict(
             "this agent action kind is not supported by the workbench API yet",
         )),
     }

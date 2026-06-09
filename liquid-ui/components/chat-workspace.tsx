@@ -158,6 +158,7 @@ export function ChatPanel({
   const listRef = useRef<HTMLDivElement>(null);
   const activeStreamRef = useRef<AbortController | null>(null);
   const activeActionStreamRef = useRef<AbortController | null>(null);
+  const activeConversationStreamRef = useRef<AbortController | null>(null);
   const activeTurnRef = useRef<ChatTurn | null>(null);
   const activeConversationIdRef = useRef(conversation.id);
   const activeSendRef = useRef<string | null>(null);
@@ -219,8 +220,10 @@ export function ChatPanel({
     activeConversationIdRef.current = conversation.id;
     activeStreamRef.current?.abort();
     activeActionStreamRef.current?.abort();
+    activeConversationStreamRef.current?.abort();
     activeStreamRef.current = null;
     activeActionStreamRef.current = null;
+    activeConversationStreamRef.current = null;
     activeTurnRef.current = null;
     activeSendRef.current = null;
     activeActionStreamKeyRef.current = null;
@@ -248,6 +251,38 @@ export function ChatPanel({
         setMessages(state.messages);
         setActions(state.actions);
         setProviderReady(state.providerReady);
+        const lastMessageId = state.messages.at(-1)?.id;
+        const streamController = new AbortController();
+        activeConversationStreamRef.current = streamController;
+        void apiStream<ChatStreamEvent>(
+          `/api/v1/chat/conversations/${conversation.id}/stream${
+            lastMessageId ? `?after_message_id=${encodeURIComponent(lastMessageId)}` : ""
+          }`,
+          {
+            token,
+            signal: streamController.signal,
+            onEvent: (event) => {
+              if (
+                activeConversationIdRef.current !== conversation.id ||
+                event.type !== "message_created"
+              ) {
+                return;
+              }
+
+              setMessages((current) => upsertMessage(current, event.payload.message));
+            },
+          },
+        ).catch((error) => {
+          if (
+            streamController.signal.aborted ||
+            activeConversationIdRef.current !== conversation.id
+          ) {
+            return;
+          }
+          toast.error(
+            error instanceof Error ? error.message : t.workspace.agentLoadFailed,
+          );
+        });
       } catch (error) {
         if (!cancelled && loadVersionRef.current === loadVersion) {
           toast.error(
@@ -267,13 +302,15 @@ export function ChatPanel({
       cancelled = true;
       activeStreamRef.current?.abort();
       activeActionStreamRef.current?.abort();
+      activeConversationStreamRef.current?.abort();
       activeStreamRef.current = null;
       activeActionStreamRef.current = null;
+      activeConversationStreamRef.current = null;
       activeTurnRef.current = null;
       activeSendRef.current = null;
       activeActionStreamKeyRef.current = null;
     };
-  }, [conversation.id, loadConversationState, t.workspace.agentLoadFailed]);
+  }, [conversation.id, loadConversationState, t.workspace.agentLoadFailed, token]);
 
   useEffect(() => {
     if (!nearBottomRef.current) {
@@ -1492,6 +1529,10 @@ function MessagePart({
       );
     case "sql_execution_summary":
       return <SqlExecutionSummaryCard part={part} />;
+    case "database_backup_status":
+      return <DatabaseBackupStatusCard part={part} />;
+    case "database_restore_status":
+      return <DatabaseRestoreStatusCard part={part} />;
     case "error":
       return (
         <div className="flex items-start gap-2 text-sm">
@@ -1507,6 +1548,127 @@ function MessagePart({
     case "action_ref":
       return null;
   }
+}
+
+type DatabaseBackupStatusPart = Extract<
+  ChatMessagePart,
+  { kind: "database_backup_status" }
+>;
+
+function DatabaseBackupStatusCard({
+  part,
+}: {
+  part: DatabaseBackupStatusPart;
+}) {
+  const { locale } = useI18n();
+  const backup = part.backup;
+  const succeeded = backup.status === "succeeded";
+  const size = backup.storage?.size_bytes;
+
+  return (
+    <article className="overflow-hidden rounded-lg border bg-background text-left shadow-xs">
+      <header className="flex items-start gap-3 border-b bg-muted/35 px-3 py-2">
+        <div
+          className={cn(
+            "mt-0.5 flex size-8 shrink-0 items-center justify-center rounded-md border bg-background",
+            succeeded ? "text-emerald-600" : "text-destructive",
+          )}
+        >
+          {succeeded ? (
+            <Database className="size-4" aria-hidden />
+          ) : (
+            <AlertTriangle className="size-4" aria-hidden />
+          )}
+        </div>
+        <div className="min-w-0">
+          <div className="flex flex-wrap items-center gap-2">
+            <h3 className="text-sm font-medium">Database backup</h3>
+            <Badge variant={succeeded ? "outline" : "destructive"}>
+              {backup.status}
+            </Badge>
+          </div>
+          <div className="mt-1 flex flex-wrap items-center gap-2 text-xs text-muted-foreground">
+            <span>{backup.source.name}</span>
+            <span className="font-mono">{backup.id}</span>
+            {backup.completed_at ? (
+              <span>{dateTimeLabel(backup.completed_at, locale)}</span>
+            ) : null}
+          </div>
+        </div>
+      </header>
+      <div className="grid gap-2 px-3 py-2 text-xs text-muted-foreground sm:grid-cols-2">
+        <span>Storage: {backup.storage?.kind ?? "pending"}</span>
+        <span>Size: {size === undefined ? "unknown" : formatBytes(size)}</span>
+        <span>Phase: {backup.phase}</span>
+        <span>Progress: {backup.progress_percent}%</span>
+      </div>
+      {backup.error ? (
+        <div className="border-t px-3 py-2 text-xs text-destructive">
+          {backup.error}
+        </div>
+      ) : null}
+    </article>
+  );
+}
+
+type DatabaseRestoreStatusPart = Extract<
+  ChatMessagePart,
+  { kind: "database_restore_status" }
+>;
+
+function DatabaseRestoreStatusCard({
+  part,
+}: {
+  part: DatabaseRestoreStatusPart;
+}) {
+  const { locale } = useI18n();
+  const restore = part.restore;
+  const succeeded = restore.status === "succeeded";
+
+  return (
+    <article className="overflow-hidden rounded-lg border bg-background text-left shadow-xs">
+      <header className="flex items-start gap-3 border-b bg-muted/35 px-3 py-2">
+        <div
+          className={cn(
+            "mt-0.5 flex size-8 shrink-0 items-center justify-center rounded-md border bg-background",
+            succeeded ? "text-emerald-600" : "text-destructive",
+          )}
+        >
+          {succeeded ? (
+            <RotateCcw className="size-4" aria-hidden />
+          ) : (
+            <AlertTriangle className="size-4" aria-hidden />
+          )}
+        </div>
+        <div className="min-w-0">
+          <div className="flex flex-wrap items-center gap-2">
+            <h3 className="text-sm font-medium">Database restore</h3>
+            <Badge variant={succeeded ? "outline" : "destructive"}>
+              {restore.status}
+            </Badge>
+          </div>
+          <div className="mt-1 flex flex-wrap items-center gap-2 text-xs text-muted-foreground">
+            <span>{restore.target.name}</span>
+            <span className="font-mono">{restore.id}</span>
+            {restore.completed_at ? (
+              <span>{dateTimeLabel(restore.completed_at, locale)}</span>
+            ) : null}
+          </div>
+        </div>
+      </header>
+      <div className="grid gap-2 px-3 py-2 text-xs text-muted-foreground sm:grid-cols-2">
+        <span>Backup: {restore.backup_id}</span>
+        <span>Phase: {restore.phase}</span>
+        <span>Progress: {restore.progress_percent}%</span>
+        <span>Format: {restore.format}</span>
+      </div>
+      {restore.error ? (
+        <div className="border-t px-3 py-2 text-xs text-destructive">
+          {restore.error}
+        </div>
+      ) : null}
+    </article>
+  );
 }
 
 type QueryResultTablePart = Extract<
@@ -2927,6 +3089,31 @@ function timeLabel(value: string, locale: Locale): string {
     hour: "2-digit",
     minute: "2-digit",
   });
+}
+
+function dateTimeLabel(value: string, locale: Locale): string {
+  return new Date(value).toLocaleString(locale, {
+    month: "short",
+    day: "2-digit",
+    hour: "2-digit",
+    minute: "2-digit",
+  });
+}
+
+function formatBytes(value: number): string {
+  if (!Number.isFinite(value) || value < 0) {
+    return "unknown";
+  }
+
+  const units = ["B", "KB", "MB", "GB", "TB"];
+  let size = value;
+  let unitIndex = 0;
+  while (size >= 1024 && unitIndex < units.length - 1) {
+    size /= 1024;
+    unitIndex += 1;
+  }
+
+  return `${size >= 10 || unitIndex === 0 ? size.toFixed(0) : size.toFixed(1)} ${units[unitIndex]}`;
 }
 
 function extractPreCode(children: ReactNode) {

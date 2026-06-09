@@ -4,12 +4,15 @@ mod restore;
 use std::sync::Arc;
 
 use anyhow::{Result, bail};
-use liquid_core::{DatabaseBackupMetadataStore, DatabaseBackupStatus};
+use liquid_core::{
+    DatabaseBackupMetadataStore, DatabaseBackupScheduleStatus, DatabaseBackupStatus,
+};
 use serde_json::Value;
 
 pub(crate) use backup::{
-    PgDeleteDatabaseBackupTool, PgGetDatabaseBackupTool, PgListDatabaseBackupsTool,
-    PgStartDatabaseBackupTool,
+    PgCreateDatabaseBackupScheduleTool, PgDeleteDatabaseBackupScheduleTool,
+    PgDeleteDatabaseBackupTool, PgGetDatabaseBackupTool, PgListDatabaseBackupSchedulesTool,
+    PgListDatabaseBackupsTool, PgStartDatabaseBackupTool, PgUpdateDatabaseBackupScheduleTool,
 };
 pub(crate) use restore::{
     PgGetDatabaseRestoreTool, PgListDatabaseRestoresTool, PgStartDatabaseRestoreTool,
@@ -19,6 +22,8 @@ pub(crate) use restore::{
 pub struct DatabaseOperationToolContext {
     owner_user_id: String,
     metadata_store: Arc<dyn DatabaseBackupMetadataStore>,
+    conversation_id: Option<String>,
+    turn_id: Option<String>,
 }
 
 impl DatabaseOperationToolContext {
@@ -29,7 +34,19 @@ impl DatabaseOperationToolContext {
         Self {
             owner_user_id: owner_user_id.into(),
             metadata_store,
+            conversation_id: None,
+            turn_id: None,
         }
+    }
+
+    pub fn with_chat_context(
+        mut self,
+        conversation_id: Option<String>,
+        turn_id: Option<String>,
+    ) -> Self {
+        self.conversation_id = conversation_id;
+        self.turn_id = turn_id;
+        self
     }
 }
 
@@ -43,6 +60,38 @@ fn required_string_arg(arguments: &Value, name: &str, tool: &str) -> Result<Stri
     }
 
     Ok(value.to_owned())
+}
+
+fn optional_schedule_status_arg(
+    arguments: &Value,
+    name: &str,
+) -> Result<Option<DatabaseBackupScheduleStatus>> {
+    arguments
+        .get(name)
+        .map(|value| {
+            let Some(value) = value.as_str() else {
+                bail!("{name} must be a string");
+            };
+            match value.trim() {
+                "active" => Ok(DatabaseBackupScheduleStatus::Active),
+                "paused" => Ok(DatabaseBackupScheduleStatus::Paused),
+                "deleted" => Ok(DatabaseBackupScheduleStatus::Deleted),
+                other => bail!("{name} must be one of active, paused, or deleted; got {other}"),
+            }
+        })
+        .transpose()
+}
+
+fn optional_i32_arg(arguments: &Value, name: &str) -> Result<Option<i32>> {
+    arguments
+        .get(name)
+        .map(|value| {
+            let Some(value) = value.as_i64() else {
+                bail!("{name} must be an integer");
+            };
+            i32::try_from(value).map_err(|_| anyhow::anyhow!("{name} is out of range"))
+        })
+        .transpose()
 }
 
 fn optional_string_arg(arguments: &Value, name: &str) -> Result<Option<String>> {

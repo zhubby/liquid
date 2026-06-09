@@ -1,4 +1,5 @@
 use std::{
+    collections::HashSet,
     convert::Infallible,
     time::{Duration, Instant},
 };
@@ -20,8 +21,9 @@ use liquid_core::{
     ChatSqlExecutionResponse, ChatStreamEvent, ChatStreamStage, ChatToolStatus, ChatTurn,
     ChatTurnDashboardContext, CreateAgentConversationRequest, CreateAgentTurnRequest,
     CreateChatConversationRequest, CreateChatSqlExecutionRequest, CreateChatTurnRequest,
-    DatapanelQueryResult, ManagedDatabase, ManagedDatabasePoolKey, SqlAuditRecord, SqlRollbackPlan,
-    SqlStatementKind, UpdateAgentConversationRequest, UpdateChatConversationRequest,
+    DatabaseBackupRecord, DatabaseRestoreRecord, DatapanelQueryResult, ManagedDatabase,
+    ManagedDatabasePoolKey, SqlAuditRecord, SqlRollbackPlan, SqlStatementKind,
+    UpdateAgentConversationRequest, UpdateChatConversationRequest,
 };
 use liquid_storage::StorageError;
 use serde::Deserialize;
@@ -56,6 +58,10 @@ pub(crate) fn routes() -> Router<ApiState> {
         .route(
             "/api/v1/chat/conversations/{conversation_id}/messages",
             get(list_messages),
+        )
+        .route(
+            "/api/v1/chat/conversations/{conversation_id}/stream",
+            get(stream_conversation),
         )
         .route(
             "/api/v1/chat/conversations/{conversation_id}/actions",
@@ -98,6 +104,11 @@ struct ListActionsQuery {
 #[derive(Debug, Deserialize)]
 struct StreamQuery {
     after_seq: Option<i32>,
+}
+
+#[derive(Debug, Deserialize)]
+struct ConversationStreamQuery {
+    after_message_id: Option<String>,
 }
 
 async fn list_conversations(
@@ -235,6 +246,71 @@ async fn list_messages(
     }
 
     Ok(Json(messages))
+}
+
+async fn stream_conversation(
+    State(state): State<ApiState>,
+    headers: HeaderMap,
+    Path(conversation_id): Path<String>,
+    Query(query): Query<ConversationStreamQuery>,
+) -> Result<Sse<impl Stream<Item = Result<Event, Infallible>>>, ApiError> {
+    let user = authenticated_user(&state, &headers).await?;
+    state
+        .store
+        .get_agent_conversation(&user.id, &conversation_id)
+        .await?;
+    let store = state.store.clone();
+    let owner_user_id = user.id;
+    let mut seen_message_ids = HashSet::<String>::new();
+    let mut after_message_id = query.after_message_id;
+
+    let events = stream! {
+        loop {
+            match store
+                .list_agent_messages(&owner_user_id, &conversation_id, 100, None)
+                .await
+            {
+                Ok(messages) => {
+                    let mut should_emit = after_message_id.is_none();
+                    for message in messages {
+                        if is_timeline_only_message(&message) {
+                            continue;
+                        }
+                        if let Some(after) = after_message_id.as_deref() {
+                            if message.id == after {
+                                should_emit = true;
+                                continue;
+                            }
+                            if !should_emit {
+                                seen_message_ids.insert(message.id);
+                                continue;
+                            }
+                        }
+                        if seen_message_ids.insert(message.id.clone()) {
+                            yield Ok(sse_chat_event(ChatStreamEvent::MessageCreated {
+                                message: chat_message(message),
+                            }));
+                        }
+                    }
+                    after_message_id = None;
+                }
+                Err(error) => {
+                    yield Ok(sse_chat_event(ChatStreamEvent::TurnFailed {
+                        turn_id: conversation_id.clone(),
+                        error_code: ChatErrorCode::StorageError,
+                        message_key: ChatErrorCode::StorageError.message_key().to_owned(),
+                        message: error.to_string(),
+                    }));
+                    break;
+                }
+            }
+
+            yield Ok(Event::default().event("ping").data("{}"));
+            sleep(Duration::from_millis(1000)).await;
+        }
+    };
+
+    Ok(Sse::new(events).keep_alive(KeepAlive::default()))
 }
 
 async fn list_actions(
@@ -1785,6 +1861,7 @@ fn chat_message_with_sql_mode(
     if message.role == AgentMessageRole::Assistant {
         parts.extend(query_result_table_parts(message.metadata.as_ref()));
         parts.extend(sql_execution_summary_parts(message.metadata.as_ref()));
+        parts.extend(database_operation_status_parts(message.metadata.as_ref()));
     }
 
     ChatMessage {
@@ -1862,6 +1939,30 @@ fn sql_execution_summary_parts(metadata: Option<&Value>) -> Vec<ChatMessagePart>
             rollback: part.rollback,
         })
         .collect()
+}
+
+fn database_operation_status_parts(metadata: Option<&Value>) -> Vec<ChatMessagePart> {
+    let Some(metadata) = metadata else {
+        return Vec::new();
+    };
+
+    let mut parts = Vec::new();
+    if let Some(backup) = metadata
+        .get("database_backup")
+        .cloned()
+        .and_then(|value| serde_json::from_value::<DatabaseBackupRecord>(value).ok())
+    {
+        parts.push(ChatMessagePart::DatabaseBackupStatus { backup });
+    }
+    if let Some(restore) = metadata
+        .get("database_restore")
+        .cloned()
+        .and_then(|value| serde_json::from_value::<DatabaseRestoreRecord>(value).ok())
+    {
+        parts.push(ChatMessagePart::DatabaseRestoreStatus { restore });
+    }
+
+    parts
 }
 
 fn default_true() -> bool {

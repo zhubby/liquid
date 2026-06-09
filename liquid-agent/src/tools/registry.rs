@@ -31,6 +31,10 @@ impl ToolRegistry {
         self.tools.insert(definition.name, Arc::new(tool));
     }
 
+    pub fn extend(&mut self, other: ToolRegistry) {
+        self.tools.extend(other.tools);
+    }
+
     pub fn definitions(&self) -> Vec<ToolDefinition> {
         self.tools.values().map(|tool| tool.definition()).collect()
     }

@@ -3,15 +3,18 @@ use liquid_core::{
     AgentAction, AgentActionStatus, AgentConversation, AgentEventRecord, AgentEventType,
     AgentMessage, AgentMessageRole, AgentResourceKind, AgentTurn, AgentTurnStatus,
     ApproveSqlAuditRequest, AuthResponse, CompleteDatabaseBackup, CreateAgentActionRequest,
-    CreateAgentConversationRequest, CreateAgentTurnRequest, CreateDatapanelCardRequest,
-    CreateManagedDatabaseRequest, DatabaseBackupMetadataStore, DatabaseBackupMetadataStoreError,
-    DatabaseBackupRecord, DatabaseBackupStatus, DatabaseRestoreRecord, Datapanel, DatapanelCard,
-    DatapanelCardLayoutUpdate, DatapanelExport, DatapanelPreview, DatapanelPreviewLink,
-    DatapanelQueryResult, LlmProviderSettings, LoginRequest, ManagedDatabase,
-    ManagedDatabaseConnectionLoader, ManagedDatabaseConnectionLoaderError,
-    ManagedDatabaseConnectionSpec, ManagedDatabasePoolKey, PublicUser, RegisterRequest,
-    RejectSqlAuditRequest, ResolvedLlmProviderSettings, SqlAuditExecutionResult, SqlAuditRecord,
-    UpdateAgentConversationRequest, UpdateCurrentUserRequest, UpdateDatapanelCardRequest,
+    CreateAgentConversationRequest, CreateAgentTurnRequest, CreateDatabaseBackupScheduleRequest,
+    CreateDatapanelCardRequest, CreateManagedDatabaseRequest, DatabaseBackupMetadataStore,
+    DatabaseBackupMetadataStoreError, DatabaseBackupRecord, DatabaseBackupScheduleRecord,
+    DatabaseBackupScheduleStatus, DatabaseBackupStatus, DatabaseOperationEventRecord,
+    DatabaseOperationEventType, DatabaseOperationKind, DatabaseRestoreRecord, Datapanel,
+    DatapanelCard, DatapanelCardLayoutUpdate, DatapanelExport, DatapanelPreview,
+    DatapanelPreviewLink, DatapanelQueryResult, EnqueueDatabaseBackup, EnqueueDatabaseRestore,
+    LlmProviderSettings, LoginRequest, ManagedDatabase, ManagedDatabaseConnectionLoader,
+    ManagedDatabaseConnectionLoaderError, ManagedDatabaseConnectionSpec, ManagedDatabasePoolKey,
+    PublicUser, RegisterRequest, RejectSqlAuditRequest, ResolvedLlmProviderSettings,
+    SqlAuditExecutionResult, SqlAuditRecord, UpdateAgentConversationRequest,
+    UpdateCurrentUserRequest, UpdateDatabaseBackupScheduleRequest, UpdateDatapanelCardRequest,
     UpdateDatapanelRequest, UpdateLlmProviderSettingsRequest, UpdateManagedDatabaseRequest,
     UpdatePasswordRequest,
 };
@@ -108,6 +111,16 @@ impl DatabaseBackupMetadataStore for Storage {
         .map_err(database_backups::metadata_store_error)
     }
 
+    async fn enqueue_database_backup(
+        &self,
+        owner_user_id: &str,
+        request: EnqueueDatabaseBackup,
+    ) -> Result<DatabaseBackupRecord, DatabaseBackupMetadataStoreError> {
+        database_backups::enqueue_database_backup(self, owner_user_id, request)
+            .await
+            .map_err(database_backups::metadata_store_error)
+    }
+
     async fn get_database_backup(
         &self,
         owner_user_id: &str,
@@ -162,6 +175,16 @@ impl DatabaseBackupMetadataStore for Storage {
         )
         .await
         .map_err(database_backups::metadata_store_error)
+    }
+
+    async fn enqueue_database_restore(
+        &self,
+        owner_user_id: &str,
+        request: EnqueueDatabaseRestore,
+    ) -> Result<DatabaseRestoreRecord, DatabaseBackupMetadataStoreError> {
+        database_backups::enqueue_database_restore(self, owner_user_id, request)
+            .await
+            .map_err(database_backups::metadata_store_error)
     }
 
     async fn get_database_restore(
@@ -280,6 +303,150 @@ impl DatabaseBackupMetadataStore for Storage {
         database_backups::fail_stale_database_jobs(self, stale_after_seconds)
             .await
             .map_err(database_backups::metadata_store_error)
+    }
+
+    async fn create_database_backup_schedule(
+        &self,
+        owner_user_id: &str,
+        request: CreateDatabaseBackupScheduleRequest,
+        conversation_id: Option<String>,
+        created_from_turn_id: Option<String>,
+        next_run_at: time::OffsetDateTime,
+    ) -> Result<DatabaseBackupScheduleRecord, DatabaseBackupMetadataStoreError> {
+        database_backups::create_database_backup_schedule(
+            self,
+            owner_user_id,
+            request,
+            conversation_id,
+            created_from_turn_id,
+            next_run_at,
+        )
+        .await
+        .map_err(database_backups::metadata_store_error)
+    }
+
+    async fn get_database_backup_schedule(
+        &self,
+        owner_user_id: &str,
+        id: &str,
+    ) -> Result<DatabaseBackupScheduleRecord, DatabaseBackupMetadataStoreError> {
+        database_backups::get_database_backup_schedule(self, owner_user_id, id)
+            .await
+            .map_err(database_backups::metadata_store_error)
+    }
+
+    async fn list_database_backup_schedules(
+        &self,
+        owner_user_id: &str,
+        managed_database_id: Option<&str>,
+        status: Option<DatabaseBackupScheduleStatus>,
+        limit: i64,
+    ) -> Result<Vec<DatabaseBackupScheduleRecord>, DatabaseBackupMetadataStoreError> {
+        database_backups::list_database_backup_schedules(
+            self,
+            owner_user_id,
+            managed_database_id,
+            status,
+            limit,
+        )
+        .await
+        .map_err(database_backups::metadata_store_error)
+    }
+
+    async fn update_database_backup_schedule(
+        &self,
+        owner_user_id: &str,
+        id: &str,
+        request: UpdateDatabaseBackupScheduleRequest,
+        next_run_at: Option<time::OffsetDateTime>,
+    ) -> Result<DatabaseBackupScheduleRecord, DatabaseBackupMetadataStoreError> {
+        database_backups::update_database_backup_schedule(
+            self,
+            owner_user_id,
+            id,
+            request,
+            next_run_at,
+        )
+        .await
+        .map_err(database_backups::metadata_store_error)
+    }
+
+    async fn delete_database_backup_schedule(
+        &self,
+        owner_user_id: &str,
+        id: &str,
+    ) -> Result<DatabaseBackupScheduleRecord, DatabaseBackupMetadataStoreError> {
+        database_backups::delete_database_backup_schedule(self, owner_user_id, id)
+            .await
+            .map_err(database_backups::metadata_store_error)
+    }
+
+    async fn claim_due_database_backup_schedule(
+        &self,
+        scheduler_id: &str,
+        now: time::OffsetDateTime,
+    ) -> Result<Option<DatabaseBackupScheduleRecord>, DatabaseBackupMetadataStoreError> {
+        database_backups::claim_due_database_backup_schedule(self, scheduler_id, now)
+            .await
+            .map_err(database_backups::metadata_store_error)
+    }
+
+    async fn complete_database_backup_schedule_enqueue(
+        &self,
+        owner_user_id: &str,
+        id: &str,
+        scheduled_for: time::OffsetDateTime,
+        next_run_at: time::OffsetDateTime,
+    ) -> Result<DatabaseBackupScheduleRecord, DatabaseBackupMetadataStoreError> {
+        database_backups::complete_database_backup_schedule_enqueue(
+            self,
+            owner_user_id,
+            id,
+            scheduled_for,
+            next_run_at,
+        )
+        .await
+        .map_err(database_backups::metadata_store_error)
+    }
+
+    async fn append_database_operation_event(
+        &self,
+        operation_kind: DatabaseOperationKind,
+        operation_id: &str,
+        event_type: DatabaseOperationEventType,
+        payload: Value,
+    ) -> Result<DatabaseOperationEventRecord, DatabaseBackupMetadataStoreError> {
+        database_backups::append_database_operation_event(
+            self,
+            operation_kind,
+            operation_id,
+            event_type,
+            payload,
+        )
+        .await
+        .map_err(database_backups::metadata_store_error)
+    }
+
+    async fn claim_next_database_operation_event(
+        &self,
+    ) -> Result<Option<DatabaseOperationEventRecord>, DatabaseBackupMetadataStoreError> {
+        database_backups::claim_next_database_operation_event(self)
+            .await
+            .map_err(database_backups::metadata_store_error)
+    }
+
+    async fn mark_database_operation_event_delivered(
+        &self,
+        event_id: &str,
+        delivered_message_id: &str,
+    ) -> Result<DatabaseOperationEventRecord, DatabaseBackupMetadataStoreError> {
+        database_backups::mark_database_operation_event_delivered(
+            self,
+            event_id,
+            delivered_message_id,
+        )
+        .await
+        .map_err(database_backups::metadata_store_error)
     }
 }
 

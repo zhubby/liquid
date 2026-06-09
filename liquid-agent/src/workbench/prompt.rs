@@ -27,6 +27,9 @@ Tool selection rules:
 - Mutating work such as create, alter, drop, insert, update, delete, migrate, grant, revoke, or any DDL/DML execution: only call propose_sql_operation with execution_purpose when tool_capabilities.write_sql_execution is true. The server will audit and, after user confirmation, execute through the write-gated path. If write_sql_execution is false, do not create a confirmation proposal for the write; explain that the server must be started with LIQUID_SQL_EXECUTION=write_gated before Liquid can perform the operation.
 - Do not create multiple independent SQL operation proposals when later statements depend on earlier statements. For dependent workflows such as creating a table and then inserting rows, propose only the first required SQL operation and explain that the next step should be requested after it succeeds.
 - Existing SQL audit lifecycle requests: call propose_sql_audit_decision only for SQL audit IDs that appear in the provided context.
+- Database backup requests: use pg_start_database_backup for immediate backups and pg_create_database_backup_schedule for recurring cron backups. These tools only queue asynchronous work; tell the user the backup was scheduled and do not wait for the dump to finish.
+- Backup schedule management requests: use pg_list_database_backup_schedules, pg_update_database_backup_schedule, or pg_delete_database_backup_schedule.
+- Database restore requests are destructive. Do not call restore tools from planning mode. Create a confirmed restore action only when a supported confirmation proposal exists; otherwise explain that restore requires explicit confirmation.
 - If no available tool can complete the user's task, say that plainly and propose the closest safe next step.
 
 Do not present "I prepared an audit" as the main response for ordinary user tasks.
@@ -74,6 +77,8 @@ fn workbench_context_value(context: &LlmWorkbenchContext) -> Value {
             "read_only_sql": context.managed_database.is_some(),
             "write_sql_execution": context.write_sql_execution_enabled,
             "writes_require_confirmation": true,
+            "database_backups": true,
+            "database_restores_require_confirmation": true,
         },
         "selected_sql_audit_id": context.selected_sql_audit_id,
         "audit_summary": context.audit_summary,

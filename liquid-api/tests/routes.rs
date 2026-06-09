@@ -1635,13 +1635,8 @@ async fn spawn_openai_compatible_sse_mock(
             let Ok((mut socket, _addr)) = listener.accept().await else {
                 return;
             };
-            let mut buffer = vec![0; 16 * 1024];
-            let Ok(read) = socket.read(&mut buffer).await else {
-                return;
-            };
-            let request = String::from_utf8_lossy(&buffer[..read]);
-            if let Some((_, body)) = request.split_once("\r\n\r\n")
-                && let Ok(json) = serde_json::from_str::<Value>(body)
+            if let Some(body) = read_http_request_body(&mut socket).await
+                && let Ok(json) = serde_json::from_str::<Value>(&body)
             {
                 *captured_for_task.lock().unwrap() = Some(json);
             }
@@ -1676,13 +1671,8 @@ async fn spawn_delayed_openai_compatible_mock_with_content(
             let Ok((mut socket, _addr)) = listener.accept().await else {
                 return;
             };
-            let mut buffer = vec![0; 16 * 1024];
-            let Ok(read) = socket.read(&mut buffer).await else {
-                return;
-            };
-            let request = String::from_utf8_lossy(&buffer[..read]);
-            if let Some((_, body)) = request.split_once("\r\n\r\n")
-                && let Ok(json) = serde_json::from_str::<Value>(body)
+            if let Some(body) = read_http_request_body(&mut socket).await
+                && let Ok(json) = serde_json::from_str::<Value>(&body)
             {
                 *captured_for_task.lock().unwrap() = Some(json);
             }
@@ -1734,13 +1724,8 @@ where
             let Ok((mut socket, _addr)) = listener.accept().await else {
                 return;
             };
-            let mut buffer = vec![0; 16 * 1024];
-            let Ok(read) = socket.read(&mut buffer).await else {
-                return;
-            };
-            let request = String::from_utf8_lossy(&buffer[..read]);
-            if let Some((_, body)) = request.split_once("\r\n\r\n")
-                && let Ok(json) = serde_json::from_str::<Value>(body)
+            if let Some(body) = read_http_request_body(&mut socket).await
+                && let Ok(json) = serde_json::from_str::<Value>(&body)
             {
                 *captured_for_task.lock().unwrap() = Some(json);
             }
@@ -1788,13 +1773,8 @@ where
             let Ok((mut socket, _addr)) = listener.accept().await else {
                 return;
             };
-            let mut buffer = vec![0; 128 * 1024];
-            let Ok(read) = socket.read(&mut buffer).await else {
-                return;
-            };
-            let request = String::from_utf8_lossy(&buffer[..read]);
-            if let Some((_, body)) = request.split_once("\r\n\r\n")
-                && let Ok(json) = serde_json::from_str::<Value>(body)
+            if let Some(body) = read_http_request_body(&mut socket).await
+                && let Ok(json) = serde_json::from_str::<Value>(&body)
             {
                 captured_for_task.lock().unwrap().push(json);
             }
@@ -1815,6 +1795,50 @@ where
         format!("http://{addr}/v1/chat/completions"),
         captured_bodies,
     )
+}
+
+async fn read_http_request_body(socket: &mut tokio::net::TcpStream) -> Option<String> {
+    let mut buffer = vec![0; 16 * 1024];
+    let mut read = 0;
+
+    loop {
+        if read == buffer.len() {
+            buffer.resize(buffer.len() * 2, 0);
+        }
+
+        let bytes_read = socket.read(&mut buffer[read..]).await.ok()?;
+        if bytes_read == 0 {
+            return None;
+        }
+        read += bytes_read;
+
+        let request = String::from_utf8_lossy(&buffer[..read]);
+        let Some((headers, body)) = request.split_once("\r\n\r\n") else {
+            continue;
+        };
+        let header_len = headers.len() + "\r\n\r\n".len();
+        let content_length = http_content_length(headers).unwrap_or(body.len());
+        let required_len = header_len.checked_add(content_length)?;
+
+        if read >= required_len {
+            return String::from_utf8(buffer[header_len..required_len].to_vec()).ok();
+        }
+
+        if buffer.len() < required_len {
+            buffer.resize(required_len, 0);
+        }
+    }
+}
+
+fn http_content_length(headers: &str) -> Option<usize> {
+    headers.lines().find_map(|line| {
+        let (name, value) = line.split_once(':')?;
+        if name.eq_ignore_ascii_case("content-length") {
+            value.trim().parse().ok()
+        } else {
+            None
+        }
+    })
 }
 
 async fn configure_workbench_llm_provider(
