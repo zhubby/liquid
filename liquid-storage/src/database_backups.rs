@@ -1,11 +1,11 @@
 use liquid_core::{
     CompleteDatabaseBackup, CreateDatabaseBackupScheduleRequest, DatabaseBackupFormat,
-    DatabaseBackupMetadataStoreError, DatabaseBackupRecord, DatabaseBackupScheduleRecord,
-    DatabaseBackupScheduleStatus, DatabaseBackupStatus, DatabaseBackupStorageKind,
-    DatabaseBackupStorageMetadata, DatabaseBackupTrigger, DatabaseOperationEventRecord,
-    DatabaseOperationEventType, DatabaseOperationKind, DatabaseRestoreRecord,
-    EnqueueDatabaseBackup, EnqueueDatabaseRestore, ManagedDatabaseSnapshot,
-    UpdateDatabaseBackupScheduleRequest,
+    DatabaseBackupListFilters, DatabaseBackupListPage, DatabaseBackupMetadataStoreError,
+    DatabaseBackupRecord, DatabaseBackupScheduleRecord, DatabaseBackupScheduleStatus,
+    DatabaseBackupStatus, DatabaseBackupStorageKind, DatabaseBackupStorageMetadata,
+    DatabaseBackupTrigger, DatabaseOperationEventRecord, DatabaseOperationEventType,
+    DatabaseOperationKind, DatabaseRestoreRecord, EnqueueDatabaseBackup, EnqueueDatabaseRestore,
+    ManagedDatabaseSnapshot, UpdateDatabaseBackupScheduleRequest,
 };
 use serde_json::Value;
 use sqlx::Row;
@@ -260,12 +260,75 @@ pub(crate) async fn list_database_backups(
         .collect()
 }
 
+pub(crate) async fn list_database_backups_page(
+    storage: &Storage,
+    owner_user_id: &str,
+    filters: DatabaseBackupListFilters<'_>,
+) -> Result<DatabaseBackupListPage, StorageError> {
+    let page = filters.page.max(1);
+    let page_size = filters.page_size.clamp(1, 100);
+    let offset = (page - 1) * page_size;
+    let status = filters.status.map(DatabaseBackupStatus::as_str);
+    let trigger = filters.trigger.map(DatabaseBackupTrigger::as_str);
+    let total_count = sqlx::query_scalar::<_, i64>(
+        r#"
+        select count(*)
+        from database_backups
+        where owner_user_id = $1::uuid
+          and ($2::uuid is null or source_managed_database_id = $2::uuid)
+          and ($3::text is null or status = $3)
+          and ($4::text is null or trigger = $4)
+        "#,
+    )
+    .bind(owner_user_id)
+    .bind(filters.source_managed_database_id)
+    .bind(status)
+    .bind(trigger)
+    .fetch_one(&storage.pool)
+    .await
+    .map_err(map_database_error)?;
+
+    let rows = sqlx::query_as::<_, DatabaseBackupRow>(&format!(
+        r#"
+        select {DATABASE_BACKUP_COLUMNS}
+        from database_backups
+        where owner_user_id = $1::uuid
+          and ($2::uuid is null or source_managed_database_id = $2::uuid)
+          and ($3::text is null or status = $3)
+          and ($4::text is null or trigger = $4)
+        order by created_at desc
+        limit $5
+        offset $6
+        "#
+    ))
+    .bind(owner_user_id)
+    .bind(filters.source_managed_database_id)
+    .bind(status)
+    .bind(trigger)
+    .bind(page_size)
+    .bind(offset)
+    .fetch_all(&storage.pool)
+    .await
+    .map_err(map_database_error)?;
+    let records = rows
+        .into_iter()
+        .map(DatabaseBackupRecord::try_from)
+        .collect::<Result<Vec<_>, _>>()?;
+
+    Ok(DatabaseBackupListPage {
+        records,
+        total_count,
+        page,
+        page_size,
+    })
+}
+
 pub(crate) async fn delete_database_backup(
     storage: &Storage,
     owner_user_id: &str,
     id: &str,
 ) -> Result<DatabaseBackupRecord, StorageError> {
-    let row = sqlx::query_as::<_, DatabaseBackupRow>(
+    let row = sqlx::query_as::<_, DatabaseBackupRow>(&format!(
         r#"
         update database_backups
         set status = 'deleted',
@@ -276,41 +339,9 @@ pub(crate) async fn delete_database_backup(
         where id = $1::uuid
           and owner_user_id = $2::uuid
           and status <> 'running'
-        returning
-            id::text,
-            owner_user_id::text,
-            source_managed_database_id::text,
-            source_managed_database_name,
-            source_managed_database_engine,
-            source_managed_database_host,
-            source_managed_database_port,
-            source_managed_database_database,
-            source_managed_database_username,
-            source_managed_database_ssl_mode,
-            format,
-            storage_kind,
-            local_path,
-            s3_bucket,
-            s3_key,
-            s3_version_id,
-            s3_etag,
-            size_bytes,
-            checksum_sha256,
-            postgres_server_version,
-            pg_dump_version,
-            status,
-            phase,
-            progress_percent,
-            worker_id,
-            heartbeat_at,
-            started_at,
-            completed_at,
-            error,
-            purpose,
-            created_at,
-            updated_at
-        "#,
-    )
+        returning {DATABASE_BACKUP_COLUMNS}
+        "#
+    ))
     .bind(id)
     .bind(owner_user_id)
     .fetch_optional(&storage.pool)
@@ -477,7 +508,7 @@ pub(crate) async fn claim_next_database_backup(
     worker_id: &str,
 ) -> Result<Option<DatabaseBackupRecord>, StorageError> {
     let worker_id = required_string("worker_id", worker_id)?;
-    let row = sqlx::query_as::<_, DatabaseBackupRow>(
+    let row = sqlx::query_as::<_, DatabaseBackupRow>(&format!(
         r#"
         update database_backups
         set status = 'running',
@@ -496,41 +527,9 @@ pub(crate) async fn claim_next_database_backup(
             for update skip locked
             limit 1
         )
-        returning
-            id::text,
-            owner_user_id::text,
-            source_managed_database_id::text,
-            source_managed_database_name,
-            source_managed_database_engine,
-            source_managed_database_host,
-            source_managed_database_port,
-            source_managed_database_database,
-            source_managed_database_username,
-            source_managed_database_ssl_mode,
-            format,
-            storage_kind,
-            local_path,
-            s3_bucket,
-            s3_key,
-            s3_version_id,
-            s3_etag,
-            size_bytes,
-            checksum_sha256,
-            postgres_server_version,
-            pg_dump_version,
-            status,
-            phase,
-            progress_percent,
-            worker_id,
-            heartbeat_at,
-            started_at,
-            completed_at,
-            error,
-            purpose,
-            created_at,
-            updated_at
-        "#,
-    )
+        returning {DATABASE_BACKUP_COLUMNS}
+        "#
+    ))
     .bind(worker_id)
     .fetch_optional(&storage.pool)
     .await
@@ -640,7 +639,7 @@ pub(crate) async fn claim_next_database_restore(
     worker_id: &str,
 ) -> Result<Option<DatabaseRestoreRecord>, StorageError> {
     let worker_id = required_string("worker_id", worker_id)?;
-    let row = sqlx::query_as::<_, DatabaseRestoreRow>(
+    let row = sqlx::query_as::<_, DatabaseRestoreRow>(&format!(
         r#"
         update database_restore_jobs
         set status = 'running',
@@ -659,33 +658,9 @@ pub(crate) async fn claim_next_database_restore(
             for update skip locked
             limit 1
         )
-        returning
-            id::text,
-            owner_user_id::text,
-            backup_id::text,
-            target_managed_database_id::text,
-            target_managed_database_name,
-            target_managed_database_engine,
-            target_managed_database_host,
-            target_managed_database_port,
-            target_managed_database_database,
-            target_managed_database_username,
-            target_managed_database_ssl_mode,
-            format,
-            restore_options,
-            status,
-            phase,
-            progress_percent,
-            worker_id,
-            heartbeat_at,
-            started_at,
-            completed_at,
-            error,
-            purpose,
-            created_at,
-            updated_at
-        "#,
-    )
+        returning {DATABASE_RESTORE_COLUMNS}
+        "#
+    ))
     .bind(worker_id)
     .fetch_optional(&storage.pool)
     .await
@@ -702,7 +677,7 @@ pub(crate) async fn update_database_restore_progress(
 ) -> Result<DatabaseRestoreRecord, StorageError> {
     let phase = required_string("phase", phase)?;
     let progress_percent = progress_percent.clamp(0, 100);
-    let row = sqlx::query_as::<_, DatabaseRestoreRow>(
+    let row = sqlx::query_as::<_, DatabaseRestoreRow>(&format!(
         r#"
         update database_restore_jobs
         set phase = $2,
@@ -711,33 +686,9 @@ pub(crate) async fn update_database_restore_progress(
             updated_at = now()
         where id = $1::uuid
           and status = 'running'
-        returning
-            id::text,
-            owner_user_id::text,
-            backup_id::text,
-            target_managed_database_id::text,
-            target_managed_database_name,
-            target_managed_database_engine,
-            target_managed_database_host,
-            target_managed_database_port,
-            target_managed_database_database,
-            target_managed_database_username,
-            target_managed_database_ssl_mode,
-            format,
-            restore_options,
-            status,
-            phase,
-            progress_percent,
-            worker_id,
-            heartbeat_at,
-            started_at,
-            completed_at,
-            error,
-            purpose,
-            created_at,
-            updated_at
-        "#,
-    )
+        returning {DATABASE_RESTORE_COLUMNS}
+        "#
+    ))
     .bind(id)
     .bind(phase)
     .bind(progress_percent)
@@ -1236,7 +1187,7 @@ async fn update_backup_progress_row(
     phase: &str,
     progress_percent: i32,
 ) -> Result<DatabaseBackupRow, StorageError> {
-    let row = sqlx::query_as::<_, DatabaseBackupRow>(
+    let row = sqlx::query_as::<_, DatabaseBackupRow>(&format!(
         r#"
         update database_backups
         set phase = $2,
@@ -1245,41 +1196,9 @@ async fn update_backup_progress_row(
             updated_at = now()
         where id = $1::uuid
           and status = 'running'
-        returning
-            id::text,
-            owner_user_id::text,
-            source_managed_database_id::text,
-            source_managed_database_name,
-            source_managed_database_engine,
-            source_managed_database_host,
-            source_managed_database_port,
-            source_managed_database_database,
-            source_managed_database_username,
-            source_managed_database_ssl_mode,
-            format,
-            storage_kind,
-            local_path,
-            s3_bucket,
-            s3_key,
-            s3_version_id,
-            s3_etag,
-            size_bytes,
-            checksum_sha256,
-            postgres_server_version,
-            pg_dump_version,
-            status,
-            phase,
-            progress_percent,
-            worker_id,
-            heartbeat_at,
-            started_at,
-            completed_at,
-            error,
-            purpose,
-            created_at,
-            updated_at
-        "#,
-    )
+        returning {DATABASE_BACKUP_COLUMNS}
+        "#
+    ))
     .bind(id)
     .bind(phase)
     .bind(progress_percent)

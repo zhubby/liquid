@@ -1,15 +1,16 @@
 use axum::{
     Json, Router,
     extract::{Path, Query, State},
-    http::{HeaderMap, StatusCode},
+    http::{HeaderMap, HeaderValue, StatusCode},
     routing::get,
 };
 use liquid_agent::validate_backup_schedule;
 use liquid_core::{
     CreateDatabaseBackupRequest, CreateDatabaseBackupScheduleRequest, CreateDatabaseRestoreRequest,
-    DatabaseBackupMetadataStoreError, DatabaseBackupRecord, DatabaseBackupScheduleRecord,
-    DatabaseBackupScheduleStatus, DatabaseBackupStatus, DatabaseRestoreRecord,
-    EnqueueDatabaseBackup, EnqueueDatabaseRestore, UpdateDatabaseBackupScheduleRequest,
+    DatabaseBackupListFilters, DatabaseBackupMetadataStoreError, DatabaseBackupRecord,
+    DatabaseBackupScheduleRecord, DatabaseBackupScheduleStatus, DatabaseBackupStatus,
+    DatabaseBackupTrigger, DatabaseRestoreRecord, EnqueueDatabaseBackup, EnqueueDatabaseRestore,
+    UpdateDatabaseBackupScheduleRequest,
 };
 use serde::Deserialize;
 use time::OffsetDateTime;
@@ -46,6 +47,9 @@ pub(crate) fn routes() -> Router<ApiState> {
 struct ListDatabaseBackupsQuery {
     managed_database_id: Option<String>,
     status: Option<DatabaseBackupStatus>,
+    trigger: Option<DatabaseBackupTrigger>,
+    page: Option<i64>,
+    page_size: Option<i64>,
     limit: Option<i64>,
 }
 
@@ -91,20 +95,41 @@ async fn list_database_backups(
     State(state): State<ApiState>,
     headers: HeaderMap,
     Query(query): Query<ListDatabaseBackupsQuery>,
-) -> Result<Json<Vec<DatabaseBackupRecord>>, ApiError> {
+) -> Result<(HeaderMap, Json<Vec<DatabaseBackupRecord>>), ApiError> {
     let user = authenticated_user(&state, &headers).await?;
-    let backups = state
+    let page = query.page.unwrap_or(1);
+    if page < 1 {
+        return Err(ApiError::bad_request(
+            "page must be greater than or equal to 1",
+        ));
+    }
+    let page_size = list_page_size(query.page_size, query.limit)?;
+    let result = state
         .database_backups
-        .list_database_backups(
+        .list_database_backups_page(
             &user.id,
-            query.managed_database_id.as_deref(),
-            query.status,
-            query.limit.unwrap_or(50),
+            DatabaseBackupListFilters {
+                source_managed_database_id: query.managed_database_id.as_deref(),
+                status: query.status,
+                trigger: query.trigger,
+                page,
+                page_size,
+            },
         )
         .await
         .map_err(database_backup_api_error)?;
+    let mut response_headers = HeaderMap::new();
+    response_headers.insert(
+        "x-total-count",
+        header_value(result.total_count, "X-Total-Count")?,
+    );
+    response_headers.insert("x-page", header_value(result.page, "X-Page")?);
+    response_headers.insert(
+        "x-page-size",
+        header_value(result.page_size, "X-Page-Size")?,
+    );
 
-    Ok(Json(backups))
+    Ok((response_headers, Json(result.records)))
 }
 
 async fn get_database_backup(
@@ -311,6 +336,25 @@ fn validate_schedule_request(
         MINIMUM_BACKUP_CRON_INTERVAL_SECONDS,
     )
     .map_err(|error| ApiError::bad_request(error.to_string()))
+}
+
+fn list_page_size(page_size: Option<i64>, limit: Option<i64>) -> Result<i64, ApiError> {
+    let Some(page_size) = page_size else {
+        return Ok(limit.unwrap_or(50).clamp(1, 100));
+    };
+
+    if matches!(page_size, 10 | 20 | 50 | 100) {
+        return Ok(page_size);
+    }
+
+    Err(ApiError::bad_request(
+        "page_size must be one of 10, 20, 50, or 100",
+    ))
+}
+
+fn header_value(value: i64, name: &str) -> Result<HeaderValue, ApiError> {
+    HeaderValue::from_str(&value.to_string())
+        .map_err(|error| ApiError::internal(anyhow::anyhow!("invalid {name} header: {error}")))
 }
 
 fn database_backup_api_error(error: DatabaseBackupMetadataStoreError) -> ApiError {

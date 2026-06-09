@@ -30,14 +30,17 @@ use liquid_core::{
     AgentEventType, AgentMessage, AgentMessageRole, AgentResourceKind, AgentTurn, AgentTurnStatus,
     ApproveSqlAuditRequest, AuditSummary, AuthResponse, CreateAgentActionRequest,
     CreateAgentConversationRequest, CreateAgentTurnRequest, CreateDatapanelCardRequest,
-    CreateManagedDatabaseRequest, Datapanel, DatapanelCard, DatapanelCardLayoutUpdate,
-    DatapanelExport, DatapanelPreview, DatapanelPreviewLink, DatapanelQueryResult,
-    LlmProviderSettings, LoginRequest, ManagedDatabase, ManagedDatabaseConnectionLoader,
-    ManagedDatabaseConnectionLoaderError, ManagedDatabaseConnectionSpec, ManagedDatabaseEngine,
-    ManagedDatabasePoolKey, ManagedDatabasePoolPolicy, ManagedDatabaseSslMode, PublicUser,
-    RegisterRequest, RejectSqlAuditRequest, ResolvedLlmProviderSettings, SqlAuditExecutionResult,
-    SqlAuditRecord, SqlAuditReport, SqlAuditRequest, SqlAuditStatus, SqlRollbackPlan,
-    SqlRollbackStatus, SqlStatementKind, UpdateAgentConversationRequest, UpdateCurrentUserRequest,
+    CreateManagedDatabaseRequest, DatabaseBackupFormat, DatabaseBackupListFilters,
+    DatabaseBackupListPage, DatabaseBackupMetadataStore, DatabaseBackupMetadataStoreError,
+    DatabaseBackupRecord, DatabaseBackupStatus, DatabaseBackupTrigger, DatabaseRestoreRecord,
+    Datapanel, DatapanelCard, DatapanelCardLayoutUpdate, DatapanelExport, DatapanelPreview,
+    DatapanelPreviewLink, DatapanelQueryResult, LlmProviderSettings, LoginRequest, ManagedDatabase,
+    ManagedDatabaseConnectionLoader, ManagedDatabaseConnectionLoaderError,
+    ManagedDatabaseConnectionSpec, ManagedDatabaseEngine, ManagedDatabasePoolKey,
+    ManagedDatabasePoolPolicy, ManagedDatabaseSslMode, PublicUser, RegisterRequest,
+    RejectSqlAuditRequest, ResolvedLlmProviderSettings, SqlAuditExecutionResult, SqlAuditRecord,
+    SqlAuditReport, SqlAuditRequest, SqlAuditStatus, SqlRollbackPlan, SqlRollbackStatus,
+    SqlStatementKind, UpdateAgentConversationRequest, UpdateCurrentUserRequest,
     UpdateDatapanelCardRequest, UpdateDatapanelRequest, UpdateLlmProviderSettingsRequest,
     UpdateManagedDatabaseRequest, UpdatePasswordRequest,
 };
@@ -1608,6 +1611,211 @@ impl ManagedDatabaseConnectionTester for FakeManagedDatabaseConnectionTester {
     }
 }
 
+struct FakeDatabaseBackupStore {
+    records: Vec<DatabaseBackupRecord>,
+}
+
+#[async_trait]
+impl DatabaseBackupMetadataStore for FakeDatabaseBackupStore {
+    async fn create_database_backup(
+        &self,
+        _owner_user_id: &str,
+        _source_managed_database_id: &str,
+        _purpose: Option<String>,
+    ) -> Result<DatabaseBackupRecord, DatabaseBackupMetadataStoreError> {
+        unreachable!()
+    }
+
+    async fn get_database_backup(
+        &self,
+        owner_user_id: &str,
+        id: &str,
+    ) -> Result<DatabaseBackupRecord, DatabaseBackupMetadataStoreError> {
+        self.records
+            .iter()
+            .find(|record| record.owner_user_id == owner_user_id && record.id == id)
+            .cloned()
+            .ok_or(DatabaseBackupMetadataStoreError::NotFound)
+    }
+
+    async fn list_database_backups(
+        &self,
+        owner_user_id: &str,
+        source_managed_database_id: Option<&str>,
+        status: Option<DatabaseBackupStatus>,
+        limit: i64,
+    ) -> Result<Vec<DatabaseBackupRecord>, DatabaseBackupMetadataStoreError> {
+        Ok(self
+            .filtered_records(owner_user_id, source_managed_database_id, status, None)
+            .into_iter()
+            .take(limit.clamp(1, 100) as usize)
+            .collect())
+    }
+
+    async fn list_database_backups_page(
+        &self,
+        owner_user_id: &str,
+        filters: DatabaseBackupListFilters<'_>,
+    ) -> Result<DatabaseBackupListPage, DatabaseBackupMetadataStoreError> {
+        let page = filters.page.max(1);
+        let page_size = filters.page_size.clamp(1, 100);
+        let offset = ((page - 1) * page_size) as usize;
+        let records = self.filtered_records(
+            owner_user_id,
+            filters.source_managed_database_id,
+            filters.status,
+            filters.trigger,
+        );
+        let total_count = records.len() as i64;
+        let records = records
+            .into_iter()
+            .skip(offset)
+            .take(page_size as usize)
+            .collect();
+
+        Ok(DatabaseBackupListPage {
+            records,
+            total_count,
+            page,
+            page_size,
+        })
+    }
+
+    async fn delete_database_backup(
+        &self,
+        _owner_user_id: &str,
+        _id: &str,
+    ) -> Result<DatabaseBackupRecord, DatabaseBackupMetadataStoreError> {
+        unreachable!()
+    }
+
+    async fn create_database_restore(
+        &self,
+        _owner_user_id: &str,
+        _backup_id: &str,
+        _target_managed_database_id: &str,
+        _purpose: String,
+    ) -> Result<DatabaseRestoreRecord, DatabaseBackupMetadataStoreError> {
+        unreachable!()
+    }
+
+    async fn get_database_restore(
+        &self,
+        _owner_user_id: &str,
+        _id: &str,
+    ) -> Result<DatabaseRestoreRecord, DatabaseBackupMetadataStoreError> {
+        unreachable!()
+    }
+
+    async fn list_database_restores(
+        &self,
+        _owner_user_id: &str,
+        _backup_id: Option<&str>,
+        _target_managed_database_id: Option<&str>,
+        _status: Option<DatabaseBackupStatus>,
+        _limit: i64,
+    ) -> Result<Vec<DatabaseRestoreRecord>, DatabaseBackupMetadataStoreError> {
+        unreachable!()
+    }
+
+    async fn claim_next_database_backup(
+        &self,
+        _worker_id: &str,
+    ) -> Result<Option<DatabaseBackupRecord>, DatabaseBackupMetadataStoreError> {
+        unreachable!()
+    }
+
+    async fn update_database_backup_progress(
+        &self,
+        _id: &str,
+        _phase: &str,
+        _progress_percent: i32,
+    ) -> Result<DatabaseBackupRecord, DatabaseBackupMetadataStoreError> {
+        unreachable!()
+    }
+
+    async fn complete_database_backup(
+        &self,
+        _id: &str,
+        _result: liquid_core::CompleteDatabaseBackup,
+    ) -> Result<DatabaseBackupRecord, DatabaseBackupMetadataStoreError> {
+        unreachable!()
+    }
+
+    async fn fail_database_backup(
+        &self,
+        _id: &str,
+        _error: String,
+    ) -> Result<DatabaseBackupRecord, DatabaseBackupMetadataStoreError> {
+        unreachable!()
+    }
+
+    async fn claim_next_database_restore(
+        &self,
+        _worker_id: &str,
+    ) -> Result<Option<DatabaseRestoreRecord>, DatabaseBackupMetadataStoreError> {
+        unreachable!()
+    }
+
+    async fn update_database_restore_progress(
+        &self,
+        _id: &str,
+        _phase: &str,
+        _progress_percent: i32,
+    ) -> Result<DatabaseRestoreRecord, DatabaseBackupMetadataStoreError> {
+        unreachable!()
+    }
+
+    async fn complete_database_restore(
+        &self,
+        _id: &str,
+    ) -> Result<DatabaseRestoreRecord, DatabaseBackupMetadataStoreError> {
+        unreachable!()
+    }
+
+    async fn fail_database_restore(
+        &self,
+        _id: &str,
+        _error: String,
+    ) -> Result<DatabaseRestoreRecord, DatabaseBackupMetadataStoreError> {
+        unreachable!()
+    }
+
+    async fn fail_stale_database_jobs(
+        &self,
+        _stale_after_seconds: i64,
+    ) -> Result<u64, DatabaseBackupMetadataStoreError> {
+        unreachable!()
+    }
+}
+
+impl FakeDatabaseBackupStore {
+    fn filtered_records(
+        &self,
+        owner_user_id: &str,
+        source_managed_database_id: Option<&str>,
+        status: Option<DatabaseBackupStatus>,
+        trigger: Option<DatabaseBackupTrigger>,
+    ) -> Vec<DatabaseBackupRecord> {
+        self.records
+            .iter()
+            .filter(|record| record.owner_user_id == owner_user_id)
+            .filter(|record| {
+                source_managed_database_id
+                    .map(|database_id| record.source.id == database_id)
+                    .unwrap_or(true)
+            })
+            .filter(|record| status.map(|status| record.status == status).unwrap_or(true))
+            .filter(|record| {
+                trigger
+                    .map(|trigger| record.trigger == trigger)
+                    .unwrap_or(true)
+            })
+            .cloned()
+            .collect()
+    }
+}
+
 async fn spawn_openai_compatible_mock() -> (String, Arc<Mutex<Option<Value>>>) {
     spawn_openai_compatible_mock_with_content(
         "{\"summary\":\"User configured model\",\"risk_score\":7,\"findings\":[]}",
@@ -1938,6 +2146,31 @@ fn test_app_with_agent(agent: Arc<dyn SqlAuditAgent>) -> Router {
     test_app_with_agent_and_execution(agent, PostgresToolExecutionMode::Readonly)
 }
 
+fn test_app_with_database_backup_store(
+    database_backups: Arc<dyn DatabaseBackupMetadataStore>,
+) -> Router {
+    let store = Arc::new(TestStore::default());
+    let loader: Arc<dyn ManagedDatabaseConnectionLoader> = store.clone();
+    let pool_manager = Arc::new(ManagedDatabasePoolManager::with_connector(
+        loader,
+        Arc::new(TestPoolConnector),
+        ManagedDatabasePoolPolicy::default(),
+    ));
+
+    router(
+        ApiState::with_pool_manager_executor_and_connection_tester(
+            Arc::new(MockSqlAuditAgent),
+            store,
+            pool_manager,
+            false,
+            PostgresToolExecutionMode::Readonly,
+            Arc::new(FakeApprovedSqlExecutor::default()),
+            Arc::new(FakeManagedDatabaseConnectionTester),
+        )
+        .with_database_backup_store(database_backups),
+    )
+}
+
 fn test_app_with_agent_and_execution(
     agent: Arc<dyn SqlAuditAgent>,
     sql_execution: PostgresToolExecutionMode,
@@ -2128,6 +2361,162 @@ async fn create_test_database(app: &Router) {
         .unwrap();
 
     assert_eq!(response.status(), StatusCode::CREATED);
+}
+
+#[tokio::test]
+async fn database_backup_routes_return_paginated_headers_filters_and_detail() {
+    let app = test_app_with_database_backup_store(Arc::new(FakeDatabaseBackupStore {
+        records: vec![
+            test_backup_record(
+                "backup-1",
+                "user-1",
+                "db-1",
+                "Warehouse",
+                DatabaseBackupStatus::Queued,
+                DatabaseBackupTrigger::Immediate,
+            ),
+            test_backup_record(
+                "backup-2",
+                "user-1",
+                "db-1",
+                "Warehouse",
+                DatabaseBackupStatus::Succeeded,
+                DatabaseBackupTrigger::Cron,
+            ),
+            test_backup_record(
+                "backup-3",
+                "user-1",
+                "db-2",
+                "Analytics",
+                DatabaseBackupStatus::Succeeded,
+                DatabaseBackupTrigger::Immediate,
+            ),
+            test_backup_record(
+                "backup-4",
+                "other-user",
+                "db-1",
+                "Other",
+                DatabaseBackupStatus::Succeeded,
+                DatabaseBackupTrigger::Cron,
+            ),
+        ],
+    }));
+
+    let response = app
+        .clone()
+        .oneshot(auth_request(
+            "/api/v1/database-backups?page=1&page_size=10&managed_database_id=db-1&status=succeeded&trigger=cron",
+        ))
+        .await
+        .unwrap();
+    assert_eq!(response.status(), StatusCode::OK);
+    assert_eq!(
+        response
+            .headers()
+            .get("x-total-count")
+            .unwrap()
+            .to_str()
+            .unwrap(),
+        "1"
+    );
+    assert_eq!(
+        response.headers().get("x-page").unwrap().to_str().unwrap(),
+        "1"
+    );
+    assert_eq!(
+        response
+            .headers()
+            .get("x-page-size")
+            .unwrap()
+            .to_str()
+            .unwrap(),
+        "10"
+    );
+    let payload = response_json(response).await;
+    assert_eq!(payload.as_array().unwrap().len(), 1);
+    assert_eq!(payload[0]["id"], "backup-2");
+
+    let detail_response = app
+        .clone()
+        .oneshot(auth_request("/api/v1/database-backups/backup-2"))
+        .await
+        .unwrap();
+    assert_eq!(detail_response.status(), StatusCode::OK);
+    let detail = response_json(detail_response).await;
+    assert_eq!(detail["id"], "backup-2");
+    assert_eq!(detail["trigger"], "cron");
+
+    let invalid_page_size_response = app
+        .clone()
+        .oneshot(auth_request("/api/v1/database-backups?page_size=25"))
+        .await
+        .unwrap();
+    assert_eq!(invalid_page_size_response.status(), StatusCode::BAD_REQUEST);
+
+    let invalid_page_response = app
+        .oneshot(auth_request("/api/v1/database-backups?page=0"))
+        .await
+        .unwrap();
+    assert_eq!(invalid_page_response.status(), StatusCode::BAD_REQUEST);
+}
+
+fn test_backup_record(
+    id: &str,
+    owner_user_id: &str,
+    database_id: &str,
+    database_name: &str,
+    status: DatabaseBackupStatus,
+    trigger: DatabaseBackupTrigger,
+) -> DatabaseBackupRecord {
+    DatabaseBackupRecord {
+        id: id.to_owned(),
+        owner_user_id: owner_user_id.to_owned(),
+        source: liquid_core::ManagedDatabaseSnapshot {
+            id: database_id.to_owned(),
+            name: database_name.to_owned(),
+            engine: ManagedDatabaseEngine::Postgres,
+            host: "localhost".to_owned(),
+            port: 5432,
+            database: database_name.to_lowercase(),
+            username: "postgres".to_owned(),
+            ssl_mode: ManagedDatabaseSslMode::Disable,
+        },
+        format: DatabaseBackupFormat::PostgresCustom,
+        status,
+        phase: status.as_str().to_owned(),
+        progress_percent: if matches!(
+            status,
+            DatabaseBackupStatus::Succeeded | DatabaseBackupStatus::Failed
+        ) {
+            100
+        } else {
+            0
+        },
+        schedule_id: if trigger == DatabaseBackupTrigger::Cron {
+            Some("schedule-1".to_owned())
+        } else {
+            None
+        },
+        trigger,
+        scheduled_for: None,
+        conversation_id: None,
+        created_from_turn_id: None,
+        storage: None,
+        postgres_server_version: None,
+        pg_dump_version: None,
+        error: None,
+        purpose: None,
+        worker_id: None,
+        heartbeat_at: None,
+        started_at: None,
+        completed_at: if status == DatabaseBackupStatus::Succeeded {
+            Some(time::OffsetDateTime::UNIX_EPOCH)
+        } else {
+            None
+        },
+        created_at: time::OffsetDateTime::UNIX_EPOCH,
+        updated_at: time::OffsetDateTime::UNIX_EPOCH,
+    }
 }
 
 #[tokio::test]

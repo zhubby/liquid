@@ -1,6 +1,7 @@
 use liquid_core::{
-    CompleteDatabaseBackup, CreateManagedDatabaseRequest, DatabaseBackupMetadataStore,
-    DatabaseBackupStatus, DatabaseBackupStorageKind, ManagedDatabaseEngine, ManagedDatabaseSslMode,
+    CompleteDatabaseBackup, CreateManagedDatabaseRequest, DatabaseBackupListFilters,
+    DatabaseBackupMetadataStore, DatabaseBackupStatus, DatabaseBackupStorageKind,
+    DatabaseBackupTrigger, EnqueueDatabaseBackup, ManagedDatabaseEngine, ManagedDatabaseSslMode,
     RegisterRequest,
 };
 use liquid_storage::{LiquidStore, Storage, StorageOptions};
@@ -210,6 +211,174 @@ async fn database_backup_store_persists_s3_storage_metadata() {
     assert_eq!(storage_metadata.etag.as_deref(), Some("etag"));
 }
 
+#[tokio::test]
+async fn database_backup_store_pages_and_filters_backup_records() {
+    let Some(storage) = test_storage().await else {
+        return;
+    };
+
+    let owner = storage
+        .register_user(RegisterRequest {
+            email: unique_email("backup-page-owner"),
+            display_name: "Backup Page Owner".to_owned(),
+            password: "password123".to_owned(),
+        })
+        .await
+        .unwrap();
+    let other = storage
+        .register_user(RegisterRequest {
+            email: unique_email("backup-page-other"),
+            display_name: "Backup Page Other".to_owned(),
+            password: "password123".to_owned(),
+        })
+        .await
+        .unwrap();
+    let first_database = create_database(&storage, &owner.user.id, "Page Source A").await;
+    let second_database = create_database(&storage, &owner.user.id, "Page Source B").await;
+    let other_database = create_database(&storage, &other.user.id, "Other Source").await;
+
+    let first = storage
+        .create_database_backup(&owner.user.id, &first_database.id, Some("first".to_owned()))
+        .await
+        .unwrap();
+    let second = storage
+        .create_database_backup(
+            &owner.user.id,
+            &second_database.id,
+            Some("second".to_owned()),
+        )
+        .await
+        .unwrap();
+    let cron = storage
+        .enqueue_database_backup(
+            &owner.user.id,
+            EnqueueDatabaseBackup {
+                managed_database_id: first_database.id.clone(),
+                purpose: Some("cron".to_owned()),
+                schedule_id: None,
+                trigger: DatabaseBackupTrigger::Cron,
+                scheduled_for: None,
+                conversation_id: None,
+                created_from_turn_id: None,
+            },
+        )
+        .await
+        .unwrap();
+    storage
+        .create_database_backup(&other.user.id, &other_database.id, Some("other".to_owned()))
+        .await
+        .unwrap();
+    let running = storage
+        .claim_next_database_backup("paging-worker")
+        .await
+        .unwrap()
+        .unwrap();
+
+    let first_page = storage
+        .list_database_backups_page(
+            &owner.user.id,
+            DatabaseBackupListFilters {
+                source_managed_database_id: None,
+                status: None,
+                trigger: None,
+                page: 1,
+                page_size: 2,
+            },
+        )
+        .await
+        .unwrap();
+    assert_eq!(first_page.total_count, 3);
+    assert_eq!(first_page.page, 1);
+    assert_eq!(first_page.page_size, 2);
+    assert_eq!(first_page.records.len(), 2);
+
+    let second_page = storage
+        .list_database_backups_page(
+            &owner.user.id,
+            DatabaseBackupListFilters {
+                source_managed_database_id: None,
+                status: None,
+                trigger: None,
+                page: 2,
+                page_size: 2,
+            },
+        )
+        .await
+        .unwrap();
+    assert_eq!(second_page.total_count, 3);
+    assert_eq!(second_page.records.len(), 1);
+
+    let first_database_page = storage
+        .list_database_backups_page(
+            &owner.user.id,
+            DatabaseBackupListFilters {
+                source_managed_database_id: Some(&first_database.id),
+                status: None,
+                trigger: None,
+                page: 1,
+                page_size: 10,
+            },
+        )
+        .await
+        .unwrap();
+    assert_eq!(first_database_page.total_count, 2);
+    assert!(
+        first_database_page
+            .records
+            .iter()
+            .all(|record| record.source.id == first_database.id)
+    );
+
+    let cron_page = storage
+        .list_database_backups_page(
+            &owner.user.id,
+            DatabaseBackupListFilters {
+                source_managed_database_id: None,
+                status: None,
+                trigger: Some(DatabaseBackupTrigger::Cron),
+                page: 1,
+                page_size: 10,
+            },
+        )
+        .await
+        .unwrap();
+    assert_eq!(cron_page.total_count, 1);
+    assert_eq!(cron_page.records[0].id, cron.id);
+
+    let running_page = storage
+        .list_database_backups_page(
+            &owner.user.id,
+            DatabaseBackupListFilters {
+                source_managed_database_id: None,
+                status: Some(DatabaseBackupStatus::Running),
+                trigger: None,
+                page: 1,
+                page_size: 10,
+            },
+        )
+        .await
+        .unwrap();
+    assert_eq!(running_page.total_count, 1);
+    assert_eq!(running_page.records[0].id, running.id);
+
+    let other_owner_page = storage
+        .list_database_backups_page(
+            &other.user.id,
+            DatabaseBackupListFilters {
+                source_managed_database_id: None,
+                status: None,
+                trigger: None,
+                page: 1,
+                page_size: 10,
+            },
+        )
+        .await
+        .unwrap();
+    assert_eq!(other_owner_page.total_count, 1);
+    assert_ne!(other_owner_page.records[0].id, first.id);
+    assert_ne!(other_owner_page.records[0].id, second.id);
+}
+
 async fn test_storage() -> Option<Storage> {
     let database_url = std::env::var("LIQUID_TEST_DATABASE_URL").ok()?;
     let storage = Storage::connect_with_options(StorageOptions::new(database_url))
@@ -217,6 +386,30 @@ async fn test_storage() -> Option<Storage> {
         .ok()?;
     storage.migrate().await.ok()?;
     Some(storage)
+}
+
+async fn create_database(
+    storage: &Storage,
+    owner_user_id: &str,
+    name: &str,
+) -> liquid_core::ManagedDatabase {
+    storage
+        .create_managed_database(
+            owner_user_id,
+            CreateManagedDatabaseRequest {
+                name: name.to_owned(),
+                engine: ManagedDatabaseEngine::Postgres,
+                host: "localhost".to_owned(),
+                port: 5432,
+                database: name.to_lowercase().replace(' ', "_"),
+                username: "postgres".to_owned(),
+                password: "secret123".to_owned(),
+                tags: None,
+                ssl_mode: ManagedDatabaseSslMode::Disable,
+            },
+        )
+        .await
+        .unwrap()
 }
 
 fn unique_email(prefix: &str) -> String {

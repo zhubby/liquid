@@ -4,13 +4,14 @@ use liquid_core::{
     AgentMessage, AgentMessageRole, AgentResourceKind, AgentTurn, AgentTurnStatus,
     ApproveSqlAuditRequest, AuthResponse, CompleteDatabaseBackup, CreateAgentActionRequest,
     CreateAgentConversationRequest, CreateAgentTurnRequest, CreateDatabaseBackupScheduleRequest,
-    CreateDatapanelCardRequest, CreateManagedDatabaseRequest, DatabaseBackupMetadataStore,
-    DatabaseBackupMetadataStoreError, DatabaseBackupRecord, DatabaseBackupScheduleRecord,
-    DatabaseBackupScheduleStatus, DatabaseBackupStatus, DatabaseOperationEventRecord,
-    DatabaseOperationEventType, DatabaseOperationKind, DatabaseRestoreRecord, Datapanel,
-    DatapanelCard, DatapanelCardLayoutUpdate, DatapanelExport, DatapanelPreview,
-    DatapanelPreviewLink, DatapanelQueryResult, EnqueueDatabaseBackup, EnqueueDatabaseRestore,
-    LlmProviderSettings, LoginRequest, ManagedDatabase, ManagedDatabaseConnectionLoader,
+    CreateDatapanelCardRequest, CreateManagedDatabaseRequest, DatabaseBackupListFilters,
+    DatabaseBackupListPage, DatabaseBackupMetadataStore, DatabaseBackupMetadataStoreError,
+    DatabaseBackupRecord, DatabaseBackupScheduleRecord, DatabaseBackupScheduleStatus,
+    DatabaseBackupStatus, DatabaseOperationEventRecord, DatabaseOperationEventType,
+    DatabaseOperationKind, DatabaseRestoreRecord, Datapanel, DatapanelCard,
+    DatapanelCardLayoutUpdate, DatapanelExport, DatapanelPreview, DatapanelPreviewLink,
+    DatapanelQueryResult, EnqueueDatabaseBackup, EnqueueDatabaseRestore, LlmProviderSettings,
+    LoginRequest, ManagedDatabase, ManagedDatabaseConnectionLoader,
     ManagedDatabaseConnectionLoaderError, ManagedDatabaseConnectionSpec, ManagedDatabasePoolKey,
     PublicUser, RegisterRequest, RejectSqlAuditRequest, ResolvedLlmProviderSettings,
     SqlAuditExecutionResult, SqlAuditRecord, UpdateAgentConversationRequest,
@@ -147,6 +148,16 @@ impl DatabaseBackupMetadataStore for Storage {
         )
         .await
         .map_err(database_backups::metadata_store_error)
+    }
+
+    async fn list_database_backups_page(
+        &self,
+        owner_user_id: &str,
+        filters: DatabaseBackupListFilters<'_>,
+    ) -> Result<DatabaseBackupListPage, DatabaseBackupMetadataStoreError> {
+        database_backups::list_database_backups_page(self, owner_user_id, filters)
+            .await
+            .map_err(database_backups::metadata_store_error)
     }
 
     async fn delete_database_backup(

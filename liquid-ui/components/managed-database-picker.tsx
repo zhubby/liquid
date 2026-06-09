@@ -35,6 +35,7 @@ import { toast } from "sonner";
 
 import { AccountSettingsDialog } from "@/components/account-settings-dialog";
 import { AppTopNav } from "@/components/app-top-nav";
+import { DatabaseBackupHistory } from "@/components/database-backup-history";
 import { SqlAuditHistory } from "@/components/sql-audit-history";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
@@ -621,7 +622,9 @@ export function ManagedDatabasePicker({
             {activeView === "audits" ? (
               <SqlAuditHistory token={token} databases={databases} />
             ) : null}
-            {activeView === "backups" ? <BackupPlaceholder /> : null}
+            {activeView === "backups" ? (
+              <DatabaseBackupHistory token={token} databases={databases} />
+            ) : null}
           </section>
         </div>
       </div>
@@ -1196,29 +1199,6 @@ function EmptyDatabaseState() {
         {t.databasePicker.emptyDescription}
       </p>
     </div>
-  );
-}
-
-function BackupPlaceholder() {
-  const { t } = useI18n();
-
-  return (
-    <Card className="min-h-[420px] flex-1 rounded-lg py-4 shadow-xs">
-      <CardContent className="flex min-h-[360px] flex-col items-center justify-center px-4 text-center">
-        <div className="flex size-12 items-center justify-center rounded-lg border bg-muted/40">
-          <Archive className="size-6 text-muted-foreground" aria-hidden />
-        </div>
-        <h2 className="mt-4 text-base font-semibold">
-          {t.databasePicker.backupPlaceholderTitle}
-        </h2>
-        <p className="mt-2 max-w-md text-sm leading-6 text-muted-foreground">
-          {t.databasePicker.backupPlaceholderDescription}
-        </p>
-        <Badge variant="secondary" className="mt-4 rounded-md">
-          {t.databasePicker.backupPlaceholderBadge}
-        </Badge>
-      </CardContent>
-    </Card>
   );
 }
 
