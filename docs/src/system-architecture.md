@@ -164,6 +164,7 @@ The Dockerfile builds only the Rust API binary. The runtime image:
 
 - starts `liquid server`,
 - binds `0.0.0.0:3001`,
+- includes PostgreSQL client tools for backup and restore jobs,
 - runs as a non-root `liquid` user,
 - does not serve the Next.js dashboard.
 

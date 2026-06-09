@@ -148,9 +148,8 @@ Runtime requirements:
 - network access to the managed database,
 - network access to the S3-compatible endpoint when S3 upload is configured.
 
-The current Docker runtime image installs only `ca-certificates`; add PostgreSQL
-client tools to the runtime image before relying on backup/restore inside that
-container.
+The API Docker runtime image includes PostgreSQL client tools for `pg_dump` and
+`pg_restore`.
 
 This worker is currently backend infrastructure. The API does not expose
 first-class backup or restore REST routes yet, and workbench action application
