@@ -4,6 +4,7 @@ use liquid_agent::{
     ApprovedWriteExecutionResult, PostgresToolConfig, PostgresToolExecutionMode, SqlAuditAgent,
     execute_approved_write_sql_with_config,
 };
+use liquid_config::WorkbenchConfig;
 use liquid_core::{ManagedDatabaseConnectionLoader, ManagedDatabasePoolPolicy};
 use liquid_storage::{LiquidStore, ManagedDatabasePoolManager};
 use sqlx::PgPool;
@@ -68,6 +69,7 @@ pub struct ApiState {
     pub(crate) approved_sql_executor: Arc<dyn ApprovedSqlExecutor>,
     pub(crate) chat_sql_executor: Arc<dyn ChatSqlExecutor>,
     pub(crate) managed_database_connection_tester: Arc<dyn ManagedDatabaseConnectionTester>,
+    pub(crate) workbench: WorkbenchConfig,
 }
 
 impl ApiState {
@@ -181,6 +183,12 @@ impl ApiState {
             approved_sql_executor,
             chat_sql_executor,
             managed_database_connection_tester,
+            workbench: WorkbenchConfig::default(),
         }
+    }
+
+    pub fn with_workbench_config(mut self, workbench: WorkbenchConfig) -> Self {
+        self.workbench = workbench;
+        self
     }
 }

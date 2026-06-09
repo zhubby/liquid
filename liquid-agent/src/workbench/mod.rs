@@ -33,7 +33,7 @@ use liquid_llm::ToolDefinition;
 #[cfg(test)]
 use serde_json::json;
 
-const DEFAULT_MAX_WORKBENCH_TOOL_ROUNDS: usize = 6;
+const DEFAULT_MAX_WORKBENCH_TOOL_ROUNDS: usize = 10;
 
 pub fn workbench_proposal_tool_names() -> Vec<String> {
     proposal_tools::workbench_proposal_tool_names()
@@ -65,6 +65,7 @@ pub struct LlmWorkbenchAgent {
     model: String,
     protocol: LlmProtocol,
     max_tool_rounds: usize,
+    max_output_tokens: Option<u32>,
     invocation_mode: LlmInvocationMode,
 }
 
@@ -75,6 +76,7 @@ impl LlmWorkbenchAgent {
             model: model.into(),
             protocol,
             max_tool_rounds: DEFAULT_MAX_WORKBENCH_TOOL_ROUNDS,
+            max_output_tokens: None,
             invocation_mode: LlmInvocationMode::Complete,
         }
     }
@@ -84,22 +86,29 @@ impl LlmWorkbenchAgent {
         self
     }
 
+    pub fn with_max_output_tokens(mut self, max_output_tokens: Option<u32>) -> Self {
+        self.max_output_tokens = max_output_tokens;
+        self
+    }
+
     pub fn with_streaming_enabled(mut self, streaming_enabled: bool) -> Self {
         self.invocation_mode = LlmInvocationMode::from_streaming_enabled(streaming_enabled);
         self
     }
 
     pub async fn respond(&self, context: LlmWorkbenchContext) -> Result<WorkbenchResponse> {
-        let request = LlmRequest::new(
-            self.model.clone(),
-            self.protocol,
-            vec![
-                LlmMessage::system(WORKBENCH_SYSTEM_PROMPT),
-                LlmMessage::user(workbench_context_payload(&context)?),
-            ],
-        )
-        .with_temperature(0.2)
-        .with_max_output_tokens(1_200);
+        let request = optional_max_output_tokens(
+            LlmRequest::new(
+                self.model.clone(),
+                self.protocol,
+                vec![
+                    LlmMessage::system(WORKBENCH_SYSTEM_PROMPT),
+                    LlmMessage::user(workbench_context_payload(&context)?),
+                ],
+            )
+            .with_temperature(0.2),
+            self.max_output_tokens,
+        );
         let response = invoke_llm(&self.llm, request, self.invocation_mode).await?;
 
         parse_llm_workbench_response(&response.content, &context)
@@ -116,7 +125,7 @@ impl LlmWorkbenchAgent {
             LlmMessage::user(workbench_context_payload(&context)?),
         ];
 
-        tool_loop::run_tool_loop(self, context, messages, tools, 1_200).await
+        tool_loop::run_tool_loop(self, context, messages, tools, self.max_output_tokens).await
     }
 
     pub async fn respond_with_tools_and_text_delta<F, Fut>(
@@ -137,16 +146,18 @@ impl LlmWorkbenchAgent {
         context: LlmWorkbenchContext,
         observation: Value,
     ) -> Result<WorkbenchResponse> {
-        let request = LlmRequest::new(
-            self.model.clone(),
-            self.protocol,
-            vec![
-                LlmMessage::system(WORKBENCH_SYSTEM_PROMPT),
-                LlmMessage::user(workbench_observation_payload(&context, observation)?),
-            ],
-        )
-        .with_temperature(0.2)
-        .with_max_output_tokens(1_000);
+        let request = optional_max_output_tokens(
+            LlmRequest::new(
+                self.model.clone(),
+                self.protocol,
+                vec![
+                    LlmMessage::system(WORKBENCH_SYSTEM_PROMPT),
+                    LlmMessage::user(workbench_observation_payload(&context, observation)?),
+                ],
+            )
+            .with_temperature(0.2),
+            self.max_output_tokens,
+        );
         let response = invoke_llm(&self.llm, request, self.invocation_mode).await?;
 
         parse_llm_workbench_response(&response.content, &context)
@@ -162,21 +173,30 @@ impl LlmWorkbenchAgent {
         F: FnMut(String) -> Fut + Send,
         Fut: Future<Output = ()> + Send,
     {
-        let request = LlmRequest::new(
-            self.model.clone(),
-            self.protocol,
-            vec![
-                LlmMessage::system(WORKBENCH_SYSTEM_PROMPT),
-                LlmMessage::user(workbench_observation_payload(&context, observation)?),
-            ],
-        )
-        .with_temperature(0.2)
-        .with_max_output_tokens(1_000);
+        let request = optional_max_output_tokens(
+            LlmRequest::new(
+                self.model.clone(),
+                self.protocol,
+                vec![
+                    LlmMessage::system(WORKBENCH_SYSTEM_PROMPT),
+                    LlmMessage::user(workbench_observation_payload(&context, observation)?),
+                ],
+            )
+            .with_temperature(0.2),
+            self.max_output_tokens,
+        );
         let response =
             invoke_llm_with_text_delta(&self.llm, request, self.invocation_mode, on_text_delta)
                 .await?;
 
         parse_llm_workbench_response(&response.content, &context)
+    }
+}
+
+fn optional_max_output_tokens(request: LlmRequest, max_output_tokens: Option<u32>) -> LlmRequest {
+    match max_output_tokens {
+        Some(max_output_tokens) => request.with_max_output_tokens(max_output_tokens),
+        None => request,
     }
 }
 
@@ -879,7 +899,31 @@ mod tests {
         );
         assert!(request.messages[1].content.contains("\"tool_observation\""));
         assert!(request.messages[1].content.contains("\"success\": true"));
-        assert_eq!(request.max_output_tokens, Some(1_000));
+        assert_eq!(request.max_output_tokens, None);
+    }
+
+    #[tokio::test]
+    async fn workbench_max_output_tokens_is_configurable() {
+        let client = Arc::new(CapturingLlmClient::new(
+            r#"{
+                "message": "I will use read-only tools for database listing tasks.",
+                "actions": []
+            }"#,
+        ));
+        let agent = LlmWorkbenchAgent::new(
+            client.clone(),
+            "chat-model",
+            liquid_llm::LlmProtocol::ChatCompletions,
+        )
+        .with_max_output_tokens(Some(4096));
+
+        let response = agent.respond(llm_context()).await.unwrap();
+
+        assert_eq!(
+            response.content,
+            "I will use read-only tools for database listing tasks."
+        );
+        assert_eq!(client.captured_request().max_output_tokens, Some(4096));
     }
 
     #[tokio::test]
@@ -960,6 +1004,7 @@ mod tests {
 
         let requests = client.requests();
         assert_eq!(requests.len(), 2);
+        assert_eq!(requests[0].max_output_tokens, None);
         assert!(
             requests[0]
                 .tools

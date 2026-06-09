@@ -1,5 +1,6 @@
 use std::net::SocketAddr;
 
+use crate::defaults::DEFAULT_WORKBENCH_MAX_TOOL_ROUNDS;
 use crate::modes::{LlmApiMode, SqlExecutionMode, SqlMetadataMode};
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -14,6 +15,7 @@ pub struct LiquidConfig {
     pub managed_database_pool: ManagedDatabasePoolConfig,
     pub database_backup: DatabaseBackupConfig,
     pub llm: LlmConfig,
+    pub workbench: WorkbenchConfig,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -39,6 +41,21 @@ pub struct LlmConfig {
     pub base_url: String,
     pub model: Option<String>,
     pub api_mode: LlmApiMode,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct WorkbenchConfig {
+    pub max_tool_rounds: usize,
+    pub max_output_tokens: Option<u32>,
+}
+
+impl Default for WorkbenchConfig {
+    fn default() -> Self {
+        Self {
+            max_tool_rounds: DEFAULT_WORKBENCH_MAX_TOOL_ROUNDS,
+            max_output_tokens: None,
+        }
+    }
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]

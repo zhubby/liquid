@@ -235,6 +235,8 @@ async fn run_agent_turn_inner(
     let tools = workbench_tool_registry(&state, &user.id, &turn).await?;
     let streaming_message_id = format!("stream-{turn_id}");
     let agent = LlmWorkbenchAgent::new(provider.client, provider.model, provider.protocol)
+        .with_max_tool_rounds(state.workbench.max_tool_rounds)
+        .with_max_output_tokens(state.workbench.max_output_tokens)
         .with_streaming_enabled(provider.streaming_enabled);
     let response = agent
         .respond_with_tools_and_text_delta(
@@ -1097,6 +1099,8 @@ pub(crate) async fn synthesize_action_observation(
     let context = load_llm_workbench_context(state, owner_user_id, &turn).await?;
     let streaming_message_id = format!("stream-{}", action.turn_id);
     let agent = LlmWorkbenchAgent::new(provider.client, provider.model, provider.protocol)
+        .with_max_tool_rounds(state.workbench.max_tool_rounds)
+        .with_max_output_tokens(state.workbench.max_output_tokens)
         .with_streaming_enabled(provider.streaming_enabled);
     let response = agent
         .synthesize_observation_with_text_delta(context, observation, {

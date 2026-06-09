@@ -51,6 +51,10 @@ encryption_key = "liquid-development-encryption-key-change-me"
 base_url = "https://api.openai.com"
 api_mode = "chat_completions"
 
+[workbench]
+max_tool_rounds = 10
+# max_output_tokens = 4000
+
 [sql]
 metadata = "auto"
 execution = "readonly"
@@ -86,6 +90,8 @@ database passwords and user-level LLM API keys.
 | `OPENAI_MODEL` | unset | Process-level model name for fallback SQL audit agent. |
 | `OPENAI_BASE_URL` | `https://api.openai.com` | Process-level provider base URL or complete endpoint URL. |
 | `OPENAI_API_MODE` | `chat_completions` | `chat_completions` or `responses`. |
+| `LIQUID_WORKBENCH_MAX_TOOL_ROUNDS` | `10` | Max tool-call rounds per chat workbench turn. |
+| `LIQUID_WORKBENCH_MAX_OUTPUT_TOKENS` | unset | Optional chat workbench LLM output token limit. Unset means provider default/no explicit limit. |
 | `LIQUID_SQL_METADATA` | `auto` | `auto`, `off`, or `required`. |
 | `LIQUID_SQL_EXECUTION` | `readonly` | `off`, `readonly`, or `write_gated`. |
 | `LIQUID_SQL_MANAGED_POOL_MAX_CONNECTIONS` | `2` | Max connections per target managed database pool. |

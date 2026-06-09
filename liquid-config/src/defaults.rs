@@ -6,6 +6,7 @@ pub(crate) const DEFAULT_DATABASE_AUTO_MIGRATE: bool = true;
 pub(crate) const DEFAULT_AUTH_TOKEN_TTL_SECONDS: i64 = 60 * 60 * 24 * 7;
 pub(crate) const DEFAULT_ENCRYPTION_KEY: &str = "liquid-development-encryption-key-change-me";
 pub(crate) const DEFAULT_OPENAI_BASE_URL: &str = "https://api.openai.com";
+pub(crate) const DEFAULT_WORKBENCH_MAX_TOOL_ROUNDS: usize = 10;
 pub(crate) const DEFAULT_SQL_MANAGED_POOL_MAX_CONNECTIONS: u32 = 2;
 pub(crate) const DEFAULT_SQL_MANAGED_POOL_IDLE_TTL_SECONDS: u64 = 10 * 60;
 pub(crate) const DEFAULT_SQL_MANAGED_POOL_REAP_INTERVAL_SECONDS: u64 = 60;
@@ -36,6 +37,10 @@ encryption_key = "{DEFAULT_ENCRYPTION_KEY}"
 [llm]
 base_url = "{DEFAULT_OPENAI_BASE_URL}"
 api_mode = "chat_completions"
+
+[workbench]
+max_tool_rounds = {DEFAULT_WORKBENCH_MAX_TOOL_ROUNDS}
+# max_output_tokens = 4000
 
 [sql]
 metadata = "auto"

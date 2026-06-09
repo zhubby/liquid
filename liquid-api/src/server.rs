@@ -39,7 +39,8 @@ pub async fn serve(
             managed_database_pools,
             matches!(config.sql_metadata, SqlMetadataMode::Required),
             managed_database_audit_execution(config.sql_execution),
-        ),
+        )
+        .with_workbench_config(config.workbench.clone()),
         &config.cors_origin,
     )?;
 

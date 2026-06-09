@@ -9,7 +9,7 @@ use crate::{
 };
 
 use super::{
-    LlmWorkbenchAgent, LlmWorkbenchContext,
+    LlmWorkbenchAgent, LlmWorkbenchContext, optional_max_output_tokens,
     prompt::{WORKBENCH_SYSTEM_PROMPT, workbench_context_payload},
     proposal_tools::{
         is_workbench_proposal_tool, proposal_tool_call_to_suggestion,
@@ -23,7 +23,7 @@ pub(super) async fn run_tool_loop(
     context: LlmWorkbenchContext,
     mut messages: Vec<LlmMessage>,
     tools: ToolRegistry,
-    max_output_tokens: u32,
+    max_output_tokens: Option<u32>,
 ) -> Result<WorkbenchResponse> {
     let mut tool_steps = Vec::new();
 
@@ -105,7 +105,7 @@ where
         LlmMessage::user(workbench_context_payload(&context)?),
     ];
     let mut tool_steps = Vec::new();
-    let max_output_tokens = 1_200;
+    let max_output_tokens = agent.max_output_tokens;
 
     for _ in 0..agent.max_tool_rounds {
         let response = invoke_llm_with_text_delta(
@@ -175,22 +175,25 @@ fn llm_request(
     agent: &LlmWorkbenchAgent,
     messages: Vec<LlmMessage>,
     tools: &ToolRegistry,
-    max_output_tokens: u32,
+    max_output_tokens: Option<u32>,
 ) -> LlmRequest {
-    LlmRequest::new(agent.model.clone(), agent.protocol, messages)
-        .with_tools(tools.definitions())
-        .with_temperature(0.2)
-        .with_max_output_tokens(max_output_tokens)
+    optional_max_output_tokens(
+        LlmRequest::new(agent.model.clone(), agent.protocol, messages)
+            .with_tools(tools.definitions())
+            .with_temperature(0.2),
+        max_output_tokens,
+    )
 }
 
 fn no_tool_llm_request(
     agent: &LlmWorkbenchAgent,
     messages: Vec<LlmMessage>,
-    max_output_tokens: u32,
+    max_output_tokens: Option<u32>,
 ) -> LlmRequest {
-    LlmRequest::new(agent.model.clone(), agent.protocol, messages)
-        .with_temperature(0.2)
-        .with_max_output_tokens(max_output_tokens)
+    optional_max_output_tokens(
+        LlmRequest::new(agent.model.clone(), agent.protocol, messages).with_temperature(0.2),
+        max_output_tokens,
+    )
 }
 
 async fn execute_workbench_tool_for_model(

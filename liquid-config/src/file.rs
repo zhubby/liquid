@@ -10,6 +10,7 @@ pub(crate) struct FileConfig {
     pub(crate) auth: Option<FileAuthConfig>,
     pub(crate) security: Option<FileSecurityConfig>,
     pub(crate) llm: Option<FileLlmConfig>,
+    pub(crate) workbench: Option<FileWorkbenchConfig>,
     pub(crate) sql: Option<FileSqlConfig>,
     pub(crate) backup: Option<FileBackupConfig>,
 }
@@ -43,6 +44,12 @@ pub(crate) struct FileLlmConfig {
     pub(crate) base_url: Option<String>,
     pub(crate) model: Option<String>,
     pub(crate) api_mode: Option<String>,
+}
+
+#[derive(Debug, Default, Deserialize)]
+pub(crate) struct FileWorkbenchConfig {
+    pub(crate) max_tool_rounds: Option<usize>,
+    pub(crate) max_output_tokens: Option<u32>,
 }
 
 #[derive(Debug, Default, Deserialize)]

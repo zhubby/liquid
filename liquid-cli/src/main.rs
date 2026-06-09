@@ -15,7 +15,8 @@ use liquid_agent::{
     workbench_proposal_tool_names,
 };
 use liquid_config::{
-    LiquidConfig, LlmApiMode, SqlExecutionMode, SqlMetadataMode, default_config_toml,
+    LiquidConfig, LlmApiMode, SqlExecutionMode, SqlMetadataMode, WorkbenchConfig,
+    default_config_toml,
 };
 use liquid_llm::{LlmProtocol, OpenAiCompatibleClient, OpenAiCompatibleConfig};
 use liquid_storage::{Storage, StorageOptions};
@@ -423,6 +424,7 @@ fn render_server_startup_overview(config: &LiquidConfig, config_path: &Path) -> 
             ),
         ),
         ("llm", llm_config_summary(config)),
+        ("workbench", workbench_config_summary(config)),
         ("backups", backup_config_summary(config)),
     ];
 
@@ -498,6 +500,19 @@ fn llm_config_summary(config: &LiquidConfig) -> String {
             llm_api_mode_label(config.llm.api_mode)
         ),
     }
+}
+
+fn workbench_config_summary(config: &LiquidConfig) -> String {
+    let max_output_tokens = config
+        .workbench
+        .max_output_tokens
+        .map(|value| value.to_string())
+        .unwrap_or_else(|| "unlimited".to_owned());
+
+    format!(
+        "max_tool_rounds={} max_output_tokens={max_output_tokens}",
+        config.workbench.max_tool_rounds
+    )
 }
 
 fn backup_config_summary(config: &LiquidConfig) -> String {
@@ -840,6 +855,7 @@ mod tests {
         assert!(rendered.contains("postgres://postgres:[redacted]@localhost:5432/liquid"));
         assert!(rendered.contains("metadata=required execution=write_gated"));
         assert!(rendered.contains("openai-compatible model=gpt-test"));
+        assert!(rendered.contains("max_tool_rounds=10 max_output_tokens=unlimited"));
         assert!(!rendered.contains("db-secret"));
         assert!(!rendered.contains("llm-secret"));
     }
@@ -1014,6 +1030,10 @@ mod tests {
                 base_url: "https://user:llm-secret@example.test/v1".to_owned(),
                 model: Some("gpt-test".to_owned()),
                 api_mode: LlmApiMode::ChatCompletions,
+            },
+            workbench: WorkbenchConfig {
+                max_tool_rounds: 10,
+                max_output_tokens: None,
             },
         }
     }

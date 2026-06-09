@@ -11,5 +11,5 @@ pub use defaults::default_config_toml;
 pub use modes::{LlmApiMode, SqlExecutionMode, SqlMetadataMode};
 pub use types::{
     AuthConfig, DatabaseBackupConfig, DatabaseConfig, LiquidConfig, LlmConfig,
-    ManagedDatabasePoolConfig, SecurityConfig,
+    ManagedDatabasePoolConfig, SecurityConfig, WorkbenchConfig,
 };

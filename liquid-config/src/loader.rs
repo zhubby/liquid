@@ -7,7 +7,7 @@ use crate::{
     file::{FileConfig, read_file_config},
     types::{
         AuthConfig, DatabaseBackupConfig, DatabaseConfig, LiquidConfig, LlmConfig,
-        ManagedDatabasePoolConfig, SecurityConfig,
+        ManagedDatabasePoolConfig, SecurityConfig, WorkbenchConfig,
     },
 };
 
@@ -35,6 +35,7 @@ impl LiquidConfig {
         let file_auth = file_config.auth.unwrap_or_default();
         let file_security = file_config.security.unwrap_or_default();
         let file_llm = file_config.llm.unwrap_or_default();
+        let file_workbench = file_config.workbench.unwrap_or_default();
         let file_sql = file_config.sql.unwrap_or_default();
         let file_backup = file_config.backup.unwrap_or_default();
 
@@ -89,6 +90,17 @@ impl LiquidConfig {
             .as_deref()
             .unwrap_or_default()
             .parse()?;
+        let workbench_max_tool_rounds = parse_usize(
+            "LIQUID_WORKBENCH_MAX_TOOL_ROUNDS",
+            get("LIQUID_WORKBENCH_MAX_TOOL_ROUNDS"),
+            file_workbench.max_tool_rounds,
+            DEFAULT_WORKBENCH_MAX_TOOL_ROUNDS,
+        )?;
+        let workbench_max_output_tokens = parse_optional_u32(
+            "LIQUID_WORKBENCH_MAX_OUTPUT_TOKENS",
+            get("LIQUID_WORKBENCH_MAX_OUTPUT_TOKENS"),
+            file_workbench.max_output_tokens,
+        )?;
         let sql_metadata = get("LIQUID_SQL_METADATA")
             .or(file_sql.metadata)
             .as_deref()
@@ -160,6 +172,12 @@ impl LiquidConfig {
         if token_ttl_seconds <= 0 {
             anyhow::bail!("LIQUID_AUTH_TOKEN_TTL_SECONDS must be positive");
         }
+        if workbench_max_tool_rounds == 0 {
+            anyhow::bail!("LIQUID_WORKBENCH_MAX_TOOL_ROUNDS must be positive");
+        }
+        if workbench_max_output_tokens == Some(0) {
+            anyhow::bail!("LIQUID_WORKBENCH_MAX_OUTPUT_TOKENS must be positive");
+        }
         if managed_pool_max_connections == 0 {
             anyhow::bail!("LIQUID_SQL_MANAGED_POOL_MAX_CONNECTIONS must be positive");
         }
@@ -211,6 +229,10 @@ impl LiquidConfig {
                 model,
                 api_mode,
             },
+            workbench: WorkbenchConfig {
+                max_tool_rounds: workbench_max_tool_rounds,
+                max_output_tokens: workbench_max_output_tokens,
+            },
         })
     }
 }
@@ -237,6 +259,20 @@ fn parse_u32(
             .parse()
             .with_context(|| format!("invalid {env_name}: {value}")),
         None => Ok(file_value.unwrap_or(default_value)),
+    }
+}
+
+fn parse_optional_u32(
+    env_name: &str,
+    env_value: Option<String>,
+    file_value: Option<u32>,
+) -> Result<Option<u32>> {
+    match env_value.and_then(non_empty) {
+        Some(value) => value
+            .parse()
+            .map(Some)
+            .with_context(|| format!("invalid {env_name}: {value}")),
+        None => Ok(file_value),
     }
 }
 
