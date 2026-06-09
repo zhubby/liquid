@@ -18,4 +18,9 @@ serde_json.workspace = true
 sqlx.workspace = true
 
 [dev-dependencies]
+criterion.workspace = true
 tokio.workspace = true
+
+[[bench]]
+name = "postgres_static_analysis"
+harness = false

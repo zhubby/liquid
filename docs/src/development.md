@@ -122,7 +122,7 @@ Use targeted tests for the layer being changed:
 | --- | --- |
 | CLI/config startup | `cargo test -p liquid-cli`, `cargo test -p liquid-config`, manual `cargo run -p liquid-cli -- version`. |
 | API route behavior | `cargo test -p liquid-api`. |
-| SQL parsing or risk rules | `cargo test -p liquid-sql`. |
+| SQL parsing or risk rules | `cargo test -p liquid-sql`; performance baseline with `cargo bench -p liquid-sql --bench postgres_static_analysis`. |
 | Storage queries or migrations | `cargo test -p liquid-storage` with a test PostgreSQL database. |
 | Contract DTOs | `cargo test -p liquid-core`. |
 | Frontend behavior | `bun run lint` and `bun run build` from `liquid-ui`. |
