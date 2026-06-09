@@ -233,6 +233,7 @@ async fn build_agent(
             Arc::new(MockSqlAuditAgent),
             AgentStartupInfo::Mock {
                 reason: "OPENAI_API_KEY unset",
+                tool_calling_tool_names: ToolCallingSqlAuditAgent::default_tool_names(),
             },
         ));
     };
@@ -242,6 +243,7 @@ async fn build_agent(
             Arc::new(MockSqlAuditAgent),
             AgentStartupInfo::Mock {
                 reason: "OPENAI_MODEL unset",
+                tool_calling_tool_names: ToolCallingSqlAuditAgent::default_tool_names(),
             },
         ));
     };
@@ -255,12 +257,16 @@ async fn build_agent(
         LlmApiMode::Responses => LlmProtocol::Responses,
     };
 
+    let agent = ToolCallingSqlAuditAgent::new(llm, model.clone(), protocol);
+    let tool_names = agent.tool_names();
+
     Ok((
-        Arc::new(ToolCallingSqlAuditAgent::new(llm, model.clone(), protocol)),
+        Arc::new(agent) as Arc<dyn SqlAuditAgent>,
         AgentStartupInfo::OpenAiCompatible {
             model,
             api_mode: config.llm.api_mode,
             base_url: config.llm.base_url.clone(),
+            tool_names,
         },
     ))
 }
@@ -269,30 +275,48 @@ async fn build_agent(
 enum AgentStartupInfo {
     Mock {
         reason: &'static str,
+        tool_calling_tool_names: Vec<String>,
     },
     OpenAiCompatible {
         model: String,
         api_mode: LlmApiMode,
         base_url: String,
+        tool_names: Vec<String>,
     },
 }
 
 impl AgentStartupInfo {
     fn summary(&self) -> String {
         match self {
-            Self::Mock { reason } => format!("mock SQL audit agent ({reason})"),
+            Self::Mock {
+                reason,
+                tool_calling_tool_names,
+            } => format!(
+                "mock SQL audit agent ({reason}) active_tools=[] tool_calling_tools={}",
+                registered_tools_label(tool_calling_tool_names)
+            ),
             Self::OpenAiCompatible {
                 model,
                 api_mode,
                 base_url,
+                tool_names,
             } => format!(
-                "OpenAI-compatible model={} api_mode={} base_url={}",
+                "OpenAI-compatible model={} api_mode={} base_url={} active_tools={}",
                 model,
                 llm_api_mode_label(*api_mode),
-                redact_url_password(base_url)
+                redact_url_password(base_url),
+                registered_tools_label(tool_names)
             ),
         }
     }
+}
+
+fn registered_tools_label(tool_names: &[String]) -> String {
+    if tool_names.is_empty() {
+        return "[]".to_owned();
+    }
+
+    format!("[{}]", tool_names.join(", "))
 }
 
 fn print_server_startup_overview(config: &LiquidConfig, config_path: &Path) {
@@ -755,13 +779,34 @@ mod tests {
             model: "gpt-test".to_owned(),
             api_mode: LlmApiMode::Responses,
             base_url: "https://user:llm-secret@example.test/v1".to_owned(),
+            tool_names: vec!["inspect_sql_risk".to_owned(), "pg_list_schemas".to_owned()],
         };
 
         let summary = info.summary();
 
         assert!(summary.contains("api_mode=responses"));
         assert!(summary.contains("https://user:[redacted]@example.test/v1"));
+        assert!(summary.contains("active_tools=[inspect_sql_risk, pg_list_schemas]"));
         assert!(!summary.contains("llm-secret"));
+    }
+
+    #[test]
+    fn summarizes_mock_agent_with_tool_calling_tool_names() {
+        let info = AgentStartupInfo::Mock {
+            reason: "OPENAI_MODEL unset",
+            tool_calling_tool_names: vec!["inspect_sql_risk".to_owned()],
+        };
+
+        let summary = info.summary();
+
+        assert!(summary.contains("mock SQL audit agent (OPENAI_MODEL unset)"));
+        assert!(summary.contains("active_tools=[]"));
+        assert!(summary.contains("tool_calling_tools=[inspect_sql_risk]"));
+    }
+
+    #[test]
+    fn renders_empty_registered_tools_label() {
+        assert_eq!(registered_tools_label(&[]), "[]");
     }
 
     #[test]

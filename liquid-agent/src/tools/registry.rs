@@ -35,6 +35,10 @@ impl ToolRegistry {
         self.tools.values().map(|tool| tool.definition()).collect()
     }
 
+    pub fn tool_names(&self) -> Vec<String> {
+        self.tools.keys().cloned().collect()
+    }
+
     pub fn contains(&self, name: &str) -> bool {
         self.tools.contains_key(name)
     }
@@ -109,5 +113,13 @@ mod tests {
             .unwrap_err();
 
         assert!(error.to_string().contains("unknown agent tool"));
+    }
+
+    #[test]
+    fn tool_registry_lists_registered_tool_names() {
+        let mut registry = ToolRegistry::new();
+        registry.register(EchoTool);
+
+        assert_eq!(registry.tool_names(), vec!["echo_tool"]);
     }
 }

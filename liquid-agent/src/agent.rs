@@ -52,6 +52,10 @@ impl ToolCallingSqlAuditAgent {
         }
     }
 
+    pub fn default_tool_names() -> Vec<String> {
+        sql_risk_tools(None, false).tool_names()
+    }
+
     pub fn with_tools(mut self, tools: ToolRegistry) -> Self {
         self.tools = tools;
         self
@@ -65,6 +69,10 @@ impl ToolCallingSqlAuditAgent {
     pub fn with_streaming_enabled(mut self, streaming_enabled: bool) -> Self {
         self.invocation_mode = LlmInvocationMode::from_streaming_enabled(streaming_enabled);
         self
+    }
+
+    pub fn tool_names(&self) -> Vec<String> {
+        self.tools.tool_names()
     }
 
     async fn run_audit_with_tools(
@@ -338,6 +346,28 @@ mod tests {
 
         assert_eq!(report.risk_score, 25);
         assert_eq!(report.findings[0].severity, RiskSeverity::Low);
+    }
+
+    #[test]
+    fn tool_calling_agent_lists_registered_tool_names() {
+        let mut tools = ToolRegistry::new();
+        tools.register(EchoTool);
+        let agent = ToolCallingSqlAuditAgent::new(
+            Arc::new(ScriptedLlm::new(Vec::new())),
+            "gpt-test",
+            LlmProtocol::ChatCompletions,
+        )
+        .with_tools(tools);
+
+        assert_eq!(agent.tool_names(), vec!["echo_tool"]);
+    }
+
+    #[test]
+    fn tool_calling_agent_lists_default_tool_names() {
+        assert_eq!(
+            ToolCallingSqlAuditAgent::default_tool_names(),
+            vec!["inspect_sql_risk"]
+        );
     }
 
     #[tokio::test]
