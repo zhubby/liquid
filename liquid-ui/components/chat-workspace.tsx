@@ -168,6 +168,10 @@ export function ChatPanel({
   const nearBottomRef = useRef(true);
 
   const actionGroups = useMemo(() => groupActionsByTurn(actions), [actions]);
+  const lastSubmittedPromptByMode = useMemo(
+    () => lastSubmittedPromptsByMode(messages),
+    [messages],
+  );
   const orphanActions = useMemo(() => {
     const assistantTurnIds = new Set(
       messages
@@ -988,6 +992,11 @@ export function ChatPanel({
           isSending={isSending}
           providerReady={providerReady}
           failedTurn={failedTurn}
+          lastSubmittedPrompt={
+            composerMode === "sql"
+              ? lastSubmittedPromptByMode.sql
+              : lastSubmittedPromptByMode.chat
+          }
           onModeChange={setComposerMode}
           onSubmit={(prompt) =>
             void (composerMode === "sql" ? submitSql(prompt) : submitPrompt(prompt))
@@ -1853,6 +1862,41 @@ function messageHasSqlCodePart(message: DisplayMessage) {
   );
 }
 
+function lastSubmittedPromptsByMode(messages: DisplayMessage[]) {
+  let chat = "";
+  let sql = "";
+
+  for (let index = messages.length - 1; index >= 0 && (!chat || !sql); index -= 1) {
+    const message = messages[index];
+
+    if (message.role !== "user") {
+      continue;
+    }
+
+    const sqlPrompt = sqlPromptFromMessage(message);
+
+    if (sqlPrompt) {
+      sql ||= sqlPrompt;
+      continue;
+    }
+
+    if (!chat && message.content.trim()) {
+      chat = message.content;
+    }
+  }
+
+  return { chat, sql };
+}
+
+function sqlPromptFromMessage(message: DisplayMessage) {
+  const part = message.parts.find(
+    (item) =>
+      item.kind === "code" && normalizeCodeLanguage(item.language) === "sql",
+  );
+
+  return part?.kind === "code" && part.code.trim() ? part.code : "";
+}
+
 function sqlUserMessage(message: ChatMessage, sql: string): DisplayMessage {
   return {
     ...message,
@@ -2183,6 +2227,7 @@ const MessageComposer = ({
   isSending,
   providerReady,
   failedTurn,
+  lastSubmittedPrompt,
   onModeChange,
   onSubmit,
   onStop,
@@ -2193,6 +2238,7 @@ const MessageComposer = ({
   isSending: boolean;
   providerReady: boolean | null;
   failedTurn: FailedTurn | null;
+  lastSubmittedPrompt?: string;
   onModeChange: (mode: ComposerMode) => void;
   onSubmit: (prompt: string) => void;
   onStop: () => void;
@@ -2227,6 +2273,29 @@ const MessageComposer = ({
   };
 
   const handleKeyDown = (event: KeyboardEvent<HTMLTextAreaElement>) => {
+    if (event.key === "ArrowUp") {
+      const prompt = lastSubmittedPrompt?.trim() ? lastSubmittedPrompt : "";
+
+      if (input.trim() || !prompt) {
+        return;
+      }
+
+      event.preventDefault();
+      setInput(prompt);
+
+      requestAnimationFrame(() => {
+        const textarea = textareaRef.current;
+
+        if (!textarea) {
+          return;
+        }
+
+        textarea.focus();
+        textarea.setSelectionRange(prompt.length, prompt.length);
+      });
+      return;
+    }
+
     if (event.key !== "Enter" || event.shiftKey) {
       return;
     }
