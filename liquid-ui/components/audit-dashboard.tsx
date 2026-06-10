@@ -15,12 +15,12 @@ import {
 import { useTheme } from "next-themes";
 import {
   ArrowLeft,
-  Bot,
   Languages,
   Loader2,
   Monitor,
   Moon,
   Plus,
+  Sparkles,
   Sun,
 } from "lucide-react";
 import { toast } from "sonner";
@@ -463,7 +463,7 @@ function IconSidebar({
           {conversations.map((conversation) => (
             <SidebarIcon
               key={conversation.id}
-              icon={<Bot className="size-5" aria-hidden />}
+              icon={<Sparkles className="size-5" aria-hidden />}
               label={conversation.title}
               active={conversation.id === activeConversationId}
               onClick={() => onSelectWorkspace(conversation)}
