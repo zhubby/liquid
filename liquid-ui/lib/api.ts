@@ -150,6 +150,7 @@ export async function apiRequest<T>(
     method?: string;
     token?: string;
     body?: unknown;
+    signal?: AbortSignal;
   } = {},
 ): Promise<T> {
   const headers = new Headers();
@@ -166,6 +167,7 @@ export async function apiRequest<T>(
     method: options.method ?? "GET",
     headers,
     body: options.body === undefined ? undefined : JSON.stringify(options.body),
+    signal: options.signal,
   });
 
   if (!response.ok) {

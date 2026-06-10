@@ -2,6 +2,7 @@
 
 import {
   Children,
+  type ClipboardEvent,
   isValidElement,
   type KeyboardEvent,
   type ReactElement,
@@ -15,6 +16,7 @@ import {
 } from "react";
 import {
   AlertTriangle,
+  Archive,
   Bot,
   Check,
   CheckCircle2,
@@ -22,6 +24,7 @@ import {
   Copy,
   Database,
   BarChart3,
+  FileJson,
   Loader2,
   PanelRightOpen,
   RotateCcw,
@@ -60,6 +63,8 @@ import {
   type ChatStreamEvent,
   type ChatStreamStage,
   type ChatTurn,
+  type DatabaseBackupRecord,
+  type DatabaseDiagram,
   type LlmProviderSettingsResponse,
   type ManagedDatabase,
   type PublicUser,
@@ -108,6 +113,50 @@ type ToolFinishedPayload = Extract<
   ChatStreamEvent,
   { type: "tool_finished" }
 >["payload"];
+
+type ResourceMentionKind = "database_diagram" | "database_backup";
+
+type ResourceMentionQuery = {
+  start: number;
+  end: number;
+  query: string;
+};
+
+type ResourceMentionItem = {
+  key: string;
+  kind: ResourceMentionKind;
+  id: string;
+  shortId: string;
+  title: string;
+  description: string;
+  meta: string;
+  searchText: string;
+};
+
+type ChatHighlightSegment = {
+  text: string;
+  item?: ResourceMentionItem;
+};
+
+type ResourceMentionTokenRange = {
+  start: number;
+  end: number;
+  token: string;
+  item: ResourceMentionItem;
+};
+
+type ResourceMentionGroup = {
+  kind: ResourceMentionKind;
+  label: string;
+  items: ResourceMentionItem[];
+};
+
+type ResourceMentionResources = {
+  diagrams: DatabaseDiagram[];
+  backups: DatabaseBackupRecord[];
+};
+
+type ResourceMentionStatus = "idle" | "loading" | "ready" | "failed";
 
 type ChatPanelProps = {
   token: string;
@@ -1024,6 +1073,8 @@ export function ChatPanel({
 
         <MessageComposer
           key={conversation.id}
+          token={token}
+          selectedDatabase={selectedDatabase}
           mode={composerMode}
           isLoading={isLoading}
           isSending={isSending}
@@ -2384,6 +2435,8 @@ function InlineStageState({ stage }: { stage: ChatStreamStage }) {
 }
 
 const MessageComposer = ({
+  token,
+  selectedDatabase,
   mode,
   isLoading,
   isSending,
@@ -2395,6 +2448,8 @@ const MessageComposer = ({
   onStop,
   onRetry,
 }: {
+  token: string;
+  selectedDatabase: ManagedDatabase;
   mode: ComposerMode;
   isLoading: boolean;
   isSending: boolean;
@@ -2406,11 +2461,82 @@ const MessageComposer = ({
   onStop: () => void;
   onRetry: (prompt: string) => void;
 }) => {
-  const { t } = useI18n();
+  const { locale, t } = useI18n();
   const [input, setInput] = useState("");
+  const [mentionResources, setMentionResources] =
+    useState<ResourceMentionResources>({
+      diagrams: [],
+      backups: [],
+    });
+  const [mentionStatus, setMentionStatus] =
+    useState<ResourceMentionStatus>("idle");
+  const [mentionError, setMentionError] = useState<string | null>(null);
+  const [mentionQuery, setMentionQuery] =
+    useState<ResourceMentionQuery | null>(null);
+  const [activeMentionKey, setActiveMentionKey] = useState<string | null>(null);
   const textareaRef = useRef<HTMLTextAreaElement>(null);
+  const mentionLoadRequestedRef = useRef(false);
+  const mentionLoadKeyRef = useRef("");
+  const mentionLoadAbortRef = useRef<AbortController | null>(null);
+  const composerMountedRef = useRef(true);
   const canSubmit = Boolean(input.trim()) && !isLoading && !isSending;
   const isSqlMode = mode === "sql";
+
+  const mentionItems = useMemo(
+    () => buildResourceMentionItems(mentionResources, locale, t),
+    [locale, mentionResources, t],
+  );
+  const mentionGroups = useMemo(
+    () =>
+      groupResourceMentionItems(mentionItems, mentionQuery?.query ?? "", t),
+    [mentionItems, mentionQuery?.query, t],
+  );
+  const flattenedMentionItems = useMemo(
+    () => mentionGroups.flatMap((group) => group.items),
+    [mentionGroups],
+  );
+
+  useEffect(() => {
+    composerMountedRef.current = true;
+
+    return () => {
+      composerMountedRef.current = false;
+      mentionLoadAbortRef.current?.abort();
+      mentionLoadAbortRef.current = null;
+    };
+  }, []);
+
+  useEffect(() => {
+    if (mentionStatus !== "loading") {
+      return;
+    }
+
+    const timeoutId = window.setTimeout(() => {
+      if (mentionStatus !== "loading") {
+        return;
+      }
+
+      mentionLoadAbortRef.current?.abort();
+      mentionLoadAbortRef.current = null;
+      mentionLoadRequestedRef.current = false;
+      setMentionError(t.workspace.resourceMentions.loadTimedOut);
+      setMentionStatus("failed");
+    }, RESOURCE_MENTION_LOAD_TIMEOUT_MS + 1000);
+
+    return () => window.clearTimeout(timeoutId);
+  }, [mentionStatus, t.workspace.resourceMentions.loadTimedOut]);
+
+  useEffect(() => {
+    mentionLoadAbortRef.current?.abort();
+    mentionLoadAbortRef.current = null;
+    mentionLoadRequestedRef.current = false;
+    mentionLoadKeyRef.current = "";
+    setMentionResources({ diagrams: [], backups: [] });
+    setMentionStatus("idle");
+    setMentionError(null);
+    setMentionQuery(null);
+    setActiveMentionKey(null);
+  }, [selectedDatabase.id, token]);
 
   useEffect(() => {
     const textarea = textareaRef.current;
@@ -2423,6 +2549,276 @@ const MessageComposer = ({
     textarea.style.height = `${Math.min(textarea.scrollHeight, 168)}px`;
   }, [input, mode]);
 
+  useEffect(() => {
+    if (!isSqlMode) {
+      return;
+    }
+
+    setMentionQuery(null);
+    setActiveMentionKey(null);
+  }, [isSqlMode]);
+
+  useEffect(() => {
+    if (!mentionQuery || flattenedMentionItems.length === 0) {
+      setActiveMentionKey(null);
+      return;
+    }
+
+    if (!flattenedMentionItems.some((item) => item.key === activeMentionKey)) {
+      setActiveMentionKey(flattenedMentionItems[0]?.key ?? null);
+    }
+  }, [activeMentionKey, flattenedMentionItems, mentionQuery]);
+
+  const loadMentionResources = useCallback((force = false) => {
+    if (mentionLoadRequestedRef.current && !force) {
+      return;
+    }
+
+    mentionLoadAbortRef.current?.abort();
+
+    const loadKey = `${token}:${selectedDatabase.id}:${Date.now()}`;
+    const controller = new AbortController();
+    let didTimeout = false;
+    const timeoutId = window.setTimeout(() => {
+      didTimeout = true;
+      controller.abort();
+    }, RESOURCE_MENTION_LOAD_TIMEOUT_MS);
+    const backupParams = new URLSearchParams({
+      managed_database_id: selectedDatabase.id,
+      page: "1",
+      page_size: "100",
+    });
+
+    mentionLoadRequestedRef.current = true;
+    mentionLoadKeyRef.current = loadKey;
+    mentionLoadAbortRef.current = controller;
+    setMentionStatus("loading");
+    setMentionError(null);
+
+    void Promise.all([
+      apiRequest<DatabaseDiagram[]>("/api/v1/database-diagrams", {
+        token,
+        signal: controller.signal,
+      }),
+      apiRequest<DatabaseBackupRecord[]>(
+        `/api/v1/database-backups?${backupParams.toString()}`,
+        { token, signal: controller.signal },
+      ),
+    ])
+      .then(([diagrams, backups]) => {
+        if (
+          !composerMountedRef.current ||
+          mentionLoadKeyRef.current !== loadKey
+        ) {
+          return;
+        }
+
+        mentionLoadRequestedRef.current = true;
+        setMentionResources({ diagrams, backups });
+        setMentionStatus("ready");
+      })
+      .catch((error) => {
+        if (
+          !composerMountedRef.current ||
+          mentionLoadKeyRef.current !== loadKey
+        ) {
+          return;
+        }
+
+        mentionLoadRequestedRef.current = false;
+        setMentionError(
+          didTimeout
+            ? t.workspace.resourceMentions.loadTimedOut
+            : error instanceof DOMException && error.name === "AbortError"
+              ? t.workspace.resourceMentions.loadFailed
+              : error instanceof Error
+                ? error.message
+                : t.workspace.resourceMentions.loadFailed,
+        );
+        setMentionStatus("failed");
+      })
+      .finally(() => {
+        window.clearTimeout(timeoutId);
+
+        if (mentionLoadAbortRef.current === controller) {
+          mentionLoadAbortRef.current = null;
+        }
+      });
+  }, [
+    selectedDatabase.id,
+    t.workspace.resourceMentions.loadFailed,
+    t.workspace.resourceMentions.loadTimedOut,
+    token,
+  ]);
+
+  const updateMentionQuery = useCallback(
+    (value: string, caretPosition: number | null) => {
+      if (isSqlMode || caretPosition === null) {
+        setMentionQuery(null);
+        return;
+      }
+
+      const nextQuery = findActiveResourceMention(value, caretPosition);
+
+      setMentionQuery(nextQuery);
+
+      if (nextQuery) {
+        loadMentionResources();
+      }
+    },
+    [isSqlMode, loadMentionResources],
+  );
+
+  const refreshMentionQueryFromTextarea = useCallback(() => {
+    const textarea = textareaRef.current;
+
+    if (!textarea) {
+      return;
+    }
+
+    updateMentionQuery(textarea.value, textarea.selectionStart);
+  }, [updateMentionQuery]);
+
+  const selectMentionItem = useCallback(
+    (item: ResourceMentionItem) => {
+      if (!mentionQuery) {
+        return;
+      }
+
+      const token = resourceMentionVisibleToken(item.kind, item.shortId);
+      const before = input.slice(0, mentionQuery.start);
+      const after = input.slice(mentionQuery.end);
+      const separator = after && !/^[\s,.;:!?，。；：！？)]/.test(after) ? " " : "";
+      const nextInput = `${before}${token}${separator}${after}`;
+      const caretPosition = before.length + token.length + separator.length;
+
+      setInput(nextInput);
+      setMentionQuery(null);
+      setActiveMentionKey(null);
+
+      requestAnimationFrame(() => {
+        const textarea = textareaRef.current;
+
+        if (!textarea) {
+          return;
+        }
+
+        textarea.focus();
+        textarea.setSelectionRange(caretPosition, caretPosition);
+      });
+    },
+    [input, mentionQuery],
+  );
+
+  const moveActiveMention = useCallback(
+    (direction: 1 | -1) => {
+      if (flattenedMentionItems.length === 0) {
+        return;
+      }
+
+      const currentIndex = Math.max(
+        0,
+        flattenedMentionItems.findIndex((item) => item.key === activeMentionKey),
+      );
+      const nextIndex =
+        (currentIndex + direction + flattenedMentionItems.length) %
+        flattenedMentionItems.length;
+
+      setActiveMentionKey(flattenedMentionItems[nextIndex]?.key ?? null);
+    },
+    [activeMentionKey, flattenedMentionItems],
+  );
+
+  const replaceMentionTokenSelection = useCallback(
+    (
+      replacement: string,
+      deleteDirection?: "backward" | "forward",
+    ) => {
+      const textarea = textareaRef.current;
+
+      if (!textarea || isSqlMode) {
+        return false;
+      }
+
+      const value = textarea.value;
+      const selectionStart = textarea.selectionStart;
+      const selectionEnd = textarea.selectionEnd;
+      const ranges = resourceMentionTokenRanges(value, mentionItems);
+
+      if (ranges.length === 0) {
+        return false;
+      }
+
+      let replaceStart = selectionStart;
+      let replaceEnd = selectionEnd;
+
+      if (selectionStart === selectionEnd) {
+        const range =
+          deleteDirection === "backward"
+            ? ranges.find(
+                (candidate) =>
+                  selectionStart > candidate.start && selectionStart <= candidate.end,
+              )
+            : deleteDirection === "forward"
+              ? ranges.find(
+                  (candidate) =>
+                    selectionStart >= candidate.start &&
+                    selectionStart < candidate.end,
+                )
+              : ranges.find(
+                  (candidate) =>
+                    selectionStart > candidate.start && selectionStart < candidate.end,
+                );
+
+        if (!range) {
+          return false;
+        }
+
+        replaceStart = range.start;
+        replaceEnd = range.end;
+      } else {
+        const touchedRanges = ranges.filter(
+          (range) => selectionStart < range.end && selectionEnd > range.start,
+        );
+
+        if (touchedRanges.length === 0) {
+          return false;
+        }
+
+        replaceStart = Math.min(
+          selectionStart,
+          ...touchedRanges.map((range) => range.start),
+        );
+        replaceEnd = Math.max(
+          selectionEnd,
+          ...touchedRanges.map((range) => range.end),
+        );
+      }
+
+      const nextInput =
+        value.slice(0, replaceStart) + replacement + value.slice(replaceEnd);
+      const nextCaret = replaceStart + replacement.length;
+
+      setInput(nextInput);
+      setMentionQuery(null);
+      setActiveMentionKey(null);
+
+      requestAnimationFrame(() => {
+        const nextTextarea = textareaRef.current;
+
+        if (!nextTextarea) {
+          return;
+        }
+
+        nextTextarea.focus();
+        nextTextarea.setSelectionRange(nextCaret, nextCaret);
+      });
+
+      return true;
+    },
+    [isSqlMode, mentionItems],
+  );
+
   const submitInput = () => {
     const prompt = input.trim();
 
@@ -2431,10 +2827,108 @@ const MessageComposer = ({
     }
 
     setInput("");
-    onSubmit(prompt);
+    setMentionQuery(null);
+    setActiveMentionKey(null);
+    onSubmit(isSqlMode ? prompt : expandResourceMentionTokens(prompt, mentionItems));
   };
 
+  const handleCut = useCallback(
+    (event: ClipboardEvent<HTMLTextAreaElement>) => {
+      const textarea = textareaRef.current;
+
+      if (!textarea || textarea.selectionStart === textarea.selectionEnd) {
+        return;
+      }
+
+      const selectedText = textarea.value.slice(
+        textarea.selectionStart,
+        textarea.selectionEnd,
+      );
+
+      if (replaceMentionTokenSelection("")) {
+        event.preventDefault();
+        event.clipboardData.setData("text/plain", selectedText);
+      }
+    },
+    [replaceMentionTokenSelection],
+  );
+
+  const handlePaste = useCallback(
+    (event: ClipboardEvent<HTMLTextAreaElement>) => {
+      const replacement = event.clipboardData.getData("text/plain");
+
+      if (replaceMentionTokenSelection(replacement)) {
+        event.preventDefault();
+      }
+    },
+    [replaceMentionTokenSelection],
+  );
+
   const handleKeyDown = (event: KeyboardEvent<HTMLTextAreaElement>) => {
+    if (event.nativeEvent.isComposing) {
+      return;
+    }
+
+    if (mentionQuery && !isSqlMode) {
+      if (event.key === "Escape") {
+        event.preventDefault();
+        setMentionQuery(null);
+        setActiveMentionKey(null);
+        return;
+      }
+
+      if (event.key === "ArrowDown" && flattenedMentionItems.length > 0) {
+        event.preventDefault();
+        moveActiveMention(1);
+        return;
+      }
+
+      if (event.key === "ArrowUp" && flattenedMentionItems.length > 0) {
+        event.preventDefault();
+        moveActiveMention(-1);
+        return;
+      }
+
+      if (
+        (event.key === "Enter" || event.key === "Tab") &&
+        flattenedMentionItems.length > 0
+      ) {
+        const item =
+          flattenedMentionItems.find((candidate) => candidate.key === activeMentionKey) ??
+          flattenedMentionItems[0];
+
+        if (item) {
+          event.preventDefault();
+          selectMentionItem(item);
+          return;
+        }
+      }
+    }
+
+    if (
+      event.key === "Backspace" &&
+      replaceMentionTokenSelection("", "backward")
+    ) {
+      event.preventDefault();
+      return;
+    }
+
+    if (event.key === "Delete" && replaceMentionTokenSelection("", "forward")) {
+      event.preventDefault();
+      return;
+    }
+
+    if (
+      event.key.length === 1 &&
+      !event.altKey &&
+      !event.ctrlKey &&
+      !event.metaKey &&
+      replaceMentionTokenSelection(event.key)
+    ) {
+      event.preventDefault();
+      return;
+    }
+
     if (event.key === "ArrowUp") {
       const prompt = lastSubmittedPrompt?.trim() ? lastSubmittedPrompt : "";
 
@@ -2444,6 +2938,8 @@ const MessageComposer = ({
 
       event.preventDefault();
       setInput(prompt);
+      setMentionQuery(null);
+      setActiveMentionKey(null);
 
       requestAnimationFrame(() => {
         const textarea = textareaRef.current;
@@ -2485,7 +2981,13 @@ const MessageComposer = ({
               variant="outline"
               size="sm"
               className="h-8 shrink-0 rounded-md"
-              onClick={() => onRetry(failedTurn.prompt)}
+              onClick={() =>
+                onRetry(
+                  isSqlMode
+                    ? failedTurn.prompt
+                    : expandResourceMentionTokens(failedTurn.prompt, mentionItems),
+                )
+              }
             >
               <RotateCcw className="size-4" aria-hidden />
               {t.workspace.retry}
@@ -2502,12 +3004,24 @@ const MessageComposer = ({
       ) : null}
 
       <form
-        className="rounded-lg border bg-background p-2 shadow-xs focus-within:ring-[3px] focus-within:ring-ring/50"
+        className="relative rounded-lg border bg-background p-2 shadow-xs focus-within:ring-[3px] focus-within:ring-ring/50"
         onSubmit={(event) => {
           event.preventDefault();
           submitInput();
         }}
       >
+        {mentionQuery && !isSqlMode ? (
+          <ResourceMentionPanel
+            groups={mentionGroups}
+            status={mentionStatus}
+            query={mentionQuery.query}
+            error={mentionError}
+            activeKey={activeMentionKey}
+            onActiveKeyChange={setActiveMentionKey}
+            onRetry={() => loadMentionResources(true)}
+            onSelect={selectMentionItem}
+          />
+        ) : null}
         <label className="sr-only" htmlFor="ai-message">
           {isSqlMode ? t.workspace.sqlInputLabel : t.workspace.inputLabel}
         </label>
@@ -2521,16 +3035,21 @@ const MessageComposer = ({
             onKeyDown={handleKeyDown}
           />
         ) : (
-          <textarea
-            ref={textareaRef}
-            id="ai-message"
-            className="max-h-[10.5rem] min-h-12 w-full resize-none bg-transparent px-2 py-1.5 text-sm leading-6 outline-none placeholder:text-muted-foreground"
+          <ChatHighlightedTextarea
+            textareaRef={textareaRef}
+            input={input}
+            isLoading={isLoading}
             placeholder={t.workspace.inputPlaceholder}
-            value={input}
-            disabled={isLoading}
-            rows={1}
-            onChange={(event) => setInput(event.target.value)}
+            mentionItems={mentionItems}
+            onChange={(value, caretPosition) => {
+              setInput(value);
+              updateMentionQuery(value, caretPosition);
+            }}
+            onClick={refreshMentionQueryFromTextarea}
+            onCut={handleCut}
             onKeyDown={handleKeyDown}
+            onKeyUp={refreshMentionQueryFromTextarea}
+            onPaste={handlePaste}
           />
         )}
         <div className="mt-2 flex flex-col gap-2 sm:flex-row sm:items-center sm:justify-between">
@@ -2612,6 +3131,482 @@ const MessageComposer = ({
     </footer>
   );
 };
+
+function ResourceMentionPanel({
+  groups,
+  status,
+  query,
+  error,
+  activeKey,
+  onActiveKeyChange,
+  onRetry,
+  onSelect,
+}: {
+  groups: ResourceMentionGroup[];
+  status: ResourceMentionStatus;
+  query: string;
+  error: string | null;
+  activeKey: string | null;
+  onActiveKeyChange: (key: string) => void;
+  onRetry: () => void;
+  onSelect: (item: ResourceMentionItem) => void;
+}) {
+  const { t } = useI18n();
+  const hasResults = groups.some((group) => group.items.length > 0);
+
+  return (
+    <div
+      className="absolute bottom-[calc(100%+0.5rem)] left-0 right-0 z-30 max-h-80 overflow-hidden rounded-lg border bg-popover text-popover-foreground shadow-lg"
+      role="listbox"
+      aria-label={t.workspace.resourceMentions.panelLabel}
+    >
+      <div className="flex items-center justify-between gap-3 border-b px-3 py-2 text-xs text-muted-foreground">
+        <span className="truncate">
+          {query
+            ? t.workspace.resourceMentions.searching(query)
+            : t.workspace.resourceMentions.searchHint}
+        </span>
+        <span className="shrink-0 font-mono">@</span>
+      </div>
+
+      <div className="max-h-72 overflow-y-auto py-1">
+        {status === "loading" ? (
+          <ResourceMentionState>
+            <Loader2 className="size-4 animate-spin" aria-hidden />
+            {t.workspace.resourceMentions.loading}
+          </ResourceMentionState>
+        ) : status === "failed" ? (
+          <div className="flex items-center justify-between gap-3 px-3 py-3 text-sm text-muted-foreground">
+            <div className="flex min-w-0 items-center gap-2">
+              <AlertTriangle className="size-4 shrink-0 text-destructive" aria-hidden />
+              <span className="truncate">
+                {error ?? t.workspace.resourceMentions.loadFailed}
+              </span>
+            </div>
+            <Button
+              type="button"
+              variant="outline"
+              size="sm"
+              className="h-7 shrink-0 rounded-md"
+              onMouseDown={(event) => {
+                event.preventDefault();
+                onRetry();
+              }}
+            >
+              {t.workspace.resourceMentions.retry}
+            </Button>
+          </div>
+        ) : hasResults ? (
+          groups.map((group) =>
+            group.items.length > 0 ? (
+              <section key={group.kind} className="py-1">
+                <div className="px-3 py-1 text-[11px] font-medium text-muted-foreground">
+                  {group.label}
+                </div>
+                <div className="space-y-0.5 px-1">
+                  {group.items.map((item) => (
+                    <button
+                      key={item.key}
+                      type="button"
+                      role="option"
+                      aria-selected={item.key === activeKey}
+                      className={cn(
+                        "flex w-full min-w-0 items-start gap-2 rounded-md px-2 py-2 text-left outline-none transition-colors",
+                        item.key === activeKey
+                          ? "bg-accent text-accent-foreground"
+                          : "hover:bg-muted/60",
+                      )}
+                      onMouseEnter={() => onActiveKeyChange(item.key)}
+                      onMouseDown={(event) => {
+                        event.preventDefault();
+                        onSelect(item);
+                      }}
+                    >
+                      <span className="mt-0.5 flex size-7 shrink-0 items-center justify-center rounded-md border bg-background text-muted-foreground">
+                        {item.kind === "database_backup" ? (
+                          <Archive className="size-3.5" aria-hidden />
+                        ) : (
+                          <FileJson className="size-3.5" aria-hidden />
+                        )}
+                      </span>
+                      <span className="min-w-0 flex-1">
+                        <span className="block truncate text-sm font-medium">
+                          {item.title}
+                        </span>
+                        <span className="mt-0.5 block truncate text-xs text-muted-foreground">
+                          {item.description}
+                        </span>
+                        <span className="mt-0.5 block truncate font-mono text-[11px] text-muted-foreground">
+                          {item.meta}
+                        </span>
+                      </span>
+                    </button>
+                  ))}
+                </div>
+              </section>
+            ) : null,
+          )
+        ) : (
+          <ResourceMentionState>
+            {status === "ready"
+              ? t.workspace.resourceMentions.noResults
+              : t.workspace.resourceMentions.empty}
+          </ResourceMentionState>
+        )}
+      </div>
+    </div>
+  );
+}
+
+function ResourceMentionState({ children }: { children: ReactNode }) {
+  return (
+    <div className="flex items-center gap-2 px-3 py-4 text-sm text-muted-foreground">
+      {children}
+    </div>
+  );
+}
+
+function ChatHighlightedTextarea({
+  textareaRef,
+  input,
+  isLoading,
+  placeholder,
+  mentionItems,
+  onChange,
+  onClick,
+  onCut,
+  onKeyDown,
+  onKeyUp,
+  onPaste,
+}: {
+  textareaRef: Ref<HTMLTextAreaElement>;
+  input: string;
+  isLoading: boolean;
+  placeholder: string;
+  mentionItems: ResourceMentionItem[];
+  onChange: (value: string, caretPosition: number | null) => void;
+  onClick: () => void;
+  onCut: (event: ClipboardEvent<HTMLTextAreaElement>) => void;
+  onKeyDown: (event: KeyboardEvent<HTMLTextAreaElement>) => void;
+  onKeyUp: () => void;
+  onPaste: (event: ClipboardEvent<HTMLTextAreaElement>) => void;
+}) {
+  const highlightedInput = input || " ";
+  const segments = chatHighlightSegments(highlightedInput, mentionItems);
+
+  return (
+    <div className="relative max-h-[10.5rem] min-h-12 overflow-hidden">
+      <div
+        aria-hidden
+        className="pointer-events-none absolute inset-0 overflow-hidden px-2 py-1.5 text-sm leading-6 whitespace-pre-wrap break-words text-foreground"
+      >
+        {segments.map((segment, index) =>
+          segment.item ? (
+            <span
+              key={`${segment.item.key}-${index}`}
+              className={cn(
+                "rounded-md px-1 py-0.5 font-medium ring-1 [-webkit-box-decoration-break:clone] [box-decoration-break:clone]",
+                segment.item.kind === "database_backup"
+                  ? "bg-primary/10 text-primary ring-primary/25"
+                  : "bg-secondary text-secondary-foreground ring-border",
+              )}
+            >
+              {segment.text}
+            </span>
+          ) : (
+            <span key={`text-${index}`}>{segment.text}</span>
+          ),
+        )}
+      </div>
+      <textarea
+        ref={textareaRef}
+        id="ai-message"
+        className="relative z-10 max-h-[10.5rem] min-h-12 w-full resize-none bg-transparent px-2 py-1.5 text-sm leading-6 text-transparent caret-foreground outline-none selection:bg-primary/20 placeholder:text-muted-foreground"
+        placeholder={placeholder}
+        value={input}
+        disabled={isLoading}
+        rows={1}
+        onChange={(event) =>
+          onChange(event.target.value, event.currentTarget.selectionStart)
+        }
+        onClick={onClick}
+        onCut={onCut}
+        onKeyDown={onKeyDown}
+        onKeyUp={onKeyUp}
+        onPaste={onPaste}
+      />
+    </div>
+  );
+}
+
+const RESOURCE_MENTION_LIMIT = 5;
+const RESOURCE_MENTION_LOAD_TIMEOUT_MS = 8000;
+const RESOURCE_MENTION_SEND_LABELS: Record<ResourceMentionKind, string> = {
+  database_backup: "备份记录",
+  database_diagram: "数据库设计记录",
+};
+
+function buildResourceMentionItems(
+  resources: ResourceMentionResources,
+  locale: Locale,
+  t: ReturnType<typeof useI18n>["t"],
+): ResourceMentionItem[] {
+  const ids = [
+    ...resources.diagrams.map((diagram) => diagram.id),
+    ...resources.backups.map((backup) => backup.id),
+  ];
+
+  const diagrams = resources.diagrams.map((diagram) => {
+    const shortId = uniqueResourceMentionId(diagram.id, ids);
+    const stats = t.workspace.resourceMentions.designDescription(
+      diagram.document.tables.length,
+      diagram.document.relationships.length,
+    );
+
+    return {
+      key: `database_diagram:${diagram.id}`,
+      kind: "database_diagram" as const,
+      id: diagram.id,
+      shortId,
+      title: diagram.title,
+      description: diagram.description ?? stats,
+      meta: `${t.workspace.resourceMentions.updatedAt(
+        dateTimeLabel(diagram.updated_at, locale),
+      )} · ${resourceMentionVisibleToken("database_diagram", shortId)}`,
+      searchText: mentionSearchText([
+        diagram.id,
+        diagram.title,
+        diagram.description,
+      ]),
+    };
+  });
+
+  const backups = resources.backups.map((backup) => {
+    const shortId = uniqueResourceMentionId(backup.id, ids);
+    const statusLabel = t.backupHistory.statuses[backup.status];
+
+    return {
+      key: `database_backup:${backup.id}`,
+      kind: "database_backup" as const,
+      id: backup.id,
+      shortId,
+      title: backup.purpose ?? t.workspace.resourceMentions.backupTitle(shortId),
+      description: `${backup.source.name} / ${backup.source.database}`,
+      meta: `${statusLabel} · ${t.workspace.resourceMentions.createdAt(
+        dateTimeLabel(backup.created_at, locale),
+      )} · ${resourceMentionVisibleToken("database_backup", shortId)}`,
+      searchText: mentionSearchText([
+        backup.id,
+        backup.purpose,
+        backup.source.name,
+        backup.source.database,
+        backup.source.host,
+        backup.source.username,
+        backup.status,
+        statusLabel,
+        backup.phase,
+        backup.trigger,
+        backup.storage?.kind,
+        backup.storage?.local_path,
+        backup.storage?.bucket,
+        backup.storage?.key,
+      ]),
+    };
+  });
+
+  return [...diagrams, ...backups];
+}
+
+function groupResourceMentionItems(
+  items: ResourceMentionItem[],
+  query: string,
+  t: ReturnType<typeof useI18n>["t"],
+): ResourceMentionGroup[] {
+  const normalizedQuery = normalizeMentionSearch(query);
+  const matches = (item: ResourceMentionItem) =>
+    !normalizedQuery || item.searchText.includes(normalizedQuery);
+
+  return [
+    {
+      kind: "database_diagram",
+      label: t.workspace.resourceMentions.groups.databaseDesign,
+      items: items
+        .filter((item) => item.kind === "database_diagram" && matches(item))
+        .slice(0, RESOURCE_MENTION_LIMIT),
+    },
+    {
+      kind: "database_backup",
+      label: t.workspace.resourceMentions.groups.backups,
+      items: items
+        .filter((item) => item.kind === "database_backup" && matches(item))
+        .slice(0, RESOURCE_MENTION_LIMIT),
+    },
+  ];
+}
+
+function chatHighlightSegments(
+  value: string,
+  mentionItems: ResourceMentionItem[],
+): ChatHighlightSegment[] {
+  const ranges = resourceMentionTokenRanges(value, mentionItems);
+
+  if (ranges.length === 0) {
+    return [{ text: value }];
+  }
+
+  const segments: ChatHighlightSegment[] = [];
+  let cursor = 0;
+
+  for (const range of ranges) {
+    if (range.start > cursor) {
+      segments.push({ text: value.slice(cursor, range.start) });
+    }
+
+    segments.push({ text: range.token, item: range.item });
+    cursor = range.end;
+  }
+
+  if (cursor < value.length) {
+    segments.push({ text: value.slice(cursor) });
+  }
+
+  return segments.length > 0 ? segments : [{ text: value }];
+}
+
+function resourceMentionTokenRanges(
+  value: string,
+  mentionItems: ResourceMentionItem[],
+): ResourceMentionTokenRange[] {
+  const tokens = mentionItems
+    .map((item) => ({
+      item,
+      token: resourceMentionVisibleToken(item.kind, item.shortId),
+    }))
+    .sort((left, right) => right.token.length - left.token.length);
+
+  if (tokens.length === 0) {
+    return [];
+  }
+
+  const ranges: ResourceMentionTokenRange[] = [];
+  let cursor = 0;
+
+  while (cursor < value.length) {
+    let nextMatch:
+      | { index: number; token: string; item: ResourceMentionItem }
+      | null = null;
+
+    for (const candidate of tokens) {
+      const index = value.indexOf(candidate.token, cursor);
+
+      if (index < 0) {
+        continue;
+      }
+
+      if (
+        !nextMatch ||
+        index < nextMatch.index ||
+        (index === nextMatch.index && candidate.token.length > nextMatch.token.length)
+      ) {
+        nextMatch = {
+          index,
+          token: candidate.token,
+          item: candidate.item,
+        };
+      }
+    }
+
+    if (!nextMatch) {
+      break;
+    }
+
+    ranges.push({
+      start: nextMatch.index,
+      end: nextMatch.index + nextMatch.token.length,
+      token: nextMatch.token,
+      item: nextMatch.item,
+    });
+    cursor = nextMatch.index + nextMatch.token.length;
+  }
+
+  return ranges;
+}
+
+function findActiveResourceMention(
+  value: string,
+  caretPosition: number,
+): ResourceMentionQuery | null {
+  const beforeCaret = value.slice(0, caretPosition);
+  const atIndex = beforeCaret.lastIndexOf("@");
+
+  if (atIndex < 0) {
+    return null;
+  }
+
+  const query = beforeCaret.slice(atIndex + 1);
+
+  if (!query || /[\s/]/.test(query)) {
+    return query === "" ? { start: atIndex, end: caretPosition, query } : null;
+  }
+
+  return {
+    start: atIndex,
+    end: caretPosition,
+    query,
+  };
+}
+
+function expandResourceMentionTokens(
+  value: string,
+  items: ResourceMentionItem[],
+): string {
+  return [...items]
+    .sort(
+      (left, right) =>
+        resourceMentionVisibleToken(right.kind, right.shortId).length -
+        resourceMentionVisibleToken(left.kind, left.shortId).length,
+    )
+    .reduce(
+      (current, item) =>
+        current
+          .split(resourceMentionVisibleToken(item.kind, item.shortId))
+          .join(resourceMentionExpandedToken(item.kind, item.id)),
+      value,
+    );
+}
+
+function resourceMentionVisibleToken(
+  kind: ResourceMentionKind,
+  shortId: string,
+) {
+  return `@${RESOURCE_MENTION_SEND_LABELS[kind]}/${shortId}`;
+}
+
+function resourceMentionExpandedToken(kind: ResourceMentionKind, id: string) {
+  return `${RESOURCE_MENTION_SEND_LABELS[kind]}/${id}`;
+}
+
+function uniqueResourceMentionId(id: string, ids: string[]) {
+  const minimumLength = Math.min(8, id.length);
+
+  for (let length = minimumLength; length <= id.length; length += 1) {
+    const prefix = id.slice(0, length);
+
+    if (ids.every((candidate) => candidate === id || !candidate.startsWith(prefix))) {
+      return prefix;
+    }
+  }
+
+  return id;
+}
+
+function mentionSearchText(values: Array<string | null | undefined>) {
+  return normalizeMentionSearch(values.filter(Boolean).join(" "));
+}
+
+function normalizeMentionSearch(value: string) {
+  return value.toLocaleLowerCase();
+}
 
 function SqlHighlightedTextarea({
   textareaRef,

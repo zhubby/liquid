@@ -460,6 +460,26 @@ const zhCN = {
     inputLabel: "输入问题",
     inputPlaceholder: "输入问题，例如：列出本周风险最高的数据集",
     composerHint: "聊天模式",
+    resourceMentions: {
+      panelLabel: "资源引用",
+      searchHint: "输入内容搜索资源",
+      searching: (query: string) => `搜索「${query}」`,
+      loading: "正在加载资源",
+      loadFailed: "加载资源失败",
+      loadTimedOut: "加载资源超时，请重试",
+      retry: "重试",
+      empty: "暂无可引用资源",
+      noResults: "没有匹配的资源",
+      groups: {
+        databaseDesign: "数据库设计记录",
+        backups: "备份记录",
+      },
+      designDescription: (tableCount: number, relationshipCount: number) =>
+        `${tableCount} 张表 · ${relationshipCount} 条关系`,
+      backupTitle: (shortId: string) => `备份 ${shortId}`,
+      updatedAt: (value: string) => `更新 ${value}`,
+      createdAt: (value: string) => `创建 ${value}`,
+    },
     chatModeLabel: "聊天",
     sqlModeLabel: "SQL",
     sqlModeSwitchLabel: "切换 SQL 模式",
@@ -1151,6 +1171,28 @@ const enUS: Messages = {
     inputPlaceholder:
       "Ask a question, for example: list the highest-risk datasets this week",
     composerHint: "Chat mode",
+    resourceMentions: {
+      panelLabel: "Resource mentions",
+      searchHint: "Type to search resources",
+      searching: (query: string) => `Searching "${query}"`,
+      loading: "Loading resources",
+      loadFailed: "Failed to load resources",
+      loadTimedOut: "Loading resources timed out. Try again.",
+      retry: "Retry",
+      empty: "No resources available",
+      noResults: "No matching resources",
+      groups: {
+        databaseDesign: "Database design records",
+        backups: "Backup records",
+      },
+      designDescription: (tableCount: number, relationshipCount: number) =>
+        `${tableCount} ${tableCount === 1 ? "table" : "tables"} · ${relationshipCount} ${
+          relationshipCount === 1 ? "relationship" : "relationships"
+        }`,
+      backupTitle: (shortId: string) => `Backup ${shortId}`,
+      updatedAt: (value: string) => `Updated ${value}`,
+      createdAt: (value: string) => `Created ${value}`,
+    },
     chatModeLabel: "Chat",
     sqlModeLabel: "SQL",
     sqlModeSwitchLabel: "Toggle SQL mode",
