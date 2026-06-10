@@ -37,7 +37,6 @@ import {
   BaseEdge,
   EdgeLabelRenderer,
   Handle,
-  MarkerType,
   MiniMap,
   Panel,
   Position,
@@ -222,14 +221,30 @@ type RelationshipEdgeData = {
   relationship: DatabaseDiagramRelationship;
   active: boolean;
   cardinalityLabel: string;
+  tone: RelationshipEdgeTone;
+  flowDelay: string;
 };
 
 type DiagramEdge = Edge<RelationshipEdgeData, "relationship">;
+
+type RelationshipEdgeTone = {
+  stroke: string;
+  labelBackground: string;
+  labelBorder: string;
+  labelText: string;
+  badgeBackground: string;
+};
 
 type DocumentHistory = {
   past: DatabaseDiagramDocument[];
   future: DatabaseDiagramDocument[];
 };
+
+type QueuedNodePositionChange = DiagramNodePositionChange & {
+  dragging: true;
+};
+
+type QueuedNodePositionChangeMap = Map<string, QueuedNodePositionChange>;
 
 const DOCUMENT_HISTORY_LIMIT = 50;
 
@@ -656,6 +671,10 @@ function DatabaseDiagramEditor({
   const [dirty, setDirty] = useState(false);
   const [query, setQuery] = useState("");
   const documentRef = useRef(document);
+  const queuedPositionChangesRef = useRef<QueuedNodePositionChangeMap>(
+    new Map(),
+  );
+  const flowNodeFrameRef = useRef<number | null>(null);
 
   useEffect(() => {
     const nextDocument = normalizeDocument(diagram.document);
@@ -667,11 +686,24 @@ function DatabaseDiagramEditor({
     setHistory({ past: [], future: [] });
     setSelected({ kind: "diagram" });
     setDirty(false);
+    queuedPositionChangesRef.current = new Map();
+    if (flowNodeFrameRef.current !== null) {
+      window.cancelAnimationFrame(flowNodeFrameRef.current);
+      flowNodeFrameRef.current = null;
+    }
   }, [diagram]);
 
   useEffect(() => {
     documentRef.current = document;
   }, [document]);
+
+  useEffect(() => {
+    return () => {
+      if (flowNodeFrameRef.current !== null) {
+        window.cancelAnimationFrame(flowNodeFrameRef.current);
+      }
+    };
+  }, []);
 
   const normalizedQuery = query.trim().toLowerCase();
   const visibleElementIds = useMemo(() => {
@@ -710,14 +742,6 @@ function DatabaseDiagramEditor({
 
     return ids;
   }, [document.notes, document.tables, normalizedQuery]);
-
-  const selectedCounts = {
-    tables: document.tables.length,
-    relationships: document.relationships.length,
-    notes: document.notes.length,
-    areas: document.areas.length,
-    enums: document.enums.length,
-  };
 
   const mutateDocument = useCallback((
     updater: (current: DatabaseDiagramDocument) => DatabaseDiagramDocument,
@@ -808,30 +832,72 @@ function DatabaseDiagramEditor({
     setFlowNodes((current) => mergeFlowNodeState(current, desiredFlowNodes));
   }, [desiredFlowNodes]);
 
-  const nodesDraggable = useMemo(
-    () => flowNodes.every(hasMeasuredFlowNode),
-    [flowNodes],
-  );
-
   const flowEdges = useMemo(
     () => buildFlowEdges(document.relationships, selected),
     [document.relationships, selected],
   );
 
+  const flushQueuedPositionChanges = useCallback(() => {
+    flowNodeFrameRef.current = null;
+
+    if (queuedPositionChangesRef.current.size === 0) {
+      return;
+    }
+
+    const positionChanges = [...queuedPositionChangesRef.current.values()];
+    queuedPositionChangesRef.current = new Map();
+
+    setFlowNodes((current) => applyNodeChanges(positionChanges, current));
+  }, []);
+
   const handleNodesChange = useCallback<OnNodesChange<DiagramNode>>(
     (changes) => {
-      setFlowNodes((current) => applyNodeChanges(changes, current));
+      const immediateChanges: NodeChange<DiagramNode>[] = [];
+      const queuedPositionChanges: QueuedNodePositionChange[] = [];
+      const committedPositionChanges: DiagramNodePositionChange[] = [];
 
-      const positionChanges = changes.filter(isCommittedNodePositionChange);
+      for (const change of changes) {
+        if (isDraggingNodePositionChange(change)) {
+          queuedPositionChanges.push(change);
+        } else if (isCommittedNodePositionChange(change)) {
+          committedPositionChanges.push(change);
+        } else {
+          immediateChanges.push(change);
+        }
+      }
 
-      if (positionChanges.length === 0) {
+      if (queuedPositionChanges.length > 0) {
+        for (const change of queuedPositionChanges) {
+          queuedPositionChangesRef.current.set(change.id, change);
+        }
+
+        if (flowNodeFrameRef.current === null) {
+          flowNodeFrameRef.current =
+            window.requestAnimationFrame(flushQueuedPositionChanges);
+        }
+      }
+
+      if (immediateChanges.length > 0) {
+        setFlowNodes((current) => applyNodeChanges(immediateChanges, current));
+      }
+
+      if (committedPositionChanges.length === 0) {
         return;
       }
+
+      if (flowNodeFrameRef.current !== null) {
+        window.cancelAnimationFrame(flowNodeFrameRef.current);
+        flowNodeFrameRef.current = null;
+      }
+      queuedPositionChangesRef.current = new Map();
+      setFlowNodes((current) =>
+        applyNodeChanges(committedPositionChanges, current),
+      );
 
       mutateDocument((current) => {
         let nextDocument = current;
 
-        for (const change of positionChanges) {
+        for (const change of committedPositionChanges) {
           const target = selectedElementFromFlowNodeId(change.id);
 
           if (!target || !change.position) {
@@ -872,7 +938,7 @@ function DatabaseDiagramEditor({
         return nextDocument;
       });
     },
-    [mutateDocument],
+    [flushQueuedPositionChanges, mutateDocument],
   );
 
   const handleConnect = useCallback<OnConnect>(
@@ -1182,98 +1248,104 @@ function DatabaseDiagramEditor({
         </div>
       </header>
 
-      <div className="grid min-h-0 flex-1 grid-cols-1 grid-rows-[minmax(320px,1fr)_minmax(260px,34vh)] lg:grid-cols-[minmax(0,1fr)_360px] lg:grid-rows-1">
-        <section className="flex min-h-0 min-w-0 flex-col border-b bg-muted/20 lg:border-b-0 lg:border-r">
-          <div className="flex flex-wrap items-center justify-between gap-2 border-b bg-background px-3 py-2">
-            <div className="relative min-w-64 flex-1">
-              <Search className="pointer-events-none absolute left-3 top-1/2 size-4 -translate-y-1/2 text-muted-foreground" />
-              <input
-                value={query}
-                placeholder={copy.search}
-                className="h-9 w-full rounded-md border bg-background pl-9 pr-3 text-sm outline-none placeholder:text-muted-foreground focus-visible:ring-[3px] focus-visible:ring-ring/50"
-                onChange={(event) => setQuery(event.target.value)}
-              />
-            </div>
-            <div className="flex flex-wrap gap-1.5 text-xs">
-              <Badge variant="outline" className="rounded-md">
-                {copy.tables}: {selectedCounts.tables}
-              </Badge>
-              <Badge variant="outline" className="rounded-md">
-                {copy.relationships}: {selectedCounts.relationships}
-              </Badge>
-              <Badge variant="outline" className="rounded-md">
-                {copy.enums}: {selectedCounts.enums}
-              </Badge>
-            </div>
+      <div className="relative min-h-0 flex-1 overflow-hidden bg-muted/30">
+        <div className="pointer-events-auto absolute left-3 right-3 top-3 z-30 max-w-sm md:right-auto md:w-80">
+          <div className="relative">
+            <Search className="pointer-events-none absolute left-3 top-1/2 size-4 -translate-y-1/2 text-muted-foreground" />
+            <input
+              value={query}
+              placeholder={copy.search}
+              aria-label={copy.search}
+              className="h-9 w-full rounded-md border bg-background pl-9 pr-3 text-sm shadow-sm outline-none placeholder:text-muted-foreground focus-visible:ring-[3px] focus-visible:ring-ring/50"
+              onChange={(event) => setQuery(event.target.value)}
+            />
           </div>
+        </div>
 
-          <div className="relative min-h-0 flex-1 bg-muted/30">
-            {!matchedSomething ? (
-              <div className="absolute left-3 top-3 z-20 rounded-md border bg-background px-3 py-2 text-xs text-muted-foreground shadow-sm">
-                {copy.noMatches}
-              </div>
-            ) : null}
-            <ReactFlow
-              nodes={flowNodes}
-              edges={flowEdges}
-              nodeTypes={diagramNodeTypes}
-              edgeTypes={diagramEdgeTypes}
-              onNodesChange={handleNodesChange}
-              onConnect={handleConnect}
-              onNodeClick={(_, node) => {
-                const nextSelected = selectedElementFromFlowNodeId(node.id);
-
-                if (nextSelected) {
-                  setSelected(nextSelected);
-                }
-              }}
-              onEdgeClick={(_, edge) =>
-                setSelected({ kind: "relationship", id: edge.id })
-              }
-              onPaneClick={() => setSelected({ kind: "diagram" })}
-              fitView
-              fitViewOptions={{ maxZoom: 1, padding: 0.2 }}
-              minZoom={0.25}
-              maxZoom={1.4}
-              nodesDraggable={nodesDraggable}
-              nodesConnectable
-              elementsSelectable
-              snapToGrid
-              snapGrid={[16, 16]}
-              proOptions={{ hideAttribution: true }}
-              className="database-diagram-flow"
-            >
-              <Background gap={28} size={1} />
-              <Panel
-                position="bottom-center"
-                className="pointer-events-none mb-4"
-              >
-                <CanvasToolbar
-                  copy={copy}
-                  canUndo={canUndo}
-                  canRedo={canRedo}
-                  onUndo={undoDocument}
-                  onRedo={redoDocument}
-                  onAddTable={addTable}
-                  onAddNote={addNote}
-                  onAddArea={addArea}
-                  onAddEnum={addEnum}
-                />
-              </Panel>
-              <MiniMap
-                position="bottom-right"
-                pannable
-                zoomable
-                nodeStrokeWidth={2}
-                nodeColor={(node) =>
-                  node.type === "table"
-                    ? "var(--primary)"
-                    : "var(--muted-foreground)"
-                }
-              />
-            </ReactFlow>
+        {!matchedSomething ? (
+          <div className="absolute left-3 top-16 z-30 rounded-md border bg-background px-3 py-2 text-xs text-muted-foreground shadow-sm">
+            {copy.noMatches}
           </div>
-        </section>
+        ) : null}
+
+        <ReactFlow
+          nodes={flowNodes}
+          edges={flowEdges}
+          nodeTypes={diagramNodeTypes}
+          edgeTypes={diagramEdgeTypes}
+          onNodesChange={handleNodesChange}
+          onConnect={handleConnect}
+          onNodeClick={(_, node) => {
+            const nextSelected = selectedElementFromFlowNodeId(node.id);
+
+            if (nextSelected) {
+              setSelected(nextSelected);
+            }
+          }}
+          onEdgeClick={(_, edge) =>
+            setSelected({ kind: "relationship", id: edge.id })
+          }
+          onPaneClick={() => setSelected({ kind: "diagram" })}
+          fitView
+          fitViewOptions={{ maxZoom: 1, padding: 0.2 }}
+          minZoom={0.25}
+          maxZoom={1.4}
+          nodesDraggable
+          nodesConnectable
+          elementsSelectable
+          snapToGrid
+          snapGrid={[16, 16]}
+          proOptions={{ hideAttribution: true }}
+          className="database-diagram-flow h-full w-full"
+        >
+          <Background gap={28} size={1} />
+          <Panel
+            position="bottom-center"
+            className="pointer-events-none md:hidden"
+            style={{ marginBottom: "calc(42vh + 1.5rem)" }}
+          >
+            <CanvasToolbar
+              copy={copy}
+              canUndo={canUndo}
+              canRedo={canRedo}
+              onUndo={undoDocument}
+              onRedo={redoDocument}
+              onAddTable={addTable}
+              onAddNote={addNote}
+              onAddArea={addArea}
+              onAddEnum={addEnum}
+            />
+          </Panel>
+          <Panel
+            position="bottom-center"
+            className="pointer-events-none mb-4 hidden md:block"
+            style={{ transform: "translateX(calc(-50% - 186px))" }}
+          >
+            <CanvasToolbar
+              copy={copy}
+              canUndo={canUndo}
+              canRedo={canRedo}
+              onUndo={undoDocument}
+              onRedo={redoDocument}
+              onAddTable={addTable}
+              onAddNote={addNote}
+              onAddArea={addArea}
+              onAddEnum={addEnum}
+            />
+          </Panel>
+          <MiniMap
+            position="bottom-left"
+            className="hidden xl:block"
+            pannable
+            zoomable
+            nodeStrokeWidth={2}
+            nodeColor={(node) =>
+              node.type === "table"
+                ? "var(--primary)"
+                : "var(--muted-foreground)"
+            }
+          />
+        </ReactFlow>
 
         <InspectorPanel
           copy={copy}
@@ -1412,6 +1484,7 @@ function FlowTableNode({
   data,
   selected,
   isConnectable,
+  dragging,
 }: NodeProps<Extract<DiagramNode, { type: "table" }>>) {
   const { table, copy, faded } = data;
   const active = data.active || selected;
@@ -1422,6 +1495,7 @@ function FlowTableNode({
       className={cn(
         "database-diagram-node database-diagram-table-node overflow-hidden rounded-xl border bg-card text-card-foreground transition",
         active && "border-primary ring-2 ring-primary/25",
+        dragging && "database-diagram-node-dragging",
         faded && "opacity-25",
       )}
       style={{ width: TABLE_WIDTH }}
@@ -1483,15 +1557,13 @@ function FlowTableNode({
                   : "database-diagram-column-row-source hover:bg-muted/55",
               )}
             >
-              {column.primary_key ? (
-                <Handle
-                  type="target"
-                  position={Position.Left}
-                  id={targetPrimaryHandleId(column.id)}
-                  isConnectable={isConnectable}
-                  className="database-diagram-handle database-diagram-handle-target"
-                />
-              ) : null}
+              <Handle
+                type="target"
+                position={Position.Left}
+                id={targetHandleId(column.id)}
+                isConnectable={isConnectable}
+                className="database-diagram-handle database-diagram-handle-target"
+              />
               <div className="min-w-0">
                 <div className="flex min-w-0 items-center gap-1.5">
                   {column.primary_key ? (
@@ -1519,15 +1591,13 @@ function FlowTableNode({
               <div className="self-start rounded-md border bg-background px-1.5 py-1 font-mono text-[11px] text-muted-foreground shadow-xs">
                 {column.data_type}
               </div>
-              {!column.primary_key ? (
-                <Handle
-                  type="source"
-                  position={Position.Right}
-                  id={sourceHandleId(column.id)}
-                  isConnectable={isConnectable}
-                  className="database-diagram-handle database-diagram-handle-source"
-                />
-              ) : null}
+              <Handle
+                type="source"
+                position={Position.Right}
+                id={sourceHandleId(column.id)}
+                isConnectable={isConnectable}
+                className="database-diagram-handle database-diagram-handle-source"
+              />
             </div>
           ))
         )}
@@ -1539,6 +1609,7 @@ function FlowTableNode({
 function FlowNoteNode({
   data,
   selected,
+  dragging,
 }: NodeProps<Extract<DiagramNode, { type: "note" }>>) {
   const { note, copy, faded } = data;
   const active = data.active || selected;
@@ -1548,6 +1619,7 @@ function FlowNoteNode({
       className={cn(
         "database-diagram-node database-diagram-note-node w-72 rounded-xl border p-3.5 text-card-foreground transition",
         active && "border-primary ring-2 ring-primary/25",
+        dragging && "database-diagram-node-dragging",
         faded && "opacity-25",
       )}
       style={{ width: NOTE_WIDTH }}
@@ -1585,6 +1657,7 @@ function FlowNoteNode({
 function FlowAreaNode({
   data,
   selected,
+  dragging,
 }: NodeProps<Extract<DiagramNode, { type: "area" }>>) {
   const { area, copy, faded } = data;
   const active = data.active || selected;
@@ -1594,6 +1667,7 @@ function FlowAreaNode({
       className={cn(
         "database-diagram-area-node rounded-lg border-2 border-dashed p-3 text-xs transition",
         active ? "border-primary" : "border-border",
+        dragging && "database-diagram-node-dragging",
         faded && "opacity-25",
       )}
       style={{
@@ -1619,12 +1693,13 @@ function RelationshipEdge(props: EdgeProps<DiagramEdge>) {
     targetY,
     sourcePosition,
     targetPosition,
-    markerEnd,
     selected,
     style,
     data,
   } = props;
   const active = Boolean(selected || data?.active);
+  const tone =
+    data?.tone ?? relationshipEdgeTone(data?.relationship.cardinality ?? "many_to_one");
   const [edgePath, labelX, labelY] = getBezierPath({
     sourceX,
     sourceY,
@@ -1639,25 +1714,47 @@ function RelationshipEdge(props: EdgeProps<DiagramEdge>) {
       <BaseEdge
         id={id}
         path={edgePath}
-        markerEnd={markerEnd}
         interactionWidth={22}
         style={{
           ...style,
-          stroke: active ? "var(--primary)" : "var(--muted-foreground)",
-          strokeWidth: active ? 2.5 : 1.75,
+          stroke: tone.stroke,
+          strokeWidth: active ? 3 : 2.1,
+        }}
+      />
+      <path
+        d={edgePath}
+        className={cn(
+          "database-diagram-edge-flow",
+          active && "database-diagram-edge-flow-active",
+        )}
+        style={{
+          animationDelay: data?.flowDelay ?? "0s",
+          stroke: tone.stroke,
+          strokeWidth: active ? 2.25 : 1.65,
         }}
       />
       <EdgeLabelRenderer>
         <div
           className={cn(
-            "nodrag nopan pointer-events-none absolute rounded-md border bg-background px-2 py-1 text-[11px] font-medium shadow-xs",
-            active ? "border-primary text-foreground" : "text-muted-foreground",
+            "nodrag nopan pointer-events-none absolute rounded-md border px-2 py-1 text-[11px] font-medium shadow-xs",
+            active && "shadow-sm",
           )}
           style={{
+            backgroundColor: tone.labelBackground,
+            borderColor: active ? tone.stroke : tone.labelBorder,
+            color: active ? "var(--foreground)" : tone.labelText,
             transform: `translate(-50%, -50%) translate(${labelX}px, ${labelY}px)`,
           }}
         >
-          <span className="mr-1 font-mono">{data?.cardinalityLabel}</span>
+          <span
+            className="mr-1 rounded-sm px-1 font-mono text-[10px] font-semibold"
+            style={{
+              backgroundColor: tone.badgeBackground,
+              color: tone.stroke,
+            }}
+          >
+            {data?.cardinalityLabel}
+          </span>
           {data?.relationship.name}
         </div>
       </EdgeLabelRenderer>
@@ -1780,19 +1877,14 @@ function mergeFlowNodeState(
   });
 }
 
-function hasMeasuredFlowNode(node: DiagramNode): boolean {
-  return (
-    node.measured?.width !== undefined && node.measured.height !== undefined
-  );
-}
-
 function buildFlowEdges(
   relationships: DatabaseDiagramRelationship[],
   selected: SelectedElement,
 ): DiagramEdge[] {
-  return relationships.map((relationship) => {
+  return relationships.map((relationship, index) => {
     const active =
       selected.kind === "relationship" && selected.id === relationship.id;
+    const tone = relationshipEdgeTone(relationship.cardinality);
 
     return {
       id: relationship.id,
@@ -1800,25 +1892,17 @@ function buildFlowEdges(
       source: flowNodeId("table", relationship.source.table_id),
       target: flowNodeId("table", relationship.target.table_id),
       sourceHandle: sourceHandleId(relationship.source.column_id),
-      targetHandle: targetPrimaryHandleId(relationship.target.column_id),
+      targetHandle: targetHandleId(relationship.target.column_id),
       selected: active,
       data: {
         relationship,
         active,
         cardinalityLabel: cardinalityLabel(relationship.cardinality),
-      },
-      markerEnd: {
-        type: MarkerType.ArrowClosed,
-        width: 18,
-        height: 18,
-        color: active
-          ? "var(--primary)"
-          : "var(--muted-foreground)",
+        tone,
+        flowDelay: `${(index % 8) * -0.16}s`,
       },
       style: {
-        stroke: active
-          ? "var(--primary)"
-          : "var(--muted-foreground)",
+        stroke: tone.stroke,
       },
       zIndex: active ? 40 : 10,
     };
@@ -1832,9 +1916,7 @@ function relationshipFromConnection(
   const sourceTableId = flowTableIdFromNode(connection.source);
   const targetTableId = flowTableIdFromNode(connection.target);
   const sourceColumnId = columnIdFromSourceHandle(connection.sourceHandle);
-  const targetColumnId = columnIdFromTargetPrimaryHandle(
-    connection.targetHandle,
-  );
+  const targetColumnId = columnIdFromTargetHandle(connection.targetHandle);
 
   if (!sourceTableId || !targetTableId || !sourceColumnId || !targetColumnId) {
     return null;
@@ -1857,16 +1939,14 @@ function relationshipFromConnection(
     return null;
   }
 
-  if (sourceColumn.primary_key || !targetColumn.primary_key) {
-    return null;
-  }
+  const cardinality = inferRelationshipCardinality(sourceColumn, targetColumn);
 
   return {
     id: createId("relationship"),
-    name: `${sourceTable.name}_${targetTable.name}_fk`,
+    name: relationshipName(sourceTable, sourceColumn, targetTable, targetColumn),
     source: endpointFor(sourceTable, sourceColumn),
     target: endpointFor(targetTable, targetColumn),
-    cardinality: "many_to_one",
+    cardinality,
     on_update: "no_action",
     on_delete: "no_action",
   };
@@ -1905,8 +1985,8 @@ function sourceHandleId(columnId: string) {
   return `source-column:${columnId}`;
 }
 
-function targetPrimaryHandleId(columnId: string) {
-  return `target-primary-column:${columnId}`;
+function targetHandleId(columnId: string) {
+  return `target-column:${columnId}`;
 }
 
 function columnIdFromSourceHandle(handleId: string | null): string | null {
@@ -1917,12 +1997,48 @@ function columnIdFromSourceHandle(handleId: string | null): string | null {
   return handleId.slice("source-column:".length);
 }
 
-function columnIdFromTargetPrimaryHandle(handleId: string | null): string | null {
-  if (!handleId?.startsWith("target-primary-column:")) {
+function columnIdFromTargetHandle(handleId: string | null): string | null {
+  if (!handleId?.startsWith("target-column:")) {
     return null;
   }
 
-  return handleId.slice("target-primary-column:".length);
+  return handleId.slice("target-column:".length);
+}
+
+function inferRelationshipCardinality(
+  sourceColumn: DatabaseDiagramColumn,
+  targetColumn: DatabaseDiagramColumn,
+): DatabaseDiagramCardinality {
+  if (sourceColumn.primary_key && targetColumn.primary_key) {
+    return "one_to_one";
+  }
+
+  if (sourceColumn.primary_key) {
+    return "one_to_many";
+  }
+
+  if (targetColumn.primary_key) {
+    return "many_to_one";
+  }
+
+  return "many_to_many";
+}
+
+function relationshipName(
+  sourceTable: DatabaseDiagramTable,
+  sourceColumn: DatabaseDiagramColumn,
+  targetTable: DatabaseDiagramTable,
+  targetColumn: DatabaseDiagramColumn,
+): string {
+  if (sourceColumn.primary_key && !targetColumn.primary_key) {
+    return `${targetTable.name}_${sourceTable.name}_fk`;
+  }
+
+  if (!sourceColumn.primary_key && targetColumn.primary_key) {
+    return `${sourceTable.name}_${targetTable.name}_fk`;
+  }
+
+  return `${sourceTable.name}_${sourceColumn.name}_${targetTable.name}_${targetColumn.name}_rel`;
 }
 
 function cardinalityLabel(cardinality: DatabaseDiagramCardinality) {
@@ -1940,6 +2056,35 @@ function cardinalityLabel(cardinality: DatabaseDiagramCardinality) {
   }
 }
 
+function relationshipEdgeTone(
+  cardinality: DatabaseDiagramCardinality,
+): RelationshipEdgeTone {
+  const stroke = relationshipEdgeStroke(cardinality);
+
+  return {
+    stroke,
+    labelBackground: `color-mix(in oklch, ${stroke} 10%, var(--background))`,
+    labelBorder: `color-mix(in oklch, ${stroke} 36%, var(--border))`,
+    labelText: `color-mix(in oklch, ${stroke} 62%, var(--foreground))`,
+    badgeBackground: `color-mix(in oklch, ${stroke} 16%, var(--background))`,
+  };
+}
+
+function relationshipEdgeStroke(cardinality: DatabaseDiagramCardinality) {
+  switch (cardinality) {
+    case "one_to_one":
+      return "var(--chart-8)";
+    case "one_to_many":
+      return "var(--chart-2)";
+    case "many_to_one":
+      return "var(--chart-5)";
+    case "many_to_many":
+      return "var(--chart-7)";
+    default:
+      return "var(--muted-foreground)";
+  }
+}
+
 type DiagramNodePositionChange = Extract<
   NodeChange<DiagramNode>,
   { type: "position" }
@@ -1951,6 +2096,12 @@ function isNodePositionChange(
   change: NodeChange<DiagramNode>,
 ): change is DiagramNodePositionChange {
   return change.type === "position" && Boolean(change.position);
+}
+
+function isDraggingNodePositionChange(
+  change: NodeChange<DiagramNode>,
+): change is QueuedNodePositionChange {
+  return isNodePositionChange(change) && change.dragging === true;
 }
 
 function isCommittedNodePositionChange(
@@ -2004,12 +2155,12 @@ function InspectorPanel({
       : null;
 
   return (
-    <aside className="flex min-h-0 flex-col bg-card">
+    <aside className="absolute inset-x-3 bottom-3 z-30 flex max-h-[42vh] min-h-0 flex-col overflow-hidden rounded-lg border bg-card shadow-lg md:inset-x-auto md:bottom-3 md:right-3 md:top-3 md:w-[360px] md:max-h-none">
       <div className="border-b px-4 py-3">
         <div className="text-sm font-semibold">{copy.inspector}</div>
         <p className="mt-1 text-xs text-muted-foreground">{copy.noSelection}</p>
       </div>
-      <div className="min-h-0 flex-1 px-4 py-4">
+      <div className="min-h-0 min-w-0 flex-1 overflow-hidden px-4 py-4">
         {selected.kind === "diagram" ? (
           <DiagramInspector
             copy={copy}
@@ -2938,8 +3089,10 @@ function SectionTitle({
 
 function Field({ label, children }: { label: string; children: ReactNode }) {
   return (
-    <label className="block space-y-1.5">
-      <span className="text-xs font-medium text-muted-foreground">{label}</span>
+    <label className="block min-w-0 space-y-1.5">
+      <span className="block truncate text-xs font-medium text-muted-foreground">
+        {label}
+      </span>
       {children}
     </label>
   );
@@ -2968,10 +3121,10 @@ function CheckField({
 }
 
 const inputClassName =
-  "h-9 w-full rounded-md border bg-background px-2 text-sm outline-none transition-shadow focus-visible:ring-[3px] focus-visible:ring-ring/50";
-const inspectorTabsClassName = "flex h-full min-h-0 flex-col";
+  "h-9 min-w-0 w-full max-w-full rounded-md border bg-background px-2 text-sm outline-none transition-shadow focus-visible:ring-[3px] focus-visible:ring-ring/50";
+const inspectorTabsClassName = "flex h-full min-h-0 min-w-0 flex-col";
 const inspectorTabContentClassName =
-  "min-h-0 flex-1 space-y-4 overflow-y-auto pr-1";
+  "-mx-1 min-h-0 flex-1 space-y-4 overflow-y-auto overflow-x-hidden px-1 py-1";
 
 function TextInput({
   value,
@@ -3002,7 +3155,7 @@ function TextArea({
     <textarea
       value={value}
       rows={rows}
-      className="w-full resize-y rounded-md border bg-background px-2 py-2 text-sm outline-none transition-shadow focus-visible:ring-[3px] focus-visible:ring-ring/50"
+      className="min-w-0 w-full max-w-full resize-y rounded-md border bg-background px-2 py-2 text-sm outline-none transition-shadow focus-visible:ring-[3px] focus-visible:ring-ring/50"
       onChange={(event) => onChange(event.target.value)}
     />
   );
@@ -3042,11 +3195,11 @@ function ColorInput({
   onChange: (value: string) => void;
 }) {
   return (
-    <div className="flex gap-2">
+    <div className="flex min-w-0 gap-2">
       <input
         type="color"
         value={safeColor(value)}
-        className="h-9 w-12 rounded-md border bg-background p-1"
+        className="h-9 w-12 shrink-0 rounded-md border bg-background p-1"
         onChange={(event) => onChange(event.target.value)}
       />
       <TextInput value={value} onChange={onChange} />
