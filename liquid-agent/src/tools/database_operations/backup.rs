@@ -1,7 +1,8 @@
 use anyhow::Result;
 use async_trait::async_trait;
 use liquid_core::{
-    CreateDatabaseBackupScheduleRequest, EnqueueDatabaseBackup, UpdateDatabaseBackupScheduleRequest,
+    CreateDatabaseBackupScheduleRequest, DatabaseBackupStatus, DatabaseOperationKind,
+    EnqueueDatabaseBackup, UpdateDatabaseBackupScheduleRequest,
 };
 use liquid_llm::ToolDefinition;
 use serde_json::{Value, json};
@@ -11,7 +12,7 @@ use crate::{database_operations::validate_backup_schedule, tools::AgentTool, typ
 
 use super::{
     DatabaseOperationToolContext, limit_arg, optional_i32_arg, optional_schedule_status_arg,
-    optional_status_arg, optional_string_arg, required_string_arg,
+    optional_status_arg, optional_string_arg, recent_operation_diagnostics, required_string_arg,
 };
 
 const MINIMUM_BACKUP_CRON_INTERVAL_SECONDS: i64 = 15 * 60;
@@ -392,8 +393,22 @@ impl AgentTool for PgGetDatabaseBackupTool {
             .metadata_store
             .get_database_backup(&self.context.owner_user_id, &backup_id)
             .await?;
+        let recent_diagnostics = if backup.status == DatabaseBackupStatus::Failed {
+            recent_operation_diagnostics(
+                &self.context,
+                DatabaseOperationKind::Backup,
+                &backup.id,
+                5,
+            )
+            .await?
+        } else {
+            Vec::new()
+        };
 
-        Ok(ToolOutput::json(json!({ "backup": backup })))
+        Ok(ToolOutput::json(json!({
+            "backup": backup,
+            "recent_diagnostics": recent_diagnostics,
+        })))
     }
 }
 

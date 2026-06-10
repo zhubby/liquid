@@ -1,9 +1,10 @@
 use liquid_core::{
-    CompleteDatabaseBackup, CreateDatabaseBackupScheduleRequest, DatabaseBackupFormat,
-    DatabaseBackupListFilters, DatabaseBackupListPage, DatabaseBackupMetadataStoreError,
-    DatabaseBackupRecord, DatabaseBackupScheduleRecord, DatabaseBackupScheduleStatus,
-    DatabaseBackupStatus, DatabaseBackupStorageKind, DatabaseBackupStorageMetadata,
-    DatabaseBackupTrigger, DatabaseOperationEventRecord, DatabaseOperationEventType,
+    AppendDatabaseOperationDiagnostic, CompleteDatabaseBackup, CreateDatabaseBackupScheduleRequest,
+    DatabaseBackupFormat, DatabaseBackupListFilters, DatabaseBackupListPage,
+    DatabaseBackupMetadataStoreError, DatabaseBackupRecord, DatabaseBackupScheduleRecord,
+    DatabaseBackupScheduleStatus, DatabaseBackupStatus, DatabaseBackupStorageKind,
+    DatabaseBackupStorageMetadata, DatabaseBackupTrigger, DatabaseOperationDiagnosticFilters,
+    DatabaseOperationDiagnosticRecord, DatabaseOperationEventRecord, DatabaseOperationEventType,
     DatabaseOperationKind, DatabaseRestoreRecord, EnqueueDatabaseBackup, EnqueueDatabaseRestore,
     ManagedDatabaseSnapshot, UpdateDatabaseBackupScheduleRequest,
 };
@@ -123,6 +124,22 @@ turn_id::text,
 payload,
 delivered_at,
 delivered_message_id::text,
+created_at
+"#;
+
+const DATABASE_OPERATION_DIAGNOSTIC_COLUMNS: &str = r#"
+id::text,
+owner_user_id::text,
+operation_kind,
+operation_id::text,
+phase,
+message,
+command_name,
+exit_code,
+stdout,
+stderr,
+stdout_truncated,
+stderr_truncated,
 created_at
 "#;
 
@@ -1137,6 +1154,151 @@ pub(crate) async fn append_database_operation_event(
     row.ok_or(StorageError::NotFound)?.try_into()
 }
 
+pub(crate) async fn append_database_operation_diagnostic(
+    storage: &Storage,
+    owner_user_id: &str,
+    diagnostic: AppendDatabaseOperationDiagnostic,
+) -> Result<DatabaseOperationDiagnosticRecord, StorageError> {
+    let phase = required_string("phase", &diagnostic.phase)?;
+    let message = required_string("message", &diagnostic.message)?;
+    let command_name = optional_string("command_name", diagnostic.command_name)?;
+    let stdout = optional_diagnostic_text("stdout", diagnostic.stdout)?;
+    let stderr = optional_diagnostic_text("stderr", diagnostic.stderr)?;
+
+    let row = match diagnostic.operation_kind {
+        DatabaseOperationKind::Backup => {
+            sqlx::query_as::<_, DatabaseOperationDiagnosticRow>(&format!(
+                r#"
+                insert into database_operation_diagnostics (
+                    owner_user_id,
+                    operation_kind,
+                    operation_id,
+                    phase,
+                    message,
+                    command_name,
+                    exit_code,
+                    stdout,
+                    stderr,
+                    stdout_truncated,
+                    stderr_truncated
+                )
+                select
+                    owner_user_id,
+                    $3,
+                    id,
+                    $4,
+                    $5,
+                    $6,
+                    $7,
+                    $8,
+                    $9,
+                    $10,
+                    $11
+                from database_backups
+                where id = $1::uuid
+                  and owner_user_id = $2::uuid
+                returning {DATABASE_OPERATION_DIAGNOSTIC_COLUMNS}
+                "#
+            ))
+            .bind(&diagnostic.operation_id)
+            .bind(owner_user_id)
+            .bind(diagnostic.operation_kind.as_str())
+            .bind(phase)
+            .bind(message)
+            .bind(command_name)
+            .bind(diagnostic.exit_code)
+            .bind(stdout)
+            .bind(stderr)
+            .bind(diagnostic.stdout_truncated)
+            .bind(diagnostic.stderr_truncated)
+            .fetch_optional(&storage.pool)
+            .await
+            .map_err(map_database_error)?
+        }
+        DatabaseOperationKind::Restore => {
+            sqlx::query_as::<_, DatabaseOperationDiagnosticRow>(&format!(
+                r#"
+                insert into database_operation_diagnostics (
+                    owner_user_id,
+                    operation_kind,
+                    operation_id,
+                    phase,
+                    message,
+                    command_name,
+                    exit_code,
+                    stdout,
+                    stderr,
+                    stdout_truncated,
+                    stderr_truncated
+                )
+                select
+                    owner_user_id,
+                    $3,
+                    id,
+                    $4,
+                    $5,
+                    $6,
+                    $7,
+                    $8,
+                    $9,
+                    $10,
+                    $11
+                from database_restore_jobs
+                where id = $1::uuid
+                  and owner_user_id = $2::uuid
+                returning {DATABASE_OPERATION_DIAGNOSTIC_COLUMNS}
+                "#
+            ))
+            .bind(&diagnostic.operation_id)
+            .bind(owner_user_id)
+            .bind(diagnostic.operation_kind.as_str())
+            .bind(phase)
+            .bind(message)
+            .bind(command_name)
+            .bind(diagnostic.exit_code)
+            .bind(stdout)
+            .bind(stderr)
+            .bind(diagnostic.stdout_truncated)
+            .bind(diagnostic.stderr_truncated)
+            .fetch_optional(&storage.pool)
+            .await
+            .map_err(map_database_error)?
+        }
+    };
+
+    row.ok_or(StorageError::NotFound)?.try_into()
+}
+
+pub(crate) async fn list_database_operation_diagnostics(
+    storage: &Storage,
+    owner_user_id: &str,
+    filters: DatabaseOperationDiagnosticFilters<'_>,
+) -> Result<Vec<DatabaseOperationDiagnosticRecord>, StorageError> {
+    let limit = filters.limit.clamp(1, 100);
+    let rows = sqlx::query_as::<_, DatabaseOperationDiagnosticRow>(&format!(
+        r#"
+        select {DATABASE_OPERATION_DIAGNOSTIC_COLUMNS}
+        from database_operation_diagnostics
+        where owner_user_id = $1::uuid
+          and operation_kind = $2
+          and operation_id = $3::uuid
+        order by created_at desc, id desc
+        limit $4
+        "#
+    ))
+    .bind(owner_user_id)
+    .bind(filters.operation_kind.as_str())
+    .bind(filters.operation_id)
+    .bind(limit)
+    .fetch_all(&storage.pool)
+    .await
+    .map_err(map_database_error)?;
+
+    rows.into_iter()
+        .map(DatabaseOperationDiagnosticRecord::try_from)
+        .collect()
+}
+
 pub(crate) async fn claim_next_database_operation_event(
     storage: &Storage,
 ) -> Result<Option<DatabaseOperationEventRecord>, StorageError> {
@@ -1287,6 +1449,27 @@ fn positive_optional_i32(name: &str, value: Option<i32>) -> Result<Option<i32>, 
     Ok(value)
 }
 
+fn optional_diagnostic_text(
+    name: &str,
+    value: Option<String>,
+) -> Result<Option<String>, StorageError> {
+    const MAX_DIAGNOSTIC_BYTES: usize = 64 * 1024;
+
+    let Some(value) = value else {
+        return Ok(None);
+    };
+    if value.is_empty() {
+        return Ok(None);
+    }
+    if value.len() > MAX_DIAGNOSTIC_BYTES {
+        return Err(StorageError::Validation(format!(
+            "{name} must be at most {MAX_DIAGNOSTIC_BYTES} bytes"
+        )));
+    }
+
+    Ok(Some(value))
+}
+
 #[derive(Debug)]
 struct DatabaseBackupScheduleRow {
     id: String,
@@ -1423,6 +1606,65 @@ impl TryFrom<DatabaseOperationEventRow> for DatabaseOperationEventRecord {
             payload: row.payload,
             delivered_at: row.delivered_at,
             delivered_message_id: row.delivered_message_id,
+            created_at: row.created_at,
+        })
+    }
+}
+
+#[derive(Debug)]
+struct DatabaseOperationDiagnosticRow {
+    id: String,
+    owner_user_id: String,
+    operation_kind: String,
+    operation_id: String,
+    phase: String,
+    message: String,
+    command_name: Option<String>,
+    exit_code: Option<i32>,
+    stdout: Option<String>,
+    stderr: Option<String>,
+    stdout_truncated: bool,
+    stderr_truncated: bool,
+    created_at: OffsetDateTime,
+}
+
+impl<'r> sqlx::FromRow<'r, sqlx::postgres::PgRow> for DatabaseOperationDiagnosticRow {
+    fn from_row(row: &'r sqlx::postgres::PgRow) -> Result<Self, sqlx::Error> {
+        Ok(Self {
+            id: row.try_get("id")?,
+            owner_user_id: row.try_get("owner_user_id")?,
+            operation_kind: row.try_get("operation_kind")?,
+            operation_id: row.try_get("operation_id")?,
+            phase: row.try_get("phase")?,
+            message: row.try_get("message")?,
+            command_name: row.try_get("command_name")?,
+            exit_code: row.try_get("exit_code")?,
+            stdout: row.try_get("stdout")?,
+            stderr: row.try_get("stderr")?,
+            stdout_truncated: row.try_get("stdout_truncated")?,
+            stderr_truncated: row.try_get("stderr_truncated")?,
+            created_at: row.try_get("created_at")?,
+        })
+    }
+}
+
+impl TryFrom<DatabaseOperationDiagnosticRow> for DatabaseOperationDiagnosticRecord {
+    type Error = StorageError;
+
+    fn try_from(row: DatabaseOperationDiagnosticRow) -> Result<Self, Self::Error> {
+        Ok(Self {
+            id: row.id,
+            owner_user_id: row.owner_user_id,
+            operation_kind: parse_database_operation_kind(&row.operation_kind)?,
+            operation_id: row.operation_id,
+            phase: row.phase,
+            message: row.message,
+            command_name: row.command_name,
+            exit_code: row.exit_code,
+            stdout: row.stdout,
+            stderr: row.stderr,
+            stdout_truncated: row.stdout_truncated,
+            stderr_truncated: row.stderr_truncated,
             created_at: row.created_at,
         })
     }

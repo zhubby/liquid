@@ -2,22 +2,24 @@ use async_trait::async_trait;
 use liquid_core::{
     AgentAction, AgentActionStatus, AgentConversation, AgentEventRecord, AgentEventType,
     AgentMessage, AgentMessageRole, AgentResourceKind, AgentTurn, AgentTurnStatus,
-    ApproveSqlAuditRequest, AuthResponse, CompleteDatabaseBackup, CreateAgentActionRequest,
-    CreateAgentConversationRequest, CreateAgentTurnRequest, CreateDatabaseBackupScheduleRequest,
-    CreateDatabaseDiagramRequest, CreateDatapanelCardRequest, CreateManagedDatabaseRequest,
-    DatabaseBackupListFilters, DatabaseBackupListPage, DatabaseBackupMetadataStore,
-    DatabaseBackupMetadataStoreError, DatabaseBackupRecord, DatabaseBackupScheduleRecord,
-    DatabaseBackupScheduleStatus, DatabaseBackupStatus, DatabaseDiagram,
-    DatabaseOperationEventRecord, DatabaseOperationEventType, DatabaseOperationKind,
-    DatabaseRestoreRecord, Datapanel, DatapanelCard, DatapanelCardLayoutUpdate, DatapanelExport,
-    DatapanelPreview, DatapanelPreviewLink, DatapanelQueryResult, EnqueueDatabaseBackup,
-    EnqueueDatabaseRestore, LlmProviderSettings, LoginRequest, ManagedDatabase,
-    ManagedDatabaseConnectionLoader, ManagedDatabaseConnectionLoaderError,
-    ManagedDatabaseConnectionSpec, ManagedDatabasePoolKey, PublicUser, RegisterRequest,
-    RejectSqlAuditRequest, ResolvedLlmProviderSettings, SqlAuditExecutionResult, SqlAuditRecord,
-    UpdateAgentConversationRequest, UpdateCurrentUserRequest, UpdateDatabaseBackupScheduleRequest,
-    UpdateDatabaseDiagramRequest, UpdateDatapanelCardRequest, UpdateDatapanelRequest,
-    UpdateLlmProviderSettingsRequest, UpdateManagedDatabaseRequest, UpdatePasswordRequest,
+    AppendDatabaseOperationDiagnostic, ApproveSqlAuditRequest, AuthResponse,
+    CompleteDatabaseBackup, CreateAgentActionRequest, CreateAgentConversationRequest,
+    CreateAgentTurnRequest, CreateDatabaseBackupScheduleRequest, CreateDatabaseDiagramRequest,
+    CreateDatapanelCardRequest, CreateManagedDatabaseRequest, DatabaseBackupListFilters,
+    DatabaseBackupListPage, DatabaseBackupMetadataStore, DatabaseBackupMetadataStoreError,
+    DatabaseBackupRecord, DatabaseBackupScheduleRecord, DatabaseBackupScheduleStatus,
+    DatabaseBackupStatus, DatabaseDiagram, DatabaseOperationDiagnosticFilters,
+    DatabaseOperationDiagnosticRecord, DatabaseOperationEventRecord, DatabaseOperationEventType,
+    DatabaseOperationKind, DatabaseRestoreRecord, Datapanel, DatapanelCard,
+    DatapanelCardLayoutUpdate, DatapanelExport, DatapanelPreview, DatapanelPreviewLink,
+    DatapanelQueryResult, EnqueueDatabaseBackup, EnqueueDatabaseRestore, LlmProviderSettings,
+    LoginRequest, ManagedDatabase, ManagedDatabaseConnectionLoader,
+    ManagedDatabaseConnectionLoaderError, ManagedDatabaseConnectionSpec, ManagedDatabasePoolKey,
+    PublicUser, RegisterRequest, RejectSqlAuditRequest, ResolvedLlmProviderSettings,
+    SqlAuditExecutionResult, SqlAuditRecord, UpdateAgentConversationRequest,
+    UpdateCurrentUserRequest, UpdateDatabaseBackupScheduleRequest, UpdateDatabaseDiagramRequest,
+    UpdateDatapanelCardRequest, UpdateDatapanelRequest, UpdateLlmProviderSettingsRequest,
+    UpdateManagedDatabaseRequest, UpdatePasswordRequest,
 };
 use serde_json::Value;
 use sqlx::{
@@ -436,6 +438,26 @@ impl DatabaseBackupMetadataStore for Storage {
         )
         .await
         .map_err(database_backups::metadata_store_error)
+    }
+
+    async fn append_database_operation_diagnostic(
+        &self,
+        owner_user_id: &str,
+        diagnostic: AppendDatabaseOperationDiagnostic,
+    ) -> Result<DatabaseOperationDiagnosticRecord, DatabaseBackupMetadataStoreError> {
+        database_backups::append_database_operation_diagnostic(self, owner_user_id, diagnostic)
+            .await
+            .map_err(database_backups::metadata_store_error)
+    }
+
+    async fn list_database_operation_diagnostics(
+        &self,
+        owner_user_id: &str,
+        filters: DatabaseOperationDiagnosticFilters<'_>,
+    ) -> Result<Vec<DatabaseOperationDiagnosticRecord>, DatabaseBackupMetadataStoreError> {
+        database_backups::list_database_operation_diagnostics(self, owner_user_id, filters)
+            .await
+            .map_err(database_backups::metadata_store_error)
     }
 
     async fn claim_next_database_operation_event(

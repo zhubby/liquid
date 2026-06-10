@@ -8,10 +8,11 @@ use std::{
 use anyhow::{Context, Result, anyhow, bail};
 use async_trait::async_trait;
 use liquid_core::{
-    CompleteDatabaseBackup, DatabaseBackupMetadataStore, DatabaseBackupRecord,
-    DatabaseBackupStatus, DatabaseBackupStorageKind, DatabaseBackupStorageMetadata,
-    DatabaseOperationEventType, DatabaseOperationKind, DatabaseRestoreRecord,
-    ManagedDatabaseConnectionLoader, ManagedDatabaseEngine, ManagedDatabasePoolKey,
+    AppendDatabaseOperationDiagnostic, CompleteDatabaseBackup, DatabaseBackupMetadataStore,
+    DatabaseBackupRecord, DatabaseBackupStatus, DatabaseBackupStorageKind,
+    DatabaseBackupStorageMetadata, DatabaseOperationEventType, DatabaseOperationKind,
+    DatabaseRestoreRecord, ManagedDatabaseConnectionLoader, ManagedDatabaseEngine,
+    ManagedDatabasePoolKey,
 };
 use serde_json::json;
 use sha2::{Digest, Sha256};
@@ -21,6 +22,8 @@ use super::object_store::BackupObjectStore;
 
 const DEFAULT_STALE_AFTER_SECONDS: i64 = 15 * 60;
 const DEFAULT_IDLE_POLL_INTERVAL: Duration = Duration::from_secs(2);
+const MAX_ERROR_BYTES: usize = 2_000;
+const MAX_DIAGNOSTIC_OUTPUT_BYTES: usize = 64 * 1024;
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct DatabaseBackupWorkerConfig {
@@ -264,11 +267,21 @@ impl DatabaseOperationWorker {
             ))
             .await
             .map_err(|error| anyhow!(error.to_string()))?;
-        let dump = self
-            .process_executor
-            .dump_postgres(&spec, &file_path)
-            .await
-            .map_err(|error| anyhow!(redact(&error.to_string(), &spec.password)))?;
+        let dump = match self.process_executor.dump_postgres(&spec, &file_path).await {
+            Ok(dump) => dump,
+            Err(error) => {
+                let diagnostic = process_failure_diagnostic(error, &spec.password);
+                self.append_operation_diagnostic(
+                    DatabaseOperationKind::Backup,
+                    &backup.owner_user_id,
+                    &backup.id,
+                    "dumping",
+                    diagnostic.clone(),
+                )
+                .await;
+                bail!("{}", diagnostic.message);
+            }
+        };
         let file_meta = tokio::fs::metadata(&file_path)
             .await
             .with_context(|| format!("failed to stat backup file: {}", file_path.display()))?;
@@ -401,10 +414,22 @@ impl DatabaseOperationWorker {
             ))
             .await
             .map_err(|error| anyhow!(error.to_string()))?;
-        self.process_executor
+        if let Err(error) = self
+            .process_executor
             .restore_postgres(&spec, &file_path)
             .await
-            .map_err(|error| anyhow!(redact(&error.to_string(), &spec.password)))?;
+        {
+            let diagnostic = process_failure_diagnostic(error, &spec.password);
+            self.append_operation_diagnostic(
+                DatabaseOperationKind::Restore,
+                &restore.owner_user_id,
+                &restore.id,
+                "restoring",
+                diagnostic.clone(),
+            )
+            .await;
+            bail!("{}", diagnostic.message);
+        }
         let completed = self
             .metadata_store
             .complete_database_restore(&restore.id)
@@ -439,6 +464,43 @@ impl DatabaseOperationWorker {
                 event_type = %event_type.as_str(),
                 error = %error,
                 "failed to append database operation event"
+            );
+        }
+    }
+
+    async fn append_operation_diagnostic(
+        &self,
+        operation_kind: DatabaseOperationKind,
+        owner_user_id: &str,
+        operation_id: &str,
+        phase: &str,
+        diagnostic: ProcessFailureDiagnostic,
+    ) {
+        if let Err(error) = self
+            .metadata_store
+            .append_database_operation_diagnostic(
+                owner_user_id,
+                AppendDatabaseOperationDiagnostic {
+                    operation_kind,
+                    operation_id: operation_id.to_owned(),
+                    phase: phase.to_owned(),
+                    message: diagnostic.message,
+                    command_name: diagnostic.command_name,
+                    exit_code: diagnostic.exit_code,
+                    stdout: diagnostic.stdout,
+                    stderr: diagnostic.stderr,
+                    stdout_truncated: diagnostic.stdout_truncated,
+                    stderr_truncated: diagnostic.stderr_truncated,
+                },
+            )
+            .await
+        {
+            tracing::warn!(
+                operation_kind = %operation_kind.as_str(),
+                operation_id,
+                phase,
+                error = %error,
+                "failed to append database operation diagnostic"
             );
         }
     }
@@ -527,10 +589,15 @@ async fn run_command(mut command: Command, action: &str, secret: &str) -> Result
         return Ok(());
     }
 
-    let stdout = String::from_utf8_lossy(&output.stdout);
-    let stderr = String::from_utf8_lossy(&output.stderr);
-    let message = redact(&format!("{action} failed: {stdout}\n{stderr}"), secret);
-    bail!("{}", truncate_error(&message))
+    let stdout = redact(&String::from_utf8_lossy(&output.stdout), secret);
+    let stderr = redact(&String::from_utf8_lossy(&output.stderr), secret);
+    Err(DatabaseCommandFailure {
+        action: action.to_owned(),
+        exit_code: output.status.code(),
+        stdout,
+        stderr,
+    }
+    .into())
 }
 
 async fn command_version(binary: &str) -> Result<String> {
@@ -581,19 +648,104 @@ fn redact(message: &str, secret: &str) -> String {
     message.replace(secret, "[redacted]")
 }
 
-fn truncate_error(message: &str) -> String {
-    const MAX_ERROR_BYTES: usize = 2_000;
-    if message.len() <= MAX_ERROR_BYTES {
-        return message.to_owned();
+#[derive(Debug, Clone, PartialEq, Eq)]
+struct ProcessFailureDiagnostic {
+    message: String,
+    command_name: Option<String>,
+    exit_code: Option<i32>,
+    stdout: Option<String>,
+    stderr: Option<String>,
+    stdout_truncated: bool,
+    stderr_truncated: bool,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+struct DatabaseCommandFailure {
+    action: String,
+    exit_code: Option<i32>,
+    stdout: String,
+    stderr: String,
+}
+
+impl DatabaseCommandFailure {
+    fn message(&self) -> String {
+        command_failure_message(&self.action, &self.stdout, &self.stderr)
+    }
+}
+
+impl std::fmt::Display for DatabaseCommandFailure {
+    fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        write!(formatter, "{}", self.message())
+    }
+}
+
+impl std::error::Error for DatabaseCommandFailure {}
+
+fn process_failure_diagnostic(error: anyhow::Error, secret: &str) -> ProcessFailureDiagnostic {
+    if let Some(command_failure) = error.downcast_ref::<DatabaseCommandFailure>() {
+        let stdout = redact(&command_failure.stdout, secret);
+        let stderr = redact(&command_failure.stderr, secret);
+        let (stdout, stdout_truncated) = diagnostic_output(stdout);
+        let (stderr, stderr_truncated) = diagnostic_output(stderr);
+
+        return ProcessFailureDiagnostic {
+            message: truncate_error(&redact(&command_failure.message(), secret)),
+            command_name: Some(command_failure.action.clone()),
+            exit_code: command_failure.exit_code,
+            stdout,
+            stderr,
+            stdout_truncated,
+            stderr_truncated,
+        };
     }
 
-    format!("{}...", &message[..MAX_ERROR_BYTES])
+    ProcessFailureDiagnostic {
+        message: truncate_error(&redact(&error.to_string(), secret)),
+        command_name: None,
+        exit_code: None,
+        stdout: None,
+        stderr: None,
+        stdout_truncated: false,
+        stderr_truncated: false,
+    }
+}
+
+fn command_failure_message(action: &str, stdout: &str, stderr: &str) -> String {
+    truncate_error(&format!("{action} failed: {stdout}\n{stderr}"))
+}
+
+fn diagnostic_output(value: String) -> (Option<String>, bool) {
+    if value.is_empty() {
+        return (None, false);
+    }
+
+    let (value, truncated) = truncate_to_bytes(&value, MAX_DIAGNOSTIC_OUTPUT_BYTES);
+    (Some(value), truncated)
+}
+
+fn truncate_error(message: &str) -> String {
+    truncate_to_bytes(message, MAX_ERROR_BYTES).0
+}
+
+fn truncate_to_bytes(message: &str, max_bytes: usize) -> (String, bool) {
+    if message.len() <= max_bytes {
+        return (message.to_owned(), false);
+    }
+
+    let suffix = "...";
+    let mut end = max_bytes.saturating_sub(suffix.len());
+    while end > 0 && !message.is_char_boundary(end) {
+        end -= 1;
+    }
+
+    (format!("{}{}", &message[..end], suffix), true)
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
-    use liquid_core::ManagedDatabaseSslMode;
+    use liquid_core::{ManagedDatabaseConnectionSpec, ManagedDatabaseSslMode};
+    use std::sync::Mutex;
 
     #[test]
     fn worker_object_key_includes_prefix_owner_database_and_backup() {
@@ -669,6 +821,137 @@ mod tests {
         let _ = tokio::fs::remove_dir_all(root).await;
     }
 
+    #[tokio::test]
+    async fn process_backup_persists_pg_dump_failure_diagnostic() {
+        let root = temp_root("liquid-backup-diagnostic").await;
+        let backup = test_backup();
+        let store = Arc::new(RecordingMetadataStore::new(backup.clone(), None));
+        let worker = DatabaseOperationWorker::new(
+            store.clone(),
+            Arc::new(StaticConnectionLoader),
+            None,
+            Arc::new(FailingExecutor::dump(long_secret_error("pg_dump"))),
+            DatabaseBackupWorkerConfig::new("worker", &root),
+        );
+
+        worker.process_backup(backup).await;
+
+        {
+            let failed = store.failed_backups.lock().unwrap();
+            assert_eq!(failed.len(), 1);
+            assert!(failed[0].contains("pg_dump failed"));
+            assert!(!failed[0].contains("secret-password"));
+        }
+
+        {
+            let diagnostics = store.diagnostics.lock().unwrap();
+            assert_eq!(diagnostics.len(), 1);
+            let diagnostic = &diagnostics[0];
+            assert_eq!(diagnostic.operation_kind, DatabaseOperationKind::Backup);
+            assert_eq!(diagnostic.operation_id, "backup-1");
+            assert_eq!(diagnostic.phase, "dumping");
+            assert_eq!(diagnostic.command_name.as_deref(), Some("pg_dump"));
+            assert_eq!(diagnostic.exit_code, Some(1));
+            assert!(diagnostic.stderr.as_ref().unwrap().contains("[redacted]"));
+            assert!(
+                !diagnostic
+                    .stderr
+                    .as_ref()
+                    .unwrap()
+                    .contains("secret-password")
+            );
+            assert!(diagnostic.stderr_truncated);
+            assert!(diagnostic.stderr.as_ref().unwrap().len() <= MAX_DIAGNOSTIC_OUTPUT_BYTES);
+        }
+
+        let _ = tokio::fs::remove_dir_all(root).await;
+    }
+
+    #[tokio::test]
+    async fn process_restore_persists_pg_restore_failure_diagnostic() {
+        let root = temp_root("liquid-restore-diagnostic").await;
+        let source = root.join("source.dump");
+        tokio::fs::write(&source, b"dump").await.unwrap();
+        let mut backup = test_backup();
+        backup.status = DatabaseBackupStatus::Succeeded;
+        backup.storage = Some(DatabaseBackupStorageMetadata {
+            kind: DatabaseBackupStorageKind::Local,
+            local_path: Some(source.display().to_string()),
+            bucket: None,
+            key: None,
+            version_id: None,
+            etag: None,
+            size_bytes: Some(4),
+            checksum_sha256: None,
+        });
+        let restore = test_restore();
+        let store = Arc::new(RecordingMetadataStore::new(
+            backup.clone(),
+            Some(restore.clone()),
+        ));
+        let worker = DatabaseOperationWorker::new(
+            store.clone(),
+            Arc::new(StaticConnectionLoader),
+            None,
+            Arc::new(FailingExecutor::restore(long_secret_error("pg_restore"))),
+            DatabaseBackupWorkerConfig::new("worker", &root),
+        );
+
+        worker.process_restore(restore).await;
+
+        {
+            let failed = store.failed_restores.lock().unwrap();
+            assert_eq!(failed.len(), 1);
+            assert!(failed[0].contains("pg_restore failed"));
+            assert!(!failed[0].contains("secret-password"));
+        }
+
+        {
+            let diagnostics = store.diagnostics.lock().unwrap();
+            assert_eq!(diagnostics.len(), 1);
+            let diagnostic = &diagnostics[0];
+            assert_eq!(diagnostic.operation_kind, DatabaseOperationKind::Restore);
+            assert_eq!(diagnostic.operation_id, "restore-1");
+            assert_eq!(diagnostic.phase, "restoring");
+            assert_eq!(diagnostic.command_name.as_deref(), Some("pg_restore"));
+            assert_eq!(diagnostic.exit_code, Some(1));
+            assert!(diagnostic.stderr.as_ref().unwrap().contains("[redacted]"));
+            assert!(
+                !diagnostic
+                    .stderr
+                    .as_ref()
+                    .unwrap()
+                    .contains("secret-password")
+            );
+            assert!(diagnostic.stderr_truncated);
+            assert!(diagnostic.stderr.as_ref().unwrap().len() <= MAX_DIAGNOSTIC_OUTPUT_BYTES);
+        }
+
+        let _ = tokio::fs::remove_dir_all(root).await;
+    }
+
+    async fn temp_root(prefix: &str) -> PathBuf {
+        let root = std::env::temp_dir().join(format!(
+            "{}-{}",
+            prefix,
+            time::OffsetDateTime::now_utc().unix_timestamp_nanos()
+        ));
+        tokio::fs::create_dir_all(&root).await.unwrap();
+        root
+    }
+
+    fn long_secret_error(action: &str) -> DatabaseCommandFailure {
+        DatabaseCommandFailure {
+            action: action.to_owned(),
+            exit_code: Some(1),
+            stdout: format!("{action} stdout secret-password"),
+            stderr: format!(
+                "{action} stderr secret-password {}",
+                "x".repeat(MAX_DIAGNOSTIC_OUTPUT_BYTES + 1024)
+            ),
+        }
+    }
+
     fn test_backup() -> DatabaseBackupRecord {
         DatabaseBackupRecord {
             id: "backup-1".to_owned(),
@@ -703,6 +986,313 @@ mod tests {
             completed_at: None,
             created_at: time::OffsetDateTime::UNIX_EPOCH,
             updated_at: time::OffsetDateTime::UNIX_EPOCH,
+        }
+    }
+
+    fn test_restore() -> DatabaseRestoreRecord {
+        DatabaseRestoreRecord {
+            id: "restore-1".to_owned(),
+            owner_user_id: "user-1".to_owned(),
+            backup_id: "backup-1".to_owned(),
+            target: liquid_core::ManagedDatabaseSnapshot {
+                id: "target-db-1".to_owned(),
+                name: "Target".to_owned(),
+                engine: ManagedDatabaseEngine::Postgres,
+                host: "localhost".to_owned(),
+                port: 5432,
+                database: "target".to_owned(),
+                username: "postgres".to_owned(),
+                ssl_mode: ManagedDatabaseSslMode::Prefer,
+            },
+            format: liquid_core::DatabaseBackupFormat::PostgresCustom,
+            status: DatabaseBackupStatus::Running,
+            phase: "running".to_owned(),
+            progress_percent: 1,
+            restore_options: serde_json::json!({}),
+            conversation_id: None,
+            created_from_turn_id: None,
+            error: None,
+            purpose: Some("restore backup".to_owned()),
+            worker_id: None,
+            heartbeat_at: None,
+            started_at: None,
+            completed_at: None,
+            created_at: time::OffsetDateTime::UNIX_EPOCH,
+            updated_at: time::OffsetDateTime::UNIX_EPOCH,
+        }
+    }
+
+    struct RecordingMetadataStore {
+        backup: Mutex<DatabaseBackupRecord>,
+        restore: Mutex<Option<DatabaseRestoreRecord>>,
+        diagnostics: Mutex<Vec<AppendDatabaseOperationDiagnostic>>,
+        failed_backups: Mutex<Vec<String>>,
+        failed_restores: Mutex<Vec<String>>,
+    }
+
+    impl RecordingMetadataStore {
+        fn new(backup: DatabaseBackupRecord, restore: Option<DatabaseRestoreRecord>) -> Self {
+            Self {
+                backup: Mutex::new(backup),
+                restore: Mutex::new(restore),
+                diagnostics: Mutex::new(Vec::new()),
+                failed_backups: Mutex::new(Vec::new()),
+                failed_restores: Mutex::new(Vec::new()),
+            }
+        }
+    }
+
+    struct StaticConnectionLoader;
+
+    #[async_trait]
+    impl ManagedDatabaseConnectionLoader for StaticConnectionLoader {
+        async fn load_managed_database_connection(
+            &self,
+            _key: &ManagedDatabasePoolKey,
+        ) -> Result<ManagedDatabaseConnectionSpec, liquid_core::ManagedDatabaseConnectionLoaderError>
+        {
+            Ok(ManagedDatabaseConnectionSpec {
+                engine: ManagedDatabaseEngine::Postgres,
+                host: "localhost".to_owned(),
+                port: 5432,
+                database: "warehouse".to_owned(),
+                username: "postgres".to_owned(),
+                password: "secret-password".to_owned(),
+                ssl_mode: ManagedDatabaseSslMode::Prefer,
+            })
+        }
+    }
+
+    enum FailingExecutor {
+        Dump(DatabaseCommandFailure),
+        Restore(DatabaseCommandFailure),
+    }
+
+    impl FailingExecutor {
+        fn dump(failure: DatabaseCommandFailure) -> Self {
+            Self::Dump(failure)
+        }
+
+        fn restore(failure: DatabaseCommandFailure) -> Self {
+            Self::Restore(failure)
+        }
+    }
+
+    #[async_trait]
+    impl DatabaseProcessExecutor for FailingExecutor {
+        async fn dump_postgres(
+            &self,
+            _spec: &liquid_core::ManagedDatabaseConnectionSpec,
+            _output_path: &Path,
+        ) -> Result<DatabaseDumpResult> {
+            match self {
+                Self::Dump(failure) => Err(failure.clone().into()),
+                Self::Restore(_) => unreachable!(),
+            }
+        }
+
+        async fn restore_postgres(
+            &self,
+            _spec: &liquid_core::ManagedDatabaseConnectionSpec,
+            _input_path: &Path,
+        ) -> Result<DatabaseRestoreResult> {
+            match self {
+                Self::Restore(failure) => Err(failure.clone().into()),
+                Self::Dump(_) => unreachable!(),
+            }
+        }
+    }
+
+    #[async_trait]
+    impl DatabaseBackupMetadataStore for RecordingMetadataStore {
+        async fn create_database_backup(
+            &self,
+            _owner_user_id: &str,
+            _source_managed_database_id: &str,
+            _purpose: Option<String>,
+        ) -> Result<DatabaseBackupRecord, liquid_core::DatabaseBackupMetadataStoreError> {
+            unreachable!()
+        }
+
+        async fn get_database_backup(
+            &self,
+            _owner_user_id: &str,
+            _id: &str,
+        ) -> Result<DatabaseBackupRecord, liquid_core::DatabaseBackupMetadataStoreError> {
+            Ok(self.backup.lock().unwrap().clone())
+        }
+
+        async fn list_database_backups(
+            &self,
+            _owner_user_id: &str,
+            _source_managed_database_id: Option<&str>,
+            _status: Option<DatabaseBackupStatus>,
+            _limit: i64,
+        ) -> Result<Vec<DatabaseBackupRecord>, liquid_core::DatabaseBackupMetadataStoreError>
+        {
+            unreachable!()
+        }
+
+        async fn delete_database_backup(
+            &self,
+            _owner_user_id: &str,
+            _id: &str,
+        ) -> Result<DatabaseBackupRecord, liquid_core::DatabaseBackupMetadataStoreError> {
+            unreachable!()
+        }
+
+        async fn create_database_restore(
+            &self,
+            _owner_user_id: &str,
+            _backup_id: &str,
+            _target_managed_database_id: &str,
+            _purpose: String,
+        ) -> Result<DatabaseRestoreRecord, liquid_core::DatabaseBackupMetadataStoreError> {
+            unreachable!()
+        }
+
+        async fn get_database_restore(
+            &self,
+            _owner_user_id: &str,
+            _id: &str,
+        ) -> Result<DatabaseRestoreRecord, liquid_core::DatabaseBackupMetadataStoreError> {
+            self.restore
+                .lock()
+                .unwrap()
+                .clone()
+                .ok_or(liquid_core::DatabaseBackupMetadataStoreError::NotFound)
+        }
+
+        async fn list_database_restores(
+            &self,
+            _owner_user_id: &str,
+            _backup_id: Option<&str>,
+            _target_managed_database_id: Option<&str>,
+            _status: Option<DatabaseBackupStatus>,
+            _limit: i64,
+        ) -> Result<Vec<DatabaseRestoreRecord>, liquid_core::DatabaseBackupMetadataStoreError>
+        {
+            unreachable!()
+        }
+
+        async fn claim_next_database_backup(
+            &self,
+            _worker_id: &str,
+        ) -> Result<Option<DatabaseBackupRecord>, liquid_core::DatabaseBackupMetadataStoreError>
+        {
+            unreachable!()
+        }
+
+        async fn update_database_backup_progress(
+            &self,
+            _id: &str,
+            phase: &str,
+            progress_percent: i32,
+        ) -> Result<DatabaseBackupRecord, liquid_core::DatabaseBackupMetadataStoreError> {
+            let mut backup = self.backup.lock().unwrap();
+            backup.phase = phase.to_owned();
+            backup.progress_percent = progress_percent;
+            Ok(backup.clone())
+        }
+
+        async fn complete_database_backup(
+            &self,
+            _id: &str,
+            _result: CompleteDatabaseBackup,
+        ) -> Result<DatabaseBackupRecord, liquid_core::DatabaseBackupMetadataStoreError> {
+            unreachable!()
+        }
+
+        async fn fail_database_backup(
+            &self,
+            _id: &str,
+            error: String,
+        ) -> Result<DatabaseBackupRecord, liquid_core::DatabaseBackupMetadataStoreError> {
+            self.failed_backups.lock().unwrap().push(error.clone());
+            let mut backup = self.backup.lock().unwrap();
+            backup.status = DatabaseBackupStatus::Failed;
+            backup.phase = "failed".to_owned();
+            backup.error = Some(error);
+            Ok(backup.clone())
+        }
+
+        async fn claim_next_database_restore(
+            &self,
+            _worker_id: &str,
+        ) -> Result<Option<DatabaseRestoreRecord>, liquid_core::DatabaseBackupMetadataStoreError>
+        {
+            unreachable!()
+        }
+
+        async fn update_database_restore_progress(
+            &self,
+            _id: &str,
+            phase: &str,
+            progress_percent: i32,
+        ) -> Result<DatabaseRestoreRecord, liquid_core::DatabaseBackupMetadataStoreError> {
+            let mut restore = self.restore.lock().unwrap();
+            let restore = restore
+                .as_mut()
+                .ok_or(liquid_core::DatabaseBackupMetadataStoreError::NotFound)?;
+            restore.phase = phase.to_owned();
+            restore.progress_percent = progress_percent;
+            Ok(restore.clone())
+        }
+
+        async fn complete_database_restore(
+            &self,
+            _id: &str,
+        ) -> Result<DatabaseRestoreRecord, liquid_core::DatabaseBackupMetadataStoreError> {
+            unreachable!()
+        }
+
+        async fn fail_database_restore(
+            &self,
+            _id: &str,
+            error: String,
+        ) -> Result<DatabaseRestoreRecord, liquid_core::DatabaseBackupMetadataStoreError> {
+            self.failed_restores.lock().unwrap().push(error.clone());
+            let mut restore = self.restore.lock().unwrap();
+            let restore = restore
+                .as_mut()
+                .ok_or(liquid_core::DatabaseBackupMetadataStoreError::NotFound)?;
+            restore.status = DatabaseBackupStatus::Failed;
+            restore.phase = "failed".to_owned();
+            restore.error = Some(error);
+            Ok(restore.clone())
+        }
+
+        async fn fail_stale_database_jobs(
+            &self,
+            _stale_after_seconds: i64,
+        ) -> Result<u64, liquid_core::DatabaseBackupMetadataStoreError> {
+            unreachable!()
+        }
+
+        async fn append_database_operation_diagnostic(
+            &self,
+            owner_user_id: &str,
+            diagnostic: AppendDatabaseOperationDiagnostic,
+        ) -> Result<
+            liquid_core::DatabaseOperationDiagnosticRecord,
+            liquid_core::DatabaseBackupMetadataStoreError,
+        > {
+            self.diagnostics.lock().unwrap().push(diagnostic.clone());
+            Ok(liquid_core::DatabaseOperationDiagnosticRecord {
+                id: "diagnostic-1".to_owned(),
+                owner_user_id: owner_user_id.to_owned(),
+                operation_kind: diagnostic.operation_kind,
+                operation_id: diagnostic.operation_id,
+                phase: diagnostic.phase,
+                message: diagnostic.message,
+                command_name: diagnostic.command_name,
+                exit_code: diagnostic.exit_code,
+                stdout: diagnostic.stdout,
+                stderr: diagnostic.stderr,
+                stdout_truncated: diagnostic.stdout_truncated,
+                stderr_truncated: diagnostic.stderr_truncated,
+                created_at: time::OffsetDateTime::UNIX_EPOCH,
+            })
         }
     }
 

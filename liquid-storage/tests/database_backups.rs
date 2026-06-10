@@ -1,7 +1,8 @@
 use liquid_core::{
-    CompleteDatabaseBackup, CreateManagedDatabaseRequest, DatabaseBackupListFilters,
-    DatabaseBackupMetadataStore, DatabaseBackupStatus, DatabaseBackupStorageKind,
-    DatabaseBackupTrigger, EnqueueDatabaseBackup, ManagedDatabaseEngine, ManagedDatabaseSslMode,
+    AppendDatabaseOperationDiagnostic, CompleteDatabaseBackup, CreateManagedDatabaseRequest,
+    DatabaseBackupListFilters, DatabaseBackupMetadataStore, DatabaseBackupStatus,
+    DatabaseBackupStorageKind, DatabaseBackupTrigger, DatabaseOperationDiagnosticFilters,
+    DatabaseOperationKind, EnqueueDatabaseBackup, ManagedDatabaseEngine, ManagedDatabaseSslMode,
     RegisterRequest,
 };
 use liquid_storage::{LiquidStore, Storage, StorageOptions};
@@ -142,6 +143,91 @@ async fn database_backup_store_persists_owner_scoped_jobs_and_restores() {
         .unwrap();
     assert_eq!(restore.status, DatabaseBackupStatus::Queued);
     assert_eq!(restore.target.name, "Target");
+
+    storage
+        .append_database_operation_diagnostic(
+            &first.user.id,
+            AppendDatabaseOperationDiagnostic {
+                operation_kind: DatabaseOperationKind::Restore,
+                operation_id: restore.id.clone(),
+                phase: "restoring".to_owned(),
+                message: "first failure".to_owned(),
+                command_name: Some("pg_restore".to_owned()),
+                exit_code: Some(1),
+                stdout: Some("notice".to_owned()),
+                stderr: Some("password secret123 was redacted by worker".to_owned()),
+                stdout_truncated: false,
+                stderr_truncated: false,
+            },
+        )
+        .await
+        .unwrap();
+    tokio::time::sleep(std::time::Duration::from_millis(5)).await;
+    storage
+        .append_database_operation_diagnostic(
+            &first.user.id,
+            AppendDatabaseOperationDiagnostic {
+                operation_kind: DatabaseOperationKind::Restore,
+                operation_id: restore.id.clone(),
+                phase: "restoring".to_owned(),
+                message: "second failure".to_owned(),
+                command_name: Some("pg_restore".to_owned()),
+                exit_code: Some(1),
+                stdout: None,
+                stderr: Some("latest stderr".to_owned()),
+                stdout_truncated: false,
+                stderr_truncated: false,
+            },
+        )
+        .await
+        .unwrap();
+
+    let diagnostics = storage
+        .list_database_operation_diagnostics(
+            &first.user.id,
+            DatabaseOperationDiagnosticFilters {
+                operation_kind: DatabaseOperationKind::Restore,
+                operation_id: &restore.id,
+                limit: 10,
+            },
+        )
+        .await
+        .unwrap();
+    assert_eq!(diagnostics.len(), 2);
+    assert_eq!(diagnostics[0].message, "second failure");
+    assert_eq!(diagnostics[0].command_name.as_deref(), Some("pg_restore"));
+
+    let second_user_diagnostics = storage
+        .list_database_operation_diagnostics(
+            &second.user.id,
+            DatabaseOperationDiagnosticFilters {
+                operation_kind: DatabaseOperationKind::Restore,
+                operation_id: &restore.id,
+                limit: 10,
+            },
+        )
+        .await
+        .unwrap();
+    assert!(second_user_diagnostics.is_empty());
+    let second_user_append_error = storage
+        .append_database_operation_diagnostic(
+            &second.user.id,
+            AppendDatabaseOperationDiagnostic {
+                operation_kind: DatabaseOperationKind::Restore,
+                operation_id: restore.id.clone(),
+                phase: "restoring".to_owned(),
+                message: "cross-owner write".to_owned(),
+                command_name: Some("pg_restore".to_owned()),
+                exit_code: Some(1),
+                stdout: None,
+                stderr: Some("should not persist".to_owned()),
+                stdout_truncated: false,
+                stderr_truncated: false,
+            },
+        )
+        .await
+        .unwrap_err();
+    assert!(second_user_append_error.to_string().contains("not found"));
 }
 
 #[tokio::test]

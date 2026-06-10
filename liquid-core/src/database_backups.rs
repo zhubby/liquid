@@ -499,6 +499,55 @@ pub struct DatabaseOperationEventRecord {
     pub created_at: OffsetDateTime,
 }
 
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, TS)]
+#[ts(export)]
+pub struct DatabaseOperationDiagnosticRecord {
+    pub id: String,
+    pub owner_user_id: String,
+    pub operation_kind: DatabaseOperationKind,
+    pub operation_id: String,
+    pub phase: String,
+    pub message: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[ts(optional)]
+    pub command_name: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[ts(optional)]
+    pub exit_code: Option<i32>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[ts(optional)]
+    pub stdout: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[ts(optional)]
+    pub stderr: Option<String>,
+    pub stdout_truncated: bool,
+    pub stderr_truncated: bool,
+    #[serde(with = "time::serde::rfc3339")]
+    #[ts(type = "string")]
+    pub created_at: OffsetDateTime,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct AppendDatabaseOperationDiagnostic {
+    pub operation_kind: DatabaseOperationKind,
+    pub operation_id: String,
+    pub phase: String,
+    pub message: String,
+    pub command_name: Option<String>,
+    pub exit_code: Option<i32>,
+    pub stdout: Option<String>,
+    pub stderr: Option<String>,
+    pub stdout_truncated: bool,
+    pub stderr_truncated: bool,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct DatabaseOperationDiagnosticFilters<'a> {
+    pub operation_kind: DatabaseOperationKind,
+    pub operation_id: &'a str,
+    pub limit: i64,
+}
+
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct CompleteDatabaseBackup {
     pub storage_kind: DatabaseBackupStorageKind,
@@ -792,6 +841,26 @@ pub trait DatabaseBackupMetadataStore: Send + Sync {
         Err(DatabaseBackupMetadataStoreError::Backend(
             "database operation events are not supported by this store".to_owned(),
         ))
+    }
+
+    async fn append_database_operation_diagnostic(
+        &self,
+        owner_user_id: &str,
+        diagnostic: AppendDatabaseOperationDiagnostic,
+    ) -> Result<DatabaseOperationDiagnosticRecord, DatabaseBackupMetadataStoreError> {
+        let _ = (owner_user_id, diagnostic);
+        Err(DatabaseBackupMetadataStoreError::Backend(
+            "database operation diagnostics are not supported by this store".to_owned(),
+        ))
+    }
+
+    async fn list_database_operation_diagnostics(
+        &self,
+        owner_user_id: &str,
+        filters: DatabaseOperationDiagnosticFilters<'_>,
+    ) -> Result<Vec<DatabaseOperationDiagnosticRecord>, DatabaseBackupMetadataStoreError> {
+        let _ = (owner_user_id, filters);
+        Ok(Vec::new())
     }
 
     async fn claim_next_database_operation_event(

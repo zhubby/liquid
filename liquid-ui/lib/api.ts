@@ -77,6 +77,7 @@ export type { DatabaseDiagramRelationship } from "./generated/api-types/Database
 export type { DatabaseDiagramRelationshipEndpoint } from "./generated/api-types/DatabaseDiagramRelationshipEndpoint";
 export type { DatabaseDiagramSize } from "./generated/api-types/DatabaseDiagramSize";
 export type { DatabaseDiagramTable } from "./generated/api-types/DatabaseDiagramTable";
+export type { DatabaseOperationDiagnosticRecord } from "./generated/api-types/DatabaseOperationDiagnosticRecord";
 export type { DatabaseOperationEventRecord } from "./generated/api-types/DatabaseOperationEventRecord";
 export type { DatabaseOperationEventType } from "./generated/api-types/DatabaseOperationEventType";
 export type { DatabaseOperationKind } from "./generated/api-types/DatabaseOperationKind";

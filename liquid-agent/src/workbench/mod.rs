@@ -463,6 +463,56 @@ mod tests {
     }
 
     #[test]
+    fn workbench_context_includes_compact_database_restore_metadata() {
+        let mut context = llm_context();
+        context.messages = vec![AgentMessage {
+            id: "message-restore".to_owned(),
+            conversation_id: "conversation-1".to_owned(),
+            turn_id: Some("turn-restore".to_owned()),
+            role: AgentMessageRole::Assistant,
+            content: "Database restore failed for doro.".to_owned(),
+            metadata: Some(json!({
+                "kind": "database_operation_status",
+                "database_restore": {
+                    "id": "restore-1",
+                    "owner_user_id": "user-1",
+                    "backup_id": "backup-1",
+                    "target": {
+                        "id": "db-1",
+                        "name": "doro",
+                        "engine": "postgres",
+                        "host": "localhost",
+                        "port": 5432,
+                        "database": "doro",
+                        "username": "postgres",
+                        "ssl_mode": "disable"
+                    },
+                    "format": "postgres_custom",
+                    "status": "failed",
+                    "phase": "failed",
+                    "progress_percent": 60,
+                    "restore_options": {},
+                    "error": "pg_restore failed",
+                    "created_at": "2026-06-10T08:31:57Z",
+                    "updated_at": "2026-06-10T08:32:10Z"
+                }
+            })),
+            created_at: time::OffsetDateTime::UNIX_EPOCH,
+        }];
+
+        let payload = prompt::workbench_context_payload(&context).unwrap();
+        let payload: Value = serde_json::from_str(&payload).unwrap();
+        let operation =
+            &payload["workbench_context"]["conversation_messages"][0]["database_operation"];
+
+        assert_eq!(operation["kind"], "restore");
+        assert_eq!(operation["id"], "restore-1");
+        assert_eq!(operation["backup_id"], "backup-1");
+        assert_eq!(operation["target_name"], "doro");
+        assert_eq!(operation["error"], "pg_restore failed");
+    }
+
+    #[test]
     fn proposes_sql_audit_for_selected_database_and_sql() {
         let response = RuleBasedWorkbenchAgent.respond(WorkbenchContext {
             message: "select * from users".to_owned(),

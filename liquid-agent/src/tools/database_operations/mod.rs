@@ -1,4 +1,5 @@
 mod backup;
+mod diagnostic;
 mod restore;
 
 use std::sync::Arc;
@@ -6,6 +7,7 @@ use std::sync::Arc;
 use anyhow::{Result, bail};
 use liquid_core::{
     DatabaseBackupMetadataStore, DatabaseBackupScheduleStatus, DatabaseBackupStatus,
+    DatabaseOperationDiagnosticFilters, DatabaseOperationDiagnosticRecord, DatabaseOperationKind,
 };
 use serde_json::Value;
 
@@ -14,6 +16,7 @@ pub(crate) use backup::{
     PgDeleteDatabaseBackupTool, PgGetDatabaseBackupTool, PgListDatabaseBackupSchedulesTool,
     PgListDatabaseBackupsTool, PgStartDatabaseBackupTool, PgUpdateDatabaseBackupScheduleTool,
 };
+pub(crate) use diagnostic::PgGetDatabaseOperationDiagnosticsTool;
 pub(crate) use restore::{
     PgGetDatabaseRestoreTool, PgListDatabaseRestoresTool, PgStartDatabaseRestoreTool,
 };
@@ -132,10 +135,38 @@ fn optional_status_arg(arguments: &Value, name: &str) -> Result<Option<DatabaseB
         .transpose()
 }
 
+fn operation_kind_arg(arguments: &Value, name: &str, tool: &str) -> Result<DatabaseOperationKind> {
+    let value = required_string_arg(arguments, name, tool)?;
+    match value.as_str() {
+        "backup" => Ok(DatabaseOperationKind::Backup),
+        "restore" => Ok(DatabaseOperationKind::Restore),
+        other => bail!("{name} must be one of backup or restore; got {other}"),
+    }
+}
+
 fn limit_arg(arguments: &Value) -> i64 {
     arguments
         .get("limit")
         .and_then(Value::as_i64)
         .unwrap_or(20)
         .clamp(1, 100)
+}
+
+async fn recent_operation_diagnostics(
+    context: &DatabaseOperationToolContext,
+    operation_kind: DatabaseOperationKind,
+    operation_id: &str,
+    limit: i64,
+) -> Result<Vec<DatabaseOperationDiagnosticRecord>> {
+    Ok(context
+        .metadata_store
+        .list_database_operation_diagnostics(
+            &context.owner_user_id,
+            DatabaseOperationDiagnosticFilters {
+                operation_kind,
+                operation_id,
+                limit,
+            },
+        )
+        .await?)
 }

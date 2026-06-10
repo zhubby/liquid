@@ -4,9 +4,9 @@ use super::{
     database_operations::{
         DatabaseOperationToolContext, PgCreateDatabaseBackupScheduleTool,
         PgDeleteDatabaseBackupScheduleTool, PgDeleteDatabaseBackupTool, PgGetDatabaseBackupTool,
-        PgGetDatabaseRestoreTool, PgListDatabaseBackupSchedulesTool, PgListDatabaseBackupsTool,
-        PgListDatabaseRestoresTool, PgStartDatabaseBackupTool, PgStartDatabaseRestoreTool,
-        PgUpdateDatabaseBackupScheduleTool,
+        PgGetDatabaseOperationDiagnosticsTool, PgGetDatabaseRestoreTool,
+        PgListDatabaseBackupSchedulesTool, PgListDatabaseBackupsTool, PgListDatabaseRestoresTool,
+        PgStartDatabaseBackupTool, PgStartDatabaseRestoreTool, PgUpdateDatabaseBackupScheduleTool,
     },
     postgres::{
         PgDescribeRelationTool, PgExecuteReadonlySqlTool, PgExecuteWriteSqlTool, PgExplainSqlTool,
@@ -38,6 +38,7 @@ const DATABASE_OPERATION_TOOL_NAMES: &[&str] = &[
     "pg_start_database_restore",
     "pg_get_database_restore",
     "pg_list_database_restores",
+    "pg_get_database_operation_diagnostics",
 ];
 
 pub fn sql_risk_tools(pool: Option<PgPool>, metadata_required: bool) -> ToolRegistry {
@@ -148,7 +149,8 @@ pub fn database_operation_tools(context: DatabaseOperationToolContext) -> ToolRe
     registry.register(PgDeleteDatabaseBackupScheduleTool::new(context.clone()));
     registry.register(PgStartDatabaseRestoreTool::new(context.clone()));
     registry.register(PgGetDatabaseRestoreTool::new(context.clone()));
-    registry.register(PgListDatabaseRestoresTool::new(context));
+    registry.register(PgListDatabaseRestoresTool::new(context.clone()));
+    registry.register(PgGetDatabaseOperationDiagnosticsTool::new(context));
     registry
 }
 
@@ -160,7 +162,10 @@ pub fn workbench_database_backup_tools(context: DatabaseOperationToolContext) ->
     registry.register(PgCreateDatabaseBackupScheduleTool::new(context.clone()));
     registry.register(PgListDatabaseBackupSchedulesTool::new(context.clone()));
     registry.register(PgUpdateDatabaseBackupScheduleTool::new(context.clone()));
-    registry.register(PgDeleteDatabaseBackupScheduleTool::new(context));
+    registry.register(PgDeleteDatabaseBackupScheduleTool::new(context.clone()));
+    registry.register(PgGetDatabaseRestoreTool::new(context.clone()));
+    registry.register(PgListDatabaseRestoresTool::new(context.clone()));
+    registry.register(PgGetDatabaseOperationDiagnosticsTool::new(context));
     registry
 }
 
@@ -249,11 +254,31 @@ mod tests {
             "pg_start_database_restore",
             "pg_get_database_restore",
             "pg_list_database_restores",
+            "pg_get_database_operation_diagnostics",
         ] {
             assert!(has_tool(&registry, name), "missing tool {name}");
         }
         assert!(!has_tool(&registry, "inspect_sql_risk"));
         assert_eq!(database_operation_tool_names(), registry.tool_names());
+    }
+
+    #[test]
+    fn workbench_database_backup_tool_set_includes_restore_readonly_diagnostics() {
+        let registry = workbench_database_backup_tools(DatabaseOperationToolContext::new(
+            "user-1",
+            Arc::new(NoopBackupMetadataStore),
+        ));
+
+        for name in [
+            "pg_start_database_backup",
+            "pg_get_database_backup",
+            "pg_get_database_restore",
+            "pg_list_database_restores",
+            "pg_get_database_operation_diagnostics",
+        ] {
+            assert!(has_tool(&registry, name), "missing tool {name}");
+        }
+        assert!(!has_tool(&registry, "pg_start_database_restore"));
     }
 
     fn has_tool(registry: &ToolRegistry, name: &str) -> bool {

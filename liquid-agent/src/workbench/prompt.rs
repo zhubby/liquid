@@ -8,7 +8,7 @@ pub(super) const WORKBENCH_SYSTEM_PROMPT: &str = r#"You are Liquid's AI workbenc
 Your job is task-first ReAct orchestration: understand the user's desired outcome, use tools to obtain facts, and keep working until you can either give the final answer or ask the user to confirm a side-effect.
 SQL audit is only one safety gate. It is not the product goal unless the user explicitly asks for audit, review, risk analysis, or approval.
 
-Use the provided conversation, managed database, audit summary, SQL audits, and proposed actions as context.
+Use the provided conversation, database operation summaries, managed database, audit summary, SQL audits, and proposed actions as context.
 Never invent database IDs, SQL audit IDs, action IDs, credentials, execution status, created resources, query rows, or direct tool results.
 If the answer is already available from context, answer directly and return no actions.
 If a tool is needed, use it. Do not replace safe read-only tool execution with a confirmation card.
@@ -29,7 +29,8 @@ Tool selection rules:
 - Existing SQL audit lifecycle requests: call propose_sql_audit_decision only for SQL audit IDs that appear in the provided context.
 - Database backup requests: use pg_start_database_backup for immediate backups and pg_create_database_backup_schedule for recurring cron backups. These tools only queue asynchronous work; tell the user the backup was scheduled and do not wait for the dump to finish.
 - Backup schedule management requests: use pg_list_database_backup_schedules, pg_update_database_backup_schedule, or pg_delete_database_backup_schedule.
-- Database restore requests are destructive. Do not call restore tools from planning mode. Create a confirmed restore action only when a supported confirmation proposal exists; otherwise explain that restore requires explicit confirmation.
+- Database backup or restore status questions, including "what happened", "why did it fail", "check progress", or "看看什么状况": use pg_get_database_backup, pg_get_database_restore, pg_list_database_backups, pg_list_database_restores, and pg_get_database_operation_diagnostics as needed. These are read-only tools. For failed operations, prefer persisted diagnostics over conversation text.
+- Starting a database restore is destructive. Do not call pg_start_database_restore from planning mode. Create a confirmed restore action only when a supported confirmation proposal exists; otherwise explain that restore requires explicit confirmation.
 - If no available tool can complete the user's task, say that plainly and propose the closest safe next step.
 
 Do not present "I prepared an audit" as the main response for ordinary user tasks.
@@ -78,6 +79,8 @@ fn workbench_context_value(context: &LlmWorkbenchContext) -> Value {
             "write_sql_execution": context.write_sql_execution_enabled,
             "writes_require_confirmation": true,
             "database_backups": true,
+            "database_restore_status": true,
+            "database_operation_diagnostics": true,
             "database_restores_require_confirmation": true,
         },
         "selected_sql_audit_id": context.selected_sql_audit_id,
@@ -92,9 +95,44 @@ fn message_context(message: &AgentMessage) -> Value {
         "id": message.id,
         "role": message.role,
         "content": message.content,
+        "database_operation": database_operation_message_context(message.metadata.as_ref()),
         "turn_id": message.turn_id,
         "created_at": message.created_at,
     })
+}
+
+fn database_operation_message_context(metadata: Option<&Value>) -> Option<Value> {
+    let metadata = metadata?;
+
+    if let Some(backup) = metadata.get("database_backup") {
+        return Some(json!({
+            "kind": "backup",
+            "id": json_string(backup, "/id"),
+            "status": json_string(backup, "/status"),
+            "phase": json_string(backup, "/phase"),
+            "error": json_string(backup, "/error"),
+            "source_name": json_string(backup, "/source/name"),
+        }));
+    }
+
+    metadata.get("database_restore").map(|restore| {
+        json!({
+            "kind": "restore",
+            "id": json_string(restore, "/id"),
+            "status": json_string(restore, "/status"),
+            "phase": json_string(restore, "/phase"),
+            "error": json_string(restore, "/error"),
+            "backup_id": json_string(restore, "/backup_id"),
+            "target_name": json_string(restore, "/target/name"),
+        })
+    })
+}
+
+fn json_string(value: &Value, pointer: &str) -> Option<String> {
+    value
+        .pointer(pointer)
+        .and_then(Value::as_str)
+        .map(ToOwned::to_owned)
 }
 
 fn sql_audit_context(record: &SqlAuditRecord) -> Value {

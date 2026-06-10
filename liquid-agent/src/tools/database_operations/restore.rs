@@ -1,5 +1,6 @@
 use anyhow::{Result, bail};
 use async_trait::async_trait;
+use liquid_core::{DatabaseBackupStatus, DatabaseOperationKind};
 use liquid_llm::ToolDefinition;
 use serde_json::{Value, json};
 
@@ -7,7 +8,7 @@ use crate::{tools::AgentTool, types::ToolOutput};
 
 use super::{
     DatabaseOperationToolContext, limit_arg, optional_status_arg, optional_string_arg,
-    required_string_arg,
+    recent_operation_diagnostics, required_string_arg,
 };
 
 #[derive(Clone)]
@@ -130,8 +131,22 @@ impl AgentTool for PgGetDatabaseRestoreTool {
             .metadata_store
             .get_database_restore(&self.context.owner_user_id, &restore_id)
             .await?;
+        let recent_diagnostics = if restore.status == DatabaseBackupStatus::Failed {
+            recent_operation_diagnostics(
+                &self.context,
+                DatabaseOperationKind::Restore,
+                &restore.id,
+                5,
+            )
+            .await?
+        } else {
+            Vec::new()
+        };
 
-        Ok(ToolOutput::json(json!({ "restore": restore })))
+        Ok(ToolOutput::json(json!({
+            "restore": restore,
+            "recent_diagnostics": recent_diagnostics,
+        })))
     }
 }
 
