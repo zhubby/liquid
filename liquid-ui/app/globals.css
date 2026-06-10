@@ -351,6 +351,16 @@
     filter: drop-shadow(0 3px 5px rgb(15 23 42 / 18%));
   }
 
+  .database-diagram-flow-dragging .react-flow__edge-path,
+  .database-diagram-flow-dragging .react-flow__connection-path {
+    filter: none;
+    transition: none;
+  }
+
+  .database-diagram-flow-dragging .react-flow__edgelabel-renderer {
+    display: none;
+  }
+
   .database-diagram-edge-flow {
     pointer-events: none;
     fill: none;
@@ -368,12 +378,18 @@
     animation-duration: 0.95s;
   }
 
+  .database-diagram-flow-dragging .database-diagram-edge-flow {
+    animation: none;
+    filter: none;
+    opacity: 0.28;
+    transition: none;
+  }
+
   .database-diagram-node {
     box-shadow:
       0 14px 28px rgb(15 23 42 / 8%),
       0 2px 7px rgb(15 23 42 / 6%);
     contain: layout paint;
-    will-change: transform;
   }
 
   .database-diagram-table-node {
@@ -393,6 +409,7 @@
 
   .database-diagram-node-dragging {
     transition: none;
+    will-change: transform;
     box-shadow:
       0 8px 16px rgb(15 23 42 / 8%),
       0 1px 4px rgb(15 23 42 / 6%);
@@ -416,7 +433,6 @@
   .database-diagram-area-node {
     box-shadow: inset 0 0 0 1px color-mix(in oklch, var(--background) 60%, transparent);
     contain: layout paint;
-    will-change: transform;
   }
 
   .database-diagram-handle {

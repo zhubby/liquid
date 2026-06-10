@@ -3,6 +3,7 @@
 import {
   type ChangeEvent,
   type ReactNode,
+  memo,
   useCallback,
   useEffect,
   useMemo,
@@ -49,11 +50,16 @@ import {
   type Connection,
   type Edge,
   type EdgeProps,
+  type EdgeMouseHandler,
+  type FitViewOptions,
   type Node,
   type NodeChange,
+  type NodeMouseHandler,
   type NodeProps,
   type OnConnect,
+  type OnNodeDrag,
   type OnNodesChange,
+  type SnapGrid,
 } from "@xyflow/react";
 import { toast } from "sonner";
 
@@ -255,6 +261,7 @@ type FloatingMenuStyle = {
 };
 
 const DOCUMENT_HISTORY_LIMIT = 50;
+const VISIBLE_ELEMENTS_THRESHOLD = 80;
 
 const designCopy: Record<Locale, DesignCopy> = {
   "zh-CN": {
@@ -832,6 +839,7 @@ function DatabaseDiagramEditor({
   });
   const [selected, setSelected] = useState<SelectedElement>({ kind: "diagram" });
   const [isSaving, setIsSaving] = useState(false);
+  const [isDraggingNode, setIsDraggingNode] = useState(false);
   const [dirty, setDirty] = useState(false);
   const [query, setQuery] = useState("");
   const documentRef = useRef(document);
@@ -849,6 +857,7 @@ function DatabaseDiagramEditor({
     documentRef.current = nextDocument;
     setHistory({ past: [], future: [] });
     setSelected({ kind: "diagram" });
+    setIsDraggingNode(false);
     setDirty(false);
     queuedPositionChangesRef.current = new Map();
     if (flowNodeFrameRef.current !== null) {
@@ -1000,6 +1009,16 @@ function DatabaseDiagramEditor({
     () => buildFlowEdges(document.relationships, selected),
     [document.relationships, selected],
   );
+  const fitViewOptions = useMemo<FitViewOptions<DiagramNode>>(
+    () => ({ maxZoom: 1, padding: 0.2 }),
+    [],
+  );
+  const snapGrid = useMemo<SnapGrid>(() => [16, 16], []);
+  const reactFlowProOptions = useMemo(() => ({ hideAttribution: true }), []);
+  const shouldOnlyRenderVisibleElements = useMemo(
+    () => flowNodes.length + flowEdges.length > VISIBLE_ELEMENTS_THRESHOLD,
+    [flowEdges.length, flowNodes.length],
+  );
 
   const flushQueuedPositionChanges = useCallback(() => {
     flowNodeFrameRef.current = null;
@@ -1104,6 +1123,33 @@ function DatabaseDiagramEditor({
     },
     [flushQueuedPositionChanges, mutateDocument],
   );
+
+  const handleNodeClick = useCallback<NodeMouseHandler<DiagramNode>>(
+    (_, node) => {
+      const nextSelected = selectedElementFromFlowNodeId(node.id);
+
+      if (nextSelected) {
+        setSelected(nextSelected);
+      }
+    },
+    [],
+  );
+
+  const handleEdgeClick = useCallback<EdgeMouseHandler<DiagramEdge>>((_, edge) => {
+    setSelected({ kind: "relationship", id: edge.id });
+  }, []);
+
+  const handlePaneClick = useCallback(() => {
+    setSelected({ kind: "diagram" });
+  }, []);
+
+  const handleNodeDragStart = useCallback<OnNodeDrag<DiagramNode>>(() => {
+    setIsDraggingNode(true);
+  }, []);
+
+  const handleNodeDragStop = useCallback<OnNodeDrag<DiagramNode>>(() => {
+    setIsDraggingNode(false);
+  }, []);
 
   const handleConnect = useCallback<OnConnect>(
     (connection) => {
@@ -1439,28 +1485,26 @@ function DatabaseDiagramEditor({
           edgeTypes={diagramEdgeTypes}
           onNodesChange={handleNodesChange}
           onConnect={handleConnect}
-          onNodeClick={(_, node) => {
-            const nextSelected = selectedElementFromFlowNodeId(node.id);
-
-            if (nextSelected) {
-              setSelected(nextSelected);
-            }
-          }}
-          onEdgeClick={(_, edge) =>
-            setSelected({ kind: "relationship", id: edge.id })
-          }
-          onPaneClick={() => setSelected({ kind: "diagram" })}
+          onNodeClick={handleNodeClick}
+          onEdgeClick={handleEdgeClick}
+          onPaneClick={handlePaneClick}
+          onNodeDragStart={handleNodeDragStart}
+          onNodeDragStop={handleNodeDragStop}
           fitView
-          fitViewOptions={{ maxZoom: 1, padding: 0.2 }}
+          fitViewOptions={fitViewOptions}
           minZoom={0.25}
           maxZoom={1.4}
           nodesDraggable
           nodesConnectable
           elementsSelectable
           snapToGrid
-          snapGrid={[16, 16]}
-          proOptions={{ hideAttribution: true }}
-          className="database-diagram-flow h-full w-full"
+          snapGrid={snapGrid}
+          onlyRenderVisibleElements={shouldOnlyRenderVisibleElements}
+          proOptions={reactFlowProOptions}
+          className={cn(
+            "database-diagram-flow h-full w-full",
+            isDraggingNode && "database-diagram-flow-dragging",
+          )}
         >
           <Background gap={28} size={1} />
           <Panel
@@ -1497,18 +1541,20 @@ function DatabaseDiagramEditor({
               onAddEnum={addEnum}
             />
           </Panel>
-          <MiniMap
-            position="bottom-left"
-            className="hidden xl:block"
-            pannable
-            zoomable
-            nodeStrokeWidth={2}
-            nodeColor={(node) =>
-              node.type === "table"
-                ? "var(--primary)"
-                : "var(--muted-foreground)"
-            }
-          />
+          {!isDraggingNode ? (
+            <MiniMap
+              position="bottom-left"
+              className="hidden xl:block"
+              pannable
+              zoomable
+              nodeStrokeWidth={2}
+              nodeColor={(node) =>
+                node.type === "table"
+                  ? "var(--primary)"
+                  : "var(--muted-foreground)"
+              }
+            />
+          ) : null}
         </ReactFlow>
 
         <InspectorPanel
@@ -1644,7 +1690,7 @@ function ToolbarDivider() {
   return <div className="mx-1 h-6 w-px shrink-0 bg-border" aria-hidden />;
 }
 
-function FlowTableNode({
+const FlowTableNode = memo(function FlowTableNode({
   data,
   selected,
   isConnectable,
@@ -1768,9 +1814,9 @@ function FlowTableNode({
       </div>
     </article>
   );
-}
+});
 
-function FlowNoteNode({
+const FlowNoteNode = memo(function FlowNoteNode({
   data,
   selected,
   dragging,
@@ -1816,9 +1862,9 @@ function FlowNoteNode({
       </p>
     </article>
   );
-}
+});
 
-function FlowAreaNode({
+const FlowAreaNode = memo(function FlowAreaNode({
   data,
   selected,
   dragging,
@@ -1846,9 +1892,9 @@ function FlowAreaNode({
       </div>
     </section>
   );
-}
+});
 
-function RelationshipEdge(props: EdgeProps<DiagramEdge>) {
+const RelationshipEdge = memo(function RelationshipEdge(props: EdgeProps<DiagramEdge>) {
   const {
     id,
     sourceX,
@@ -1924,7 +1970,7 @@ function RelationshipEdge(props: EdgeProps<DiagramEdge>) {
       </EdgeLabelRenderer>
     </>
   );
-}
+});
 
 const diagramNodeTypes = {
   table: FlowTableNode,
