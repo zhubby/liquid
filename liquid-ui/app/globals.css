@@ -349,23 +349,32 @@
 
   .database-diagram-node {
     box-shadow:
-      0 16px 34px rgb(15 23 42 / 10%),
-      0 2px 8px rgb(15 23 42 / 8%);
+      0 14px 28px rgb(15 23 42 / 8%),
+      0 2px 7px rgb(15 23 42 / 6%);
   }
 
   .database-diagram-table-node {
     background:
       linear-gradient(
-        180deg,
-        color-mix(in oklch, var(--background) 97%, var(--muted)) 0%,
+        160deg,
+        color-mix(in oklch, var(--card) 94%, var(--primary)) 0%,
         var(--background) 100%
       );
   }
 
   .database-diagram-node:hover {
     box-shadow:
-      0 20px 42px rgb(15 23 42 / 13%),
-      0 3px 10px rgb(15 23 42 / 9%);
+      0 18px 36px rgb(15 23 42 / 10%),
+      0 3px 9px rgb(15 23 42 / 8%);
+  }
+
+  .database-diagram-note-node {
+    background:
+      linear-gradient(
+        160deg,
+        color-mix(in oklch, #fef3c7 34%, var(--background)) 0%,
+        var(--background) 72%
+      );
   }
 
   .database-diagram-area-node {
@@ -373,12 +382,12 @@
   }
 
   .database-diagram-handle {
-    width: 10px;
-    height: 10px;
+    width: 12px;
+    height: 12px;
     border: 2px solid var(--background);
     border-radius: 999px;
     background: var(--primary);
-    opacity: 0.9;
+    opacity: 0.48;
     box-shadow:
       0 0 0 1px color-mix(in oklch, var(--primary) 35%, var(--border)),
       0 2px 5px rgb(15 23 42 / 20%);
@@ -387,15 +396,17 @@
       transform 160ms ease;
   }
 
-  .database-diagram-handle-left {
-    left: -5px;
+  .database-diagram-handle-target {
+    left: -8px;
   }
 
-  .database-diagram-handle-right {
-    right: -5px;
+  .database-diagram-handle-source {
+    right: -8px;
+    background: var(--background);
+    border-color: var(--primary);
   }
 
-  .database-diagram-table-node:hover .database-diagram-handle,
+  .database-diagram-column-row:hover .database-diagram-handle,
   .database-diagram-handle:hover {
     opacity: 1;
     transform: scale(1.18);

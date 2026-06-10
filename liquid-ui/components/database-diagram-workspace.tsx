@@ -18,6 +18,7 @@ import {
   Layers3,
   Loader2,
   Plus,
+  Redo2,
   RefreshCw,
   Rows3,
   Save,
@@ -26,20 +27,24 @@ import {
   Table2,
   Trash2,
   Upload,
+  Undo2,
   type LucideIcon,
+  ZoomIn,
+  ZoomOut,
 } from "lucide-react";
 import {
   Background,
   BaseEdge,
-  Controls,
   EdgeLabelRenderer,
   Handle,
   MarkerType,
   MiniMap,
+  Panel,
   Position,
   ReactFlow,
   applyNodeChanges,
   getBezierPath,
+  useReactFlow,
   type Connection,
   type Edge,
   type EdgeProps,
@@ -65,6 +70,12 @@ import {
   TabsList,
   TabsTrigger,
 } from "@/components/ui/tabs";
+import {
+  Tooltip,
+  TooltipContent,
+  TooltipProvider,
+  TooltipTrigger,
+} from "@/components/ui/tooltip";
 import {
   type CreateDatabaseDiagramRequest,
   type DatabaseDiagram,
@@ -123,10 +134,13 @@ type DesignCopy = {
   dirty: string;
   savedState: string;
   addTable: string;
-  addRelationship: string;
   addNote: string;
   addArea: string;
   addEnum: string;
+  zoomIn: string;
+  zoomOut: string;
+  undo: string;
+  redo: string;
   exportJson: string;
   importJson: string;
   search: string;
@@ -136,6 +150,7 @@ type DesignCopy = {
   table: string;
   relationship: string;
   note: string;
+  emptyNote: string;
   area: string;
   enum: string;
   name: string;
@@ -174,7 +189,6 @@ type DesignCopy = {
   endpointsTab: string;
   rulesTab: string;
   noSelection: string;
-  relationshipRequirement: string;
   noMatches: string;
 };
 
@@ -212,6 +226,13 @@ type RelationshipEdgeData = {
 
 type DiagramEdge = Edge<RelationshipEdgeData, "relationship">;
 
+type DocumentHistory = {
+  past: DatabaseDiagramDocument[];
+  future: DatabaseDiagramDocument[];
+};
+
+const DOCUMENT_HISTORY_LIMIT = 50;
+
 const designCopy: Record<Locale, DesignCopy> = {
   "zh-CN": {
     title: "数据库设计",
@@ -240,10 +261,13 @@ const designCopy: Record<Locale, DesignCopy> = {
     dirty: "未保存",
     savedState: "已保存",
     addTable: "表",
-    addRelationship: "关系",
     addNote: "注释",
     addArea: "区域",
     addEnum: "枚举",
+    zoomIn: "放大",
+    zoomOut: "缩小",
+    undo: "撤销",
+    redo: "恢复",
     exportJson: "导出 JSON",
     importJson: "导入 JSON",
     search: "搜索表、字段、注释",
@@ -253,6 +277,7 @@ const designCopy: Record<Locale, DesignCopy> = {
     table: "表",
     relationship: "关系",
     note: "注释",
+    emptyNote: "暂无正文",
     area: "区域",
     enum: "枚举",
     name: "名称",
@@ -291,7 +316,6 @@ const designCopy: Record<Locale, DesignCopy> = {
     endpointsTab: "端点",
     rulesTab: "规则",
     noSelection: "选择画布元素后编辑属性。",
-    relationshipRequirement: "至少需要两个带字段的表才能创建关系。",
     noMatches: "没有匹配的元素。",
   },
   "en-US": {
@@ -321,10 +345,13 @@ const designCopy: Record<Locale, DesignCopy> = {
     dirty: "Unsaved",
     savedState: "Saved",
     addTable: "Table",
-    addRelationship: "Relation",
     addNote: "Note",
     addArea: "Area",
     addEnum: "Enum",
+    zoomIn: "Zoom in",
+    zoomOut: "Zoom out",
+    undo: "Undo",
+    redo: "Redo",
     exportJson: "Export JSON",
     importJson: "Import JSON",
     search: "Search tables, columns, notes",
@@ -334,6 +361,7 @@ const designCopy: Record<Locale, DesignCopy> = {
     table: "Table",
     relationship: "Relationship",
     note: "Note",
+    emptyNote: "No note body",
     area: "Area",
     enum: "Enum",
     name: "Name",
@@ -372,13 +400,12 @@ const designCopy: Record<Locale, DesignCopy> = {
     endpointsTab: "Endpoints",
     rulesTab: "Rules",
     noSelection: "Select a canvas element to edit its properties.",
-    relationshipRequirement: "At least two tables with columns are required to create a relationship.",
     noMatches: "No matching elements.",
   },
 };
 
-const TABLE_WIDTH = 300;
-const NOTE_WIDTH = 288;
+const TABLE_WIDTH = 320;
+const NOTE_WIDTH = 304;
 
 const cardinalityOptions: DatabaseDiagramCardinality[] = [
   "one_to_one",
@@ -620,18 +647,31 @@ function DatabaseDiagramEditor({
   const [document, setDocument] = useState<DatabaseDiagramDocument>(
     normalizeDocument(diagram.document),
   );
+  const [history, setHistory] = useState<DocumentHistory>({
+    past: [],
+    future: [],
+  });
   const [selected, setSelected] = useState<SelectedElement>({ kind: "diagram" });
   const [isSaving, setIsSaving] = useState(false);
   const [dirty, setDirty] = useState(false);
   const [query, setQuery] = useState("");
+  const documentRef = useRef(document);
 
   useEffect(() => {
+    const nextDocument = normalizeDocument(diagram.document);
+
     setTitle(diagram.title);
     setDescription(diagram.description ?? "");
-    setDocument(normalizeDocument(diagram.document));
+    setDocument(nextDocument);
+    documentRef.current = nextDocument;
+    setHistory({ past: [], future: [] });
     setSelected({ kind: "diagram" });
     setDirty(false);
   }, [diagram]);
+
+  useEffect(() => {
+    documentRef.current = document;
+  }, [document]);
 
   const normalizedQuery = query.trim().toLowerCase();
   const visibleElementIds = useMemo(() => {
@@ -682,8 +722,73 @@ function DatabaseDiagramEditor({
   const mutateDocument = useCallback((
     updater: (current: DatabaseDiagramDocument) => DatabaseDiagramDocument,
   ) => {
-    setDocument((current) => normalizeDocument(updater(current)));
-    setDirty(true);
+    setDocument((current) => {
+      const currentDocument = normalizeDocument(current);
+      const nextDocument = normalizeDocument(updater(currentDocument));
+
+      if (documentsEqual(currentDocument, nextDocument)) {
+        return current;
+      }
+
+      setHistory((currentHistory) => ({
+        past: appendDocumentHistory(currentHistory.past, currentDocument),
+        future: [],
+      }));
+      documentRef.current = nextDocument;
+      setDirty(true);
+
+      return nextDocument;
+    });
+  }, []);
+  const canUndo = history.past.length > 0;
+  const canRedo = history.future.length > 0;
+  const undoDocument = useCallback(() => {
+    setHistory((currentHistory) => {
+      const previousDocument =
+        currentHistory.past[currentHistory.past.length - 1];
+
+      if (!previousDocument) {
+        return currentHistory;
+      }
+
+      const currentDocument = cloneDiagramDocument(documentRef.current);
+      const nextDocument = cloneDiagramDocument(previousDocument);
+
+      setDocument(nextDocument);
+      documentRef.current = nextDocument;
+      setSelected({ kind: "diagram" });
+      setDirty(true);
+
+      return {
+        past: currentHistory.past.slice(0, -1),
+        future: [currentDocument, ...currentHistory.future].slice(
+          0,
+          DOCUMENT_HISTORY_LIMIT,
+        ),
+      };
+    });
+  }, []);
+  const redoDocument = useCallback(() => {
+    setHistory((currentHistory) => {
+      const nextDocument = currentHistory.future[0];
+
+      if (!nextDocument) {
+        return currentHistory;
+      }
+
+      const currentDocument = cloneDiagramDocument(documentRef.current);
+      const restoredDocument = cloneDiagramDocument(nextDocument);
+
+      setDocument(restoredDocument);
+      documentRef.current = restoredDocument;
+      setSelected({ kind: "diagram" });
+      setDirty(true);
+
+      return {
+        past: appendDocumentHistory(currentHistory.past, currentDocument),
+        future: currentHistory.future.slice(1),
+      };
+    });
   }, []);
 
   const desiredFlowNodes = useMemo(
@@ -820,10 +925,14 @@ function DatabaseDiagramEditor({
         },
       );
 
+      const savedDocument = normalizeDocument(saved.document);
+
       setDirty(false);
       setTitle(saved.title);
       setDescription(saved.description ?? "");
-      setDocument(normalizeDocument(saved.document));
+      setDocument(savedDocument);
+      documentRef.current = savedDocument;
+      setHistory({ past: [], future: [] });
       onDiagramSaved(saved);
       toast.success(copy.saved);
     } catch (error) {
@@ -867,33 +976,6 @@ function DatabaseDiagramEditor({
       tables: [...current.tables, table],
     }));
     setSelected({ kind: "table", id: tableId });
-  };
-
-  const addRelationship = () => {
-    const candidates = document.tables.filter((table) => table.columns.length > 0);
-
-    if (candidates.length < 2) {
-      toast.error(copy.relationshipRequirement);
-      return;
-    }
-
-    const sourceTable = candidates[0];
-    const targetTable = candidates[1];
-    const relationship: DatabaseDiagramRelationship = {
-      id: createId("relationship"),
-      name: `${sourceTable.name}_${targetTable.name}_fk`,
-      source: endpointFor(sourceTable, sourceTable.columns[0]),
-      target: endpointFor(targetTable, targetTable.columns[0]),
-      cardinality: "many_to_one",
-      on_update: "no_action",
-      on_delete: "no_action",
-    };
-
-    mutateDocument((current) => ({
-      ...current,
-      relationships: [...current.relationships, relationship],
-    }));
-    setSelected({ kind: "relationship", id: relationship.id });
   };
 
   const addNote = () => {
@@ -1001,7 +1083,12 @@ function DatabaseDiagramEditor({
         setDescription(payload.description);
       }
 
+      setHistory((currentHistory) => ({
+        past: appendDocumentHistory(currentHistory.past, document),
+        future: [],
+      }));
       setDocument(nextDocument);
+      documentRef.current = nextDocument;
       setDirty(true);
       setSelected({ kind: "diagram" });
       toast.success(copy.imported);
@@ -1059,16 +1146,6 @@ function DatabaseDiagramEditor({
           </div>
         </div>
         <div className="flex flex-wrap items-center gap-2">
-          <ToolbarButton icon={Table2} label={copy.addTable} onClick={addTable} />
-          <ToolbarButton
-            icon={GitBranch}
-            label={copy.addRelationship}
-            onClick={addRelationship}
-          />
-          <ToolbarButton icon={StickyNote} label={copy.addNote} onClick={addNote} />
-          <ToolbarButton icon={BoxSelect} label={copy.addArea} onClick={addArea} />
-          <ToolbarButton icon={Layers3} label={copy.addEnum} onClick={addEnum} />
-          <div className="mx-1 hidden h-6 w-px bg-border sm:block" />
           <Button
             type="button"
             variant="outline"
@@ -1167,7 +1244,22 @@ function DatabaseDiagramEditor({
               className="database-diagram-flow"
             >
               <Background gap={28} size={1} />
-              <Controls position="bottom-left" />
+              <Panel
+                position="bottom-center"
+                className="pointer-events-none mb-4"
+              >
+                <CanvasToolbar
+                  copy={copy}
+                  canUndo={canUndo}
+                  canRedo={canRedo}
+                  onUndo={undoDocument}
+                  onRedo={redoDocument}
+                  onAddTable={addTable}
+                  onAddNote={addNote}
+                  onAddArea={addArea}
+                  onAddEnum={addEnum}
+                />
+              </Panel>
               <MiniMap
                 position="bottom-right"
                 pannable
@@ -1199,21 +1291,121 @@ function DatabaseDiagramEditor({
   );
 }
 
-function ToolbarButton({
+function CanvasToolbar({
+  copy,
+  canUndo,
+  canRedo,
+  onUndo,
+  onRedo,
+  onAddTable,
+  onAddNote,
+  onAddArea,
+  onAddEnum,
+}: {
+  copy: DesignCopy;
+  canUndo: boolean;
+  canRedo: boolean;
+  onUndo: () => void;
+  onRedo: () => void;
+  onAddTable: () => void;
+  onAddNote: () => void;
+  onAddArea: () => void;
+  onAddEnum: () => void;
+}) {
+  const { zoomIn, zoomOut } = useReactFlow();
+
+  return (
+    <TooltipProvider delayDuration={250}>
+      <div className="pointer-events-auto flex max-w-[calc(100vw-2rem)] items-center gap-1 overflow-x-auto rounded-xl border bg-background/95 p-1.5 shadow-lg backdrop-blur supports-[backdrop-filter]:bg-background/85">
+        <CanvasToolbarButton
+          icon={Undo2}
+          label={copy.undo}
+          disabled={!canUndo}
+          onClick={onUndo}
+        />
+        <CanvasToolbarButton
+          icon={Redo2}
+          label={copy.redo}
+          disabled={!canRedo}
+          onClick={onRedo}
+        />
+        <ToolbarDivider />
+        <CanvasToolbarButton
+          icon={ZoomOut}
+          label={copy.zoomOut}
+          onClick={() => void zoomOut({ duration: 160 })}
+        />
+        <CanvasToolbarButton
+          icon={ZoomIn}
+          label={copy.zoomIn}
+          onClick={() => void zoomIn({ duration: 160 })}
+        />
+        <ToolbarDivider />
+        <CanvasToolbarButton
+          icon={Table2}
+          label={copy.addTable}
+          onClick={onAddTable}
+        />
+        <CanvasToolbarButton
+          icon={StickyNote}
+          label={copy.addNote}
+          onClick={onAddNote}
+        />
+        <CanvasToolbarButton
+          icon={BoxSelect}
+          label={copy.addArea}
+          onClick={onAddArea}
+        />
+        <CanvasToolbarButton
+          icon={Layers3}
+          label={copy.addEnum}
+          onClick={onAddEnum}
+        />
+      </div>
+    </TooltipProvider>
+  );
+}
+
+function CanvasToolbarButton({
   icon: Icon,
   label,
+  disabled = false,
   onClick,
 }: {
   icon: LucideIcon;
   label: string;
+  disabled?: boolean;
   onClick: () => void;
 }) {
-  return (
-    <Button type="button" variant="outline" size="sm" onClick={onClick}>
+  const button = (
+    <Button
+      type="button"
+      variant="ghost"
+      size="icon"
+      className="size-9 rounded-lg text-foreground hover:bg-muted"
+      aria-label={label}
+      title={label}
+      disabled={disabled}
+      onClick={onClick}
+    >
       <Icon className="size-4" aria-hidden />
-      {label}
     </Button>
   );
+
+  return (
+    <Tooltip>
+      <TooltipTrigger asChild>
+        {disabled ? <span className="inline-flex">{button}</span> : button}
+      </TooltipTrigger>
+      <TooltipContent side="top" align="center" sideOffset={10}>
+        {label}
+      </TooltipContent>
+    </Tooltip>
+  );
+}
+
+function ToolbarDivider() {
+  return <div className="mx-1 h-6 w-px shrink-0 bg-border" aria-hidden />;
 }
 
 function FlowTableNode({
@@ -1223,42 +1415,48 @@ function FlowTableNode({
 }: NodeProps<Extract<DiagramNode, { type: "table" }>>) {
   const { table, copy, faded } = data;
   const active = data.active || selected;
+  const primaryKeyCount = table.columns.filter((column) => column.primary_key).length;
 
   return (
     <article
       className={cn(
-        "database-diagram-node database-diagram-table-node overflow-hidden rounded-lg border bg-card text-card-foreground transition",
+        "database-diagram-node database-diagram-table-node overflow-hidden rounded-xl border bg-card text-card-foreground transition",
         active && "border-primary ring-2 ring-primary/25",
         faded && "opacity-25",
       )}
       style={{ width: TABLE_WIDTH }}
     >
-      <div
-        className="h-1.5"
-        style={{ backgroundColor: table.color ?? "var(--primary)" }}
-      />
-      <div className="border-b bg-muted/20 px-3 py-2.5">
+      <div className="relative border-b px-3.5 py-3">
+        <div
+          className="absolute inset-x-0 top-0 h-1"
+          style={{ backgroundColor: table.color ?? "var(--primary)" }}
+        />
         <div className="flex items-start justify-between gap-3">
           <div className="min-w-0">
             <div className="flex min-w-0 items-center gap-2">
-              <span className="flex size-6 shrink-0 items-center justify-center rounded-md border bg-background">
-                <Table2 className="size-3.5 text-muted-foreground" aria-hidden />
+              <span
+                className="flex size-7 shrink-0 items-center justify-center rounded-lg border bg-background shadow-xs"
+                style={{ color: table.color ?? "var(--primary)" }}
+              >
+                <Table2 className="size-4" aria-hidden />
               </span>
-              <div className="truncate text-sm font-semibold">{table.name}</div>
-            </div>
-            <div className="mt-1.5 flex min-w-0 items-center gap-1.5 text-xs text-muted-foreground">
-              <span className="truncate">{table.schema ?? "public"}</span>
-              <span aria-hidden>·</span>
-              <span>{table.columns.length} {copy.columns}</span>
+              <div className="min-w-0">
+                <div className="truncate text-sm font-semibold leading-5">
+                  {table.name}
+                </div>
+                <div className="mt-0.5 truncate text-[11px] text-muted-foreground">
+                  {table.schema ?? "public"} schema
+                </div>
+              </div>
             </div>
           </div>
-          <div className="flex shrink-0 flex-col items-end gap-1">
+          <div className="flex shrink-0 items-center gap-1.5">
             <Badge variant="secondary" className="rounded-md px-1.5 py-0 text-[10px]">
-              {table.indexes.length} IDX
+              {table.columns.length} {copy.columns}
             </Badge>
-            {table.columns.some((column) => column.primary_key) ? (
+            {primaryKeyCount > 0 ? (
               <Badge variant="outline" className="rounded-md px-1.5 py-0 text-[10px]">
-                PK
+                {primaryKeyCount} PK
               </Badge>
             ) : null}
           </div>
@@ -1269,34 +1467,46 @@ function FlowTableNode({
           </p>
         ) : null}
       </div>
-      <div className="divide-y">
+      <div className="space-y-1.5 p-2">
         {table.columns.length === 0 ? (
-          <div className="px-3 py-3 text-xs text-muted-foreground">
+          <div className="rounded-lg border border-dashed px-3 py-3 text-xs text-muted-foreground">
             {copy.columns}: 0
           </div>
         ) : (
           table.columns.map((column) => (
             <div
               key={column.id}
-              className="relative grid grid-cols-[minmax(0,1fr)_auto] gap-3 px-3 py-2 text-xs"
+              className={cn(
+                "database-diagram-column-row relative grid grid-cols-[minmax(0,1fr)_auto] items-center gap-3 rounded-lg px-2.5 py-2 text-xs transition-colors",
+                column.primary_key
+                  ? "database-diagram-column-row-target bg-primary/5"
+                  : "database-diagram-column-row-source hover:bg-muted/55",
+              )}
             >
-              <Handle
-                type="target"
-                position={Position.Left}
-                id={targetHandleId(column.id)}
-                isConnectable={isConnectable}
-                className="database-diagram-handle database-diagram-handle-left"
-              />
+              {column.primary_key ? (
+                <Handle
+                  type="target"
+                  position={Position.Left}
+                  id={targetPrimaryHandleId(column.id)}
+                  isConnectable={isConnectable}
+                  className="database-diagram-handle database-diagram-handle-target"
+                />
+              ) : null}
               <div className="min-w-0">
                 <div className="flex min-w-0 items-center gap-1.5">
                   {column.primary_key ? (
-                    <span className="rounded-sm bg-primary px-1.5 py-0.5 text-[10px] font-semibold text-primary-foreground">
+                    <span className="rounded-md bg-primary px-1.5 py-0.5 text-[10px] font-semibold text-primary-foreground">
                       PK
                     </span>
                   ) : null}
                   {column.unique && !column.primary_key ? (
-                    <span className="rounded-sm border px-1.5 py-0.5 text-[10px] font-medium text-muted-foreground">
+                    <span className="rounded-md border px-1.5 py-0.5 text-[10px] font-medium text-muted-foreground">
                       UQ
+                    </span>
+                  ) : null}
+                  {!column.nullable && !column.primary_key ? (
+                    <span className="rounded-md border px-1.5 py-0.5 text-[10px] font-medium text-muted-foreground">
+                      NN
                     </span>
                   ) : null}
                   <span className="truncate font-medium">{column.name}</span>
@@ -1306,16 +1516,18 @@ function FlowTableNode({
                   {column.default_value ? ` · ${column.default_value}` : ""}
                 </div>
               </div>
-              <div className="self-start rounded-md bg-muted px-1.5 py-1 font-mono text-[11px] text-muted-foreground">
+              <div className="self-start rounded-md border bg-background px-1.5 py-1 font-mono text-[11px] text-muted-foreground shadow-xs">
                 {column.data_type}
               </div>
-              <Handle
-                type="source"
-                position={Position.Right}
-                id={sourceHandleId(column.id)}
-                isConnectable={isConnectable}
-                className="database-diagram-handle database-diagram-handle-right"
-              />
+              {!column.primary_key ? (
+                <Handle
+                  type="source"
+                  position={Position.Right}
+                  id={sourceHandleId(column.id)}
+                  isConnectable={isConnectable}
+                  className="database-diagram-handle database-diagram-handle-source"
+                />
+              ) : null}
             </div>
           ))
         )}
@@ -1334,20 +1546,37 @@ function FlowNoteNode({
   return (
     <article
       className={cn(
-        "database-diagram-node w-72 rounded-lg border bg-card p-3 text-card-foreground transition",
+        "database-diagram-node database-diagram-note-node w-72 rounded-xl border p-3.5 text-card-foreground transition",
         active && "border-primary ring-2 ring-primary/25",
         faded && "opacity-25",
       )}
       style={{ width: NOTE_WIDTH }}
     >
-      <div className="flex items-center gap-2 text-sm font-semibold">
-        <span className="flex size-6 shrink-0 items-center justify-center rounded-md border bg-muted/40">
-          <StickyNote className="size-3.5 text-muted-foreground" aria-hidden />
-        </span>
-        <span className="truncate">{note.title}</span>
+      <div className="flex items-start justify-between gap-3">
+        <div className="flex min-w-0 items-center gap-2">
+          <span className="flex size-7 shrink-0 items-center justify-center rounded-lg border bg-background/80 shadow-xs">
+            <StickyNote className="size-4 text-muted-foreground" aria-hidden />
+          </span>
+          <div className="min-w-0">
+            <div className="truncate text-sm font-semibold leading-5">
+              {note.title}
+            </div>
+            <div className="mt-0.5 text-[11px] text-muted-foreground">
+              {copy.note}
+            </div>
+          </div>
+        </div>
+        <Badge variant="outline" className="shrink-0 rounded-md px-1.5 py-0 text-[10px]">
+          TXT
+        </Badge>
       </div>
-      <p className="mt-2 line-clamp-5 whitespace-pre-wrap text-xs leading-5 text-muted-foreground">
-        {note.body || copy.note}
+      <p
+        className={cn(
+          "mt-3 line-clamp-6 whitespace-pre-wrap rounded-lg border bg-background/70 px-3 py-2 text-xs leading-5",
+          note.body ? "text-foreground" : "text-muted-foreground/70",
+        )}
+      >
+        {note.body || copy.emptyNote}
       </p>
     </article>
   );
@@ -1571,7 +1800,7 @@ function buildFlowEdges(
       source: flowNodeId("table", relationship.source.table_id),
       target: flowNodeId("table", relationship.target.table_id),
       sourceHandle: sourceHandleId(relationship.source.column_id),
-      targetHandle: targetHandleId(relationship.target.column_id),
+      targetHandle: targetPrimaryHandleId(relationship.target.column_id),
       selected: active,
       data: {
         relationship,
@@ -1603,13 +1832,15 @@ function relationshipFromConnection(
   const sourceTableId = flowTableIdFromNode(connection.source);
   const targetTableId = flowTableIdFromNode(connection.target);
   const sourceColumnId = columnIdFromSourceHandle(connection.sourceHandle);
-  const targetColumnId = columnIdFromTargetHandle(connection.targetHandle);
+  const targetColumnId = columnIdFromTargetPrimaryHandle(
+    connection.targetHandle,
+  );
 
   if (!sourceTableId || !targetTableId || !sourceColumnId || !targetColumnId) {
     return null;
   }
 
-  if (sourceTableId === targetTableId && sourceColumnId === targetColumnId) {
+  if (sourceTableId === targetTableId) {
     return null;
   }
 
@@ -1623,6 +1854,10 @@ function relationshipFromConnection(
   );
 
   if (!sourceTable || !targetTable || !sourceColumn || !targetColumn) {
+    return null;
+  }
+
+  if (sourceColumn.primary_key || !targetColumn.primary_key) {
     return null;
   }
 
@@ -1670,8 +1905,8 @@ function sourceHandleId(columnId: string) {
   return `source-column:${columnId}`;
 }
 
-function targetHandleId(columnId: string) {
-  return `target-column:${columnId}`;
+function targetPrimaryHandleId(columnId: string) {
+  return `target-primary-column:${columnId}`;
 }
 
 function columnIdFromSourceHandle(handleId: string | null): string | null {
@@ -1682,12 +1917,12 @@ function columnIdFromSourceHandle(handleId: string | null): string | null {
   return handleId.slice("source-column:".length);
 }
 
-function columnIdFromTargetHandle(handleId: string | null): string | null {
-  if (!handleId?.startsWith("target-column:")) {
+function columnIdFromTargetPrimaryHandle(handleId: string | null): string | null {
+  if (!handleId?.startsWith("target-primary-column:")) {
     return null;
   }
 
-  return handleId.slice("target-column:".length);
+  return handleId.slice("target-primary-column:".length);
 }
 
 function cardinalityLabel(cardinality: DatabaseDiagramCardinality) {
@@ -2868,6 +3103,31 @@ function normalizeDocument(
     areas: document.areas ?? [],
     enums: document.enums ?? [],
   };
+}
+
+function appendDocumentHistory(
+  history: DatabaseDiagramDocument[],
+  document: DatabaseDiagramDocument,
+): DatabaseDiagramDocument[] {
+  return [
+    ...history.slice(-(DOCUMENT_HISTORY_LIMIT - 1)),
+    cloneDiagramDocument(document),
+  ];
+}
+
+function cloneDiagramDocument(
+  document: DatabaseDiagramDocument,
+): DatabaseDiagramDocument {
+  return normalizeDocument(
+    JSON.parse(JSON.stringify(document)) as Partial<DatabaseDiagramDocument>,
+  );
+}
+
+function documentsEqual(
+  left: DatabaseDiagramDocument,
+  right: DatabaseDiagramDocument,
+): boolean {
+  return JSON.stringify(left) === JSON.stringify(right);
 }
 
 function prepareDocumentForSave(
