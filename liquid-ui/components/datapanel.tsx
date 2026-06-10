@@ -429,7 +429,10 @@ export function DatapanelWorkspacePanel({
           <Button
             type="button"
             variant="outline"
-            size="sm"
+            size="icon"
+            className="size-9"
+            aria-label={t.dashboard.preview}
+            title={t.dashboard.preview}
             disabled={!panel || isOpeningPreview}
             onClick={() => void openPreview()}
           >
@@ -438,17 +441,18 @@ export function DatapanelWorkspacePanel({
             ) : (
               <Eye className="size-4" aria-hidden />
             )}
-            {t.dashboard.preview}
           </Button>
           <Button
             type="button"
             variant="outline"
-            size="sm"
+            size="icon"
+            className="size-9"
+            aria-label={t.dashboard.export}
+            title={t.dashboard.export}
             disabled={!panel}
             onClick={() => void exportPanel()}
           >
             <Download className="size-4" aria-hidden />
-            {t.dashboard.export}
           </Button>
         </div>
       </header>
