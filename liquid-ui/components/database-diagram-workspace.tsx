@@ -38,6 +38,7 @@ import {
   MiniMap,
   Position,
   ReactFlow,
+  applyNodeChanges,
   getBezierPath,
   type Connection,
   type Edge,
@@ -685,7 +686,7 @@ function DatabaseDiagramEditor({
     setDirty(true);
   }, []);
 
-  const flowNodes = useMemo(
+  const desiredFlowNodes = useMemo(
     () =>
       buildFlowNodes({
         copy,
@@ -696,6 +697,16 @@ function DatabaseDiagramEditor({
       }),
     [copy, document, normalizedQuery, selected, visibleElementIds],
   );
+  const [flowNodes, setFlowNodes] = useState<DiagramNode[]>(desiredFlowNodes);
+
+  useEffect(() => {
+    setFlowNodes((current) => mergeFlowNodeState(current, desiredFlowNodes));
+  }, [desiredFlowNodes]);
+
+  const nodesDraggable = useMemo(
+    () => flowNodes.every(hasMeasuredFlowNode),
+    [flowNodes],
+  );
 
   const flowEdges = useMemo(
     () => buildFlowEdges(document.relationships, selected),
@@ -704,7 +715,9 @@ function DatabaseDiagramEditor({
 
   const handleNodesChange = useCallback<OnNodesChange<DiagramNode>>(
     (changes) => {
-      const positionChanges = changes.filter(isNodePositionChange);
+      setFlowNodes((current) => applyNodeChanges(changes, current));
+
+      const positionChanges = changes.filter(isCommittedNodePositionChange);
 
       if (positionChanges.length === 0) {
         return;
@@ -1145,7 +1158,7 @@ function DatabaseDiagramEditor({
               fitViewOptions={{ maxZoom: 1, padding: 0.2 }}
               minZoom={0.25}
               maxZoom={1.4}
-              nodesDraggable
+              nodesDraggable={nodesDraggable}
               nodesConnectable
               elementsSelectable
               snapToGrid
@@ -1452,6 +1465,7 @@ function buildFlowNodes({
         id: flowNodeId("area", area.id),
         type: "area",
         position: area.position,
+        selected: selected.kind === "area" && selected.id === area.id,
         data: {
           area,
           copy,
@@ -1471,6 +1485,7 @@ function buildFlowNodes({
         id: flowNodeId("table", table.id),
         type: "table",
         position: table.position,
+        selected: selected.kind === "table" && selected.id === table.id,
         data: {
           table,
           copy,
@@ -1491,6 +1506,7 @@ function buildFlowNodes({
         id: flowNodeId("note", note.id),
         type: "note",
         position: note.position,
+        selected: selected.kind === "note" && selected.id === note.id,
         data: {
           note,
           copy,
@@ -1507,6 +1523,38 @@ function buildFlowNodes({
       }),
     ),
   ];
+}
+
+function mergeFlowNodeState(
+  currentNodes: DiagramNode[],
+  desiredNodes: DiagramNode[],
+): DiagramNode[] {
+  const currentById = new Map(currentNodes.map((node) => [node.id, node]));
+
+  return desiredNodes.map((desiredNode) => {
+    const currentNode = currentById.get(desiredNode.id);
+
+    if (!currentNode) {
+      return desiredNode;
+    }
+
+    return {
+      ...currentNode,
+      ...desiredNode,
+      measured: currentNode.measured,
+      width: currentNode.width,
+      height: currentNode.height,
+      dragging: currentNode.dragging,
+      resizing: currentNode.resizing,
+      position: currentNode.dragging ? currentNode.position : desiredNode.position,
+    } as DiagramNode;
+  });
+}
+
+function hasMeasuredFlowNode(node: DiagramNode): boolean {
+  return (
+    node.measured?.width !== undefined && node.measured.height !== undefined
+  );
 }
 
 function buildFlowEdges(
@@ -1668,6 +1716,12 @@ function isNodePositionChange(
   change: NodeChange<DiagramNode>,
 ): change is DiagramNodePositionChange {
   return change.type === "position" && Boolean(change.position);
+}
+
+function isCommittedNodePositionChange(
+  change: NodeChange<DiagramNode>,
+): change is DiagramNodePositionChange {
+  return isNodePositionChange(change) && change.dragging !== true;
 }
 
 function InspectorPanel({
