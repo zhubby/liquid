@@ -565,67 +565,74 @@ export function ManagedDatabasePicker({
           <section className="flex min-w-0 flex-1 flex-col bg-muted/30 p-3 sm:p-4 lg:p-5">
             {activeView === "overview" ? (
               <Card className="min-h-[420px] flex-1 rounded-lg py-4 shadow-xs">
-              <CardHeader className="flex flex-row items-center justify-between gap-3 px-4">
-                <div>
-                  <CardTitle className="text-sm">
-                    {t.databasePicker.workspaceTitle}
-                  </CardTitle>
-                  <p className="mt-1 text-xs text-muted-foreground">
-                    {t.databasePicker.connectionCount(databases.length)}
-                  </p>
-                </div>
-                <div className="flex flex-wrap items-center justify-end gap-2">
-                  <Button
-                    type="button"
-                    variant="outline"
-                    size="sm"
-                    onClick={openCreateForm}
-                  >
-                    <Plus className="size-4" aria-hidden />
-                    {t.databasePicker.addConnection}
-                  </Button>
-                </div>
-              </CardHeader>
-              <CardContent className="flex min-h-0 flex-1 flex-col px-4">
-                <div className="relative">
-                  <Search className="pointer-events-none absolute left-3 top-1/2 size-4 -translate-y-1/2 text-muted-foreground" />
-                  <input
-                    value={query}
-                    onChange={(event) => setQuery(event.target.value)}
-                    placeholder={t.databasePicker.searchPlaceholder}
-                    className="h-9 w-full rounded-md border bg-background pl-9 pr-3 text-sm outline-none transition-shadow placeholder:text-muted-foreground focus-visible:ring-[3px] focus-visible:ring-ring/50"
-                  />
-                </div>
+                <CardHeader className="flex flex-col gap-3 px-4 sm:flex-row sm:items-center sm:justify-between">
+                  <div className="min-w-0">
+                    <div className="flex items-center gap-2">
+                      <span className="flex size-8 shrink-0 items-center justify-center rounded-md bg-primary text-primary-foreground shadow-xs">
+                        <Database className="size-4" aria-hidden />
+                      </span>
+                      <div className="min-w-0">
+                        <CardTitle className="truncate text-sm">
+                          {t.databasePicker.databaseOverview}
+                        </CardTitle>
+                        <p className="mt-1 text-xs text-muted-foreground">
+                          {t.databasePicker.connectionCount(databases.length)}
+                        </p>
+                      </div>
+                    </div>
+                  </div>
+                  <div className="flex flex-wrap items-center justify-end gap-2">
+                    <Button
+                      type="button"
+                      variant="outline"
+                      size="sm"
+                      onClick={openCreateForm}
+                    >
+                      <Plus className="size-4" aria-hidden />
+                      {t.databasePicker.addConnection}
+                    </Button>
+                  </div>
+                </CardHeader>
+                <CardContent className="flex min-h-0 flex-1 flex-col px-4">
+                  <div className="relative">
+                    <Search className="pointer-events-none absolute left-3 top-1/2 size-4 -translate-y-1/2 text-muted-foreground" />
+                    <input
+                      value={query}
+                      onChange={(event) => setQuery(event.target.value)}
+                      placeholder={t.databasePicker.searchPlaceholder}
+                      className="h-9 w-full rounded-md border bg-background pl-9 pr-3 text-sm outline-none transition-shadow placeholder:text-muted-foreground focus-visible:ring-[3px] focus-visible:ring-ring/50"
+                    />
+                  </div>
 
-                <div className="mt-3 min-h-0 flex-1 space-y-2 overflow-y-auto">
-                  {isLoading ? (
-                    <div className="flex items-center gap-2 rounded-lg border bg-background p-3 text-sm text-muted-foreground">
-                      <Loader2 className="size-4 animate-spin" aria-hidden />
-                      {t.databasePicker.loadingConnections}
-                    </div>
-                  ) : databases.length === 0 ? (
-                    <EmptyDatabaseState />
-                  ) : filteredDatabases.length === 0 ? (
-                    <div className="rounded-lg border bg-background p-4 text-sm text-muted-foreground">
-                      {t.databasePicker.noMatches}
-                    </div>
-                  ) : (
-                    filteredDatabases.map((database) => (
-                      <DatabaseListItem
-                        key={database.id}
-                        database={database}
-                        isTesting={testingId === database.id}
-                        isEntering={enteringId === database.id}
-                        isDeleting={deletingId === database.id}
-                        onEdit={() => handleEdit(database)}
-                        onTest={() => void handleTestConnection(database)}
-                        onEnter={() => void handleEnterWorkspace(database)}
-                        onDelete={() => void handleDelete(database)}
-                      />
-                    ))
-                  )}
-                </div>
-              </CardContent>
+                  <div className="mt-3 min-h-0 flex-1 space-y-2 overflow-y-auto">
+                    {isLoading ? (
+                      <div className="flex items-center gap-2 rounded-lg border bg-background p-3 text-sm text-muted-foreground">
+                        <Loader2 className="size-4 animate-spin" aria-hidden />
+                        {t.databasePicker.loadingConnections}
+                      </div>
+                    ) : databases.length === 0 ? (
+                      <EmptyDatabaseState />
+                    ) : filteredDatabases.length === 0 ? (
+                      <div className="rounded-lg border bg-background p-4 text-sm text-muted-foreground">
+                        {t.databasePicker.noMatches}
+                      </div>
+                    ) : (
+                      filteredDatabases.map((database) => (
+                        <DatabaseListItem
+                          key={database.id}
+                          database={database}
+                          isTesting={testingId === database.id}
+                          isEntering={enteringId === database.id}
+                          isDeleting={deletingId === database.id}
+                          onEdit={() => handleEdit(database)}
+                          onTest={() => void handleTestConnection(database)}
+                          onEnter={() => void handleEnterWorkspace(database)}
+                          onDelete={() => void handleDelete(database)}
+                        />
+                      ))
+                    )}
+                  </div>
+                </CardContent>
               </Card>
             ) : null}
             {activeView === "audits" ? (
