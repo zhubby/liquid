@@ -12,6 +12,8 @@ import {
 import {
   ArrowLeft,
   BoxSelect,
+  Check,
+  ChevronsUpDown,
   Download,
   FileJson,
   GitBranch,
@@ -157,15 +159,15 @@ type DesignCopy = {
   descriptionField: string;
   comment: string;
   color: string;
-  position: string;
   size: string;
-  width: string;
-  height: string;
   columns: string;
   indexes: string;
   addColumn: string;
   addIndex: string;
   dataType: string;
+  dataTypeSearch: string;
+  useCustomDataType: string;
+  noTypeMatches: string;
   nullable: string;
   primaryKey: string;
   unique: string;
@@ -182,7 +184,6 @@ type DesignCopy = {
   basicTab: string;
   fieldsTab: string;
   indexesTab: string;
-  styleTab: string;
   overviewTab: string;
   documentTab: string;
   endpointsTab: string;
@@ -246,6 +247,13 @@ type QueuedNodePositionChange = DiagramNodePositionChange & {
 
 type QueuedNodePositionChangeMap = Map<string, QueuedNodePositionChange>;
 
+type FloatingMenuStyle = {
+  left: number;
+  top: number;
+  width: number;
+  maxHeight: number;
+};
+
 const DOCUMENT_HISTORY_LIMIT = 50;
 
 const designCopy: Record<Locale, DesignCopy> = {
@@ -300,15 +308,15 @@ const designCopy: Record<Locale, DesignCopy> = {
     descriptionField: "说明",
     comment: "备注",
     color: "颜色",
-    position: "位置",
     size: "尺寸",
-    width: "宽",
-    height: "高",
     columns: "字段",
     indexes: "索引",
     addColumn: "添加字段",
     addIndex: "添加索引",
     dataType: "类型",
+    dataTypeSearch: "搜索 PostgreSQL 类型",
+    useCustomDataType: "使用自定义类型",
+    noTypeMatches: "没有匹配的类型。",
     nullable: "可空",
     primaryKey: "主键",
     unique: "唯一",
@@ -325,7 +333,6 @@ const designCopy: Record<Locale, DesignCopy> = {
     basicTab: "基础",
     fieldsTab: "字段",
     indexesTab: "索引",
-    styleTab: "样式",
     overviewTab: "概览",
     documentTab: "文档",
     endpointsTab: "端点",
@@ -384,15 +391,15 @@ const designCopy: Record<Locale, DesignCopy> = {
     descriptionField: "Description",
     comment: "Comment",
     color: "Color",
-    position: "Position",
     size: "Size",
-    width: "Width",
-    height: "Height",
     columns: "Columns",
     indexes: "Indexes",
     addColumn: "Add column",
     addIndex: "Add index",
     dataType: "Type",
+    dataTypeSearch: "Search PostgreSQL types",
+    useCustomDataType: "Use custom type",
+    noTypeMatches: "No matching types.",
     nullable: "Nullable",
     primaryKey: "Primary",
     unique: "Unique",
@@ -409,7 +416,6 @@ const designCopy: Record<Locale, DesignCopy> = {
     basicTab: "Basic",
     fieldsTab: "Fields",
     indexesTab: "Indexes",
-    styleTab: "Style",
     overviewTab: "Overview",
     documentTab: "Document",
     endpointsTab: "Endpoints",
@@ -428,6 +434,164 @@ const cardinalityOptions: DatabaseDiagramCardinality[] = [
   "many_to_one",
   "many_to_many",
 ];
+
+type PostgresTypeGroup = {
+  label: string;
+  types: readonly string[];
+};
+
+const postgresTypeGroups: readonly PostgresTypeGroup[] = [
+  {
+    label: "Numeric",
+    types: [
+      "smallint",
+      "int2",
+      "integer",
+      "int",
+      "int4",
+      "bigint",
+      "int8",
+      "decimal",
+      "numeric",
+      "real",
+      "float4",
+      "double precision",
+      "float",
+      "float8",
+      "smallserial",
+      "serial2",
+      "serial",
+      "serial4",
+      "bigserial",
+      "serial8",
+      "money",
+    ],
+  },
+  {
+    label: "Character",
+    types: [
+      "character varying",
+      "varchar",
+      "character",
+      "char",
+      "bpchar",
+      "text",
+      "name",
+    ],
+  },
+  {
+    label: "Date and time",
+    types: [
+      "timestamp",
+      "timestamp with time zone",
+      "timestamptz",
+      "timestamp without time zone",
+      "date",
+      "time",
+      "time with time zone",
+      "timetz",
+      "time without time zone",
+      "interval",
+    ],
+  },
+  {
+    label: "Boolean, binary, UUID",
+    types: ["boolean", "bool", "bytea", "uuid"],
+  },
+  {
+    label: "JSON and XML",
+    types: ["json", "jsonb", "jsonpath", "xml"],
+  },
+  {
+    label: "Network",
+    types: ["cidr", "inet", "macaddr", "macaddr8"],
+  },
+  {
+    label: "Geometric",
+    types: ["point", "line", "lseg", "box", "path", "polygon", "circle"],
+  },
+  {
+    label: "Text search",
+    types: ["tsvector", "tsquery"],
+  },
+  {
+    label: "Bit string",
+    types: ["bit", "bit varying", "varbit"],
+  },
+  {
+    label: "Range",
+    types: [
+      "int4range",
+      "int8range",
+      "numrange",
+      "tsrange",
+      "tstzrange",
+      "daterange",
+    ],
+  },
+  {
+    label: "Multirange",
+    types: [
+      "int4multirange",
+      "int8multirange",
+      "nummultirange",
+      "tsmultirange",
+      "tstzmultirange",
+      "datemultirange",
+    ],
+  },
+  {
+    label: "Object identifier",
+    types: [
+      "oid",
+      "regclass",
+      "regcollation",
+      "regconfig",
+      "regdictionary",
+      "regnamespace",
+      "regoper",
+      "regoperator",
+      "regproc",
+      "regprocedure",
+      "regrole",
+      "regtype",
+    ],
+  },
+  {
+    label: "System",
+    types: ["pg_lsn", "pg_snapshot", "txid_snapshot", "xid", "xid8", "cid", "tid"],
+  },
+] as const;
+
+const nonArrayElementTypes = new Set([
+  "smallserial",
+  "serial2",
+  "serial",
+  "serial4",
+  "bigserial",
+  "serial8",
+]);
+
+const colorSwatches = [
+  "#2563eb",
+  "#0891b2",
+  "#059669",
+  "#65a30d",
+  "#ca8a04",
+  "#ea580c",
+  "#dc2626",
+  "#db2777",
+  "#7c3aed",
+  "#4f46e5",
+  "#0f172a",
+  "#64748b",
+  "#dbeafe",
+  "#cffafe",
+  "#dcfce7",
+  "#fef3c7",
+  "#ffedd5",
+  "#fee2e2",
+] as const;
 
 export function DatabaseDiagramWorkspace({ token }: DatabaseDiagramWorkspaceProps) {
   const { locale } = useI18n();
@@ -1952,6 +2116,104 @@ function relationshipFromConnection(
   };
 }
 
+function buildPostgresTypeGroups(
+  document: DatabaseDiagramDocument,
+  currentValue: string,
+) {
+  const seen = new Set<string>();
+  const groups = postgresTypeGroups.map((group) => ({
+    label: group.label,
+    types: group.types.filter((type) => addTypeOption(seen, type)),
+  }));
+
+  const enumTypes = document.enums
+    .map((enumItem) => enumItem.name.trim())
+    .filter((type) => addTypeOption(seen, type));
+
+  if (enumTypes.length > 0) {
+    groups.push({ label: "Enums", types: enumTypes });
+  }
+
+  const arrayTypes = [
+    ...postgresTypeGroups.flatMap((group) => group.types),
+    ...enumTypes,
+  ]
+    .filter((type) => !nonArrayElementTypes.has(type))
+    .map((type) => `${type}[]`)
+    .filter((type) => addTypeOption(seen, type));
+
+  if (arrayTypes.length > 0) {
+    groups.push({ label: "Arrays", types: arrayTypes });
+  }
+
+  const existingTypes = document.tables
+    .flatMap((table) => table.columns.map((column) => column.data_type.trim()))
+    .filter((type) => addTypeOption(seen, type));
+  const trimmedCurrentValue = currentValue.trim();
+
+  if (
+    trimmedCurrentValue &&
+    !hasExactTypeOption(groups, trimmedCurrentValue) &&
+    !existingTypes.includes(trimmedCurrentValue)
+  ) {
+    existingTypes.unshift(trimmedCurrentValue);
+  }
+
+  if (existingTypes.length > 0) {
+    groups.push({ label: "Custom and existing", types: existingTypes });
+  }
+
+  return groups.filter((group) => group.types.length > 0);
+}
+
+function filterPostgresTypeGroups(
+  groups: Array<{ label: string; types: string[] }>,
+  query: string,
+) {
+  const normalizedQuery = query.trim().toLowerCase();
+
+  if (!normalizedQuery) {
+    return groups;
+  }
+
+  return groups
+    .map((group) => {
+      if (group.label.toLowerCase().includes(normalizedQuery)) {
+        return group;
+      }
+
+      return {
+        label: group.label,
+        types: group.types.filter((type) =>
+          type.toLowerCase().includes(normalizedQuery),
+        ),
+      };
+    })
+    .filter((group) => group.types.length > 0);
+}
+
+function hasExactTypeOption(
+  groups: Array<{ types: readonly string[] }>,
+  value: string,
+): boolean {
+  return groups.some((group) => group.types.includes(value));
+}
+
+function addTypeOption(seen: Set<string>, value: string): boolean {
+  if (!value) {
+    return false;
+  }
+
+  const key = value.toLowerCase();
+
+  if (seen.has(key)) {
+    return false;
+  }
+
+  seen.add(key);
+  return true;
+}
+
 function flowNodeId(kind: "table" | "note" | "area", id: string) {
   return `${kind}:${id}`;
 }
@@ -2176,7 +2438,7 @@ function InspectorPanel({
           <TableInspector
             copy={copy}
             table={table}
-            onSelect={onSelect}
+            document={document}
             mutateDocument={mutateDocument}
           />
         ) : null}
@@ -2292,12 +2554,12 @@ function DiagramInspector({
 function TableInspector({
   copy,
   table,
-  onSelect,
+  document,
   mutateDocument,
 }: {
   copy: DesignCopy;
   table: DatabaseDiagramTable;
-  onSelect: (selected: SelectedElement) => void;
+  document: DatabaseDiagramDocument;
   mutateDocument: (
     updater: (current: DatabaseDiagramDocument) => DatabaseDiagramDocument,
   ) => void;
@@ -2420,26 +2682,12 @@ function TableInspector({
     });
   };
 
-  const deleteTable = () => {
-    mutateDocument((current) => ({
-      ...current,
-      tables: current.tables.filter((item) => item.id !== table.id),
-      relationships: current.relationships.filter(
-        (relationship) =>
-          relationship.source.table_id !== table.id &&
-          relationship.target.table_id !== table.id,
-      ),
-    }));
-    onSelect({ kind: "diagram" });
-  };
-
   return (
     <Tabs defaultValue="basic" className={inspectorTabsClassName}>
-      <TabsList className="grid w-full grid-cols-4">
+      <TabsList className="grid w-full grid-cols-3">
         <TabsTrigger value="basic">{copy.basicTab}</TabsTrigger>
         <TabsTrigger value="fields">{copy.fieldsTab}</TabsTrigger>
         <TabsTrigger value="indexes">{copy.indexesTab}</TabsTrigger>
-        <TabsTrigger value="style">{copy.styleTab}</TabsTrigger>
       </TabsList>
       <TabsContent value="basic" className={inspectorTabContentClassName}>
         <SectionTitle icon={Table2} title={copy.table} />
@@ -2459,6 +2707,12 @@ function TableInspector({
             onChange={(comment) => updateTable({ comment })}
           />
         </Field>
+        <FieldGroup label={copy.color}>
+          <ColorInput
+            value={table.color ?? "#2563eb"}
+            onChange={(color) => updateTable({ color })}
+          />
+        </FieldGroup>
       </TabsContent>
       <TabsContent value="fields" className={inspectorTabContentClassName}>
         <div className="flex items-center justify-between gap-2">
@@ -2485,22 +2739,20 @@ function TableInspector({
                 <Trash2 className="size-4" aria-hidden />
               </Button>
             </div>
-            <div className="grid grid-cols-2 gap-2">
-              <Field label={copy.name}>
-                <TextInput
-                  value={column.name}
-                  onChange={(name) => updateColumn(column.id, { name })}
-                />
-              </Field>
-              <Field label={copy.dataType}>
-                <TextInput
-                  value={column.data_type}
-                  onChange={(data_type) =>
-                    updateColumn(column.id, { data_type })
-                  }
-                />
-              </Field>
-            </div>
+            <Field label={copy.name}>
+              <TextInput
+                value={column.name}
+                onChange={(name) => updateColumn(column.id, { name })}
+              />
+            </Field>
+            <FieldGroup label={copy.dataType}>
+              <ColumnTypeSelect
+                copy={copy}
+                value={column.data_type}
+                document={document}
+                onChange={(data_type) => updateColumn(column.id, { data_type })}
+              />
+            </FieldGroup>
             <div className="grid grid-cols-2 gap-2">
               <CheckField
                 label={copy.nullable}
@@ -2596,33 +2848,6 @@ function TableInspector({
             />
           </div>
         ))}
-      </TabsContent>
-      <TabsContent value="style" className={inspectorTabContentClassName}>
-        <SectionTitle icon={BoxSelect} title={copy.styleTab} />
-        <Field label={copy.color}>
-          <ColorInput
-            value={table.color ?? "#2563eb"}
-            onChange={(color) => updateTable({ color })}
-          />
-        </Field>
-        <div className="grid grid-cols-2 gap-2">
-          <Field label="X">
-            <NumberInput
-              value={table.position.x}
-              onChange={(x) => updateTable({ position: { ...table.position, x } })}
-            />
-          </Field>
-          <Field label="Y">
-            <NumberInput
-              value={table.position.y}
-              onChange={(y) => updateTable({ position: { ...table.position, y } })}
-            />
-          </Field>
-        </div>
-        <Button type="button" variant="destructive" onClick={deleteTable}>
-          <Trash2 className="size-4" aria-hidden />
-          {copy.delete}
-        </Button>
       </TabsContent>
     </Tabs>
   );
@@ -2807,58 +3032,22 @@ function NoteInspector({
   };
 
   return (
-    <Tabs defaultValue="basic" className={inspectorTabsClassName}>
-      <TabsList className="grid w-full grid-cols-2">
-        <TabsTrigger value="basic">{copy.basicTab}</TabsTrigger>
-        <TabsTrigger value="style">{copy.styleTab}</TabsTrigger>
-      </TabsList>
-      <TabsContent value="basic" className={inspectorTabContentClassName}>
-        <SectionTitle icon={StickyNote} title={copy.note} />
-        <Field label={copy.name}>
-          <TextInput
-            value={note.title}
-            onChange={(title) => updateNote({ title })}
-          />
-        </Field>
-        <Field label={copy.body}>
-          <TextArea
-            value={note.body}
-            rows={8}
-            onChange={(body) => updateNote({ body })}
-          />
-        </Field>
-      </TabsContent>
-      <TabsContent value="style" className={inspectorTabContentClassName}>
-        <SectionTitle icon={BoxSelect} title={copy.position} />
-        <div className="grid grid-cols-2 gap-2">
-          <Field label="X">
-            <NumberInput
-              value={note.position.x}
-              onChange={(x) => updateNote({ position: { ...note.position, x } })}
-            />
-          </Field>
-          <Field label="Y">
-            <NumberInput
-              value={note.position.y}
-              onChange={(y) => updateNote({ position: { ...note.position, y } })}
-            />
-          </Field>
-        </div>
-        <Button
-          type="button"
-          variant="destructive"
-          onClick={() =>
-            mutateDocument((current) => ({
-              ...current,
-              notes: current.notes.filter((item) => item.id !== note.id),
-            }))
-          }
-        >
-          <Trash2 className="size-4" aria-hidden />
-          {copy.delete}
-        </Button>
-      </TabsContent>
-    </Tabs>
+    <div className={inspectorPlainContentClassName}>
+      <SectionTitle icon={StickyNote} title={copy.note} />
+      <Field label={copy.name}>
+        <TextInput
+          value={note.title}
+          onChange={(title) => updateNote({ title })}
+        />
+      </Field>
+      <Field label={copy.body}>
+        <TextArea
+          value={note.body}
+          rows={8}
+          onChange={(body) => updateNote({ body })}
+        />
+      </Field>
+    </div>
   );
 }
 
@@ -2883,71 +3072,21 @@ function AreaInspector({
   };
 
   return (
-    <Tabs defaultValue="basic" className={inspectorTabsClassName}>
-      <TabsList className="grid w-full grid-cols-2">
-        <TabsTrigger value="basic">{copy.basicTab}</TabsTrigger>
-        <TabsTrigger value="style">{copy.styleTab}</TabsTrigger>
-      </TabsList>
-      <TabsContent value="basic" className={inspectorTabContentClassName}>
-        <SectionTitle icon={BoxSelect} title={copy.area} />
-        <Field label={copy.name}>
-          <TextInput
-            value={area.title}
-            onChange={(title) => updateArea({ title })}
-          />
-        </Field>
-        <Field label={copy.color}>
-          <ColorInput
-            value={area.color ?? "#dbeafe"}
-            onChange={(color) => updateArea({ color })}
-          />
-        </Field>
-      </TabsContent>
-      <TabsContent value="style" className={inspectorTabContentClassName}>
-        <SectionTitle icon={BoxSelect} title={copy.size} />
-        <div className="grid grid-cols-2 gap-2">
-          <Field label="X">
-            <NumberInput
-              value={area.position.x}
-              onChange={(x) => updateArea({ position: { ...area.position, x } })}
-            />
-          </Field>
-          <Field label="Y">
-            <NumberInput
-              value={area.position.y}
-              onChange={(y) => updateArea({ position: { ...area.position, y } })}
-            />
-          </Field>
-          <Field label={copy.width}>
-            <NumberInput
-              value={area.size.width}
-              min={120}
-              onChange={(width) => updateArea({ size: { ...area.size, width } })}
-            />
-          </Field>
-          <Field label={copy.height}>
-            <NumberInput
-              value={area.size.height}
-              min={80}
-              onChange={(height) => updateArea({ size: { ...area.size, height } })}
-            />
-          </Field>
-        </div>
-        <Button
-          type="button"
-          variant="destructive"
-          onClick={() =>
-            mutateDocument((current) => ({
-              ...current,
-              areas: current.areas.filter((item) => item.id !== area.id),
-            }))
-          }
-        >
-          <Trash2 className="size-4" aria-hidden />
-          {copy.delete}
-        </Button>
-      </TabsContent>
-    </Tabs>
+    <div className={inspectorPlainContentClassName}>
+      <SectionTitle icon={BoxSelect} title={copy.area} />
+      <Field label={copy.name}>
+        <TextInput
+          value={area.title}
+          onChange={(title) => updateArea({ title })}
+        />
+      </Field>
+      <FieldGroup label={copy.color}>
+        <ColorInput
+          value={area.color ?? "#dbeafe"}
+          onChange={(color) => updateArea({ color })}
+        />
+      </FieldGroup>
+    </div>
   );
 }
 
@@ -3098,6 +3237,23 @@ function Field({ label, children }: { label: string; children: ReactNode }) {
   );
 }
 
+function FieldGroup({
+  label,
+  children,
+}: {
+  label: string;
+  children: ReactNode;
+}) {
+  return (
+    <div className="block min-w-0 space-y-1.5">
+      <div className="block truncate text-xs font-medium text-muted-foreground">
+        {label}
+      </div>
+      {children}
+    </div>
+  );
+}
+
 function CheckField({
   label,
   checked,
@@ -3120,11 +3276,30 @@ function CheckField({
   );
 }
 
+function FieldBlock({
+  label,
+  children,
+}: {
+  label: string;
+  children: ReactNode;
+}) {
+  return (
+    <div className="py-1">
+      <div className="px-2 py-1 text-[11px] font-medium uppercase text-muted-foreground">
+        {label}
+      </div>
+      <div className="space-y-0.5">{children}</div>
+    </div>
+  );
+}
+
 const inputClassName =
   "h-9 min-w-0 w-full max-w-full rounded-md border bg-background px-2 text-sm outline-none transition-shadow focus-visible:ring-[3px] focus-visible:ring-ring/50";
 const inspectorTabsClassName = "flex h-full min-h-0 min-w-0 flex-col";
 const inspectorTabContentClassName =
   "-mx-1 min-h-0 flex-1 space-y-4 overflow-y-auto overflow-x-hidden px-1 py-1";
+const inspectorPlainContentClassName =
+  "h-full min-h-0 space-y-4 overflow-y-auto overflow-x-hidden px-1 py-1";
 
 function TextInput({
   value,
@@ -3139,6 +3314,198 @@ function TextInput({
       className={inputClassName}
       onChange={(event) => onChange(event.target.value)}
     />
+  );
+}
+
+function ColumnTypeSelect({
+  copy,
+  value,
+  document: diagramDocument,
+  onChange,
+}: {
+  copy: DesignCopy;
+  value: string;
+  document: DatabaseDiagramDocument;
+  onChange: (value: string) => void;
+}) {
+  const [open, setOpen] = useState(false);
+  const [query, setQuery] = useState("");
+  const [menuStyle, setMenuStyle] = useState<FloatingMenuStyle | null>(null);
+  const rootRef = useRef<HTMLDivElement | null>(null);
+  const triggerRef = useRef<HTMLButtonElement | null>(null);
+  const typeGroups = useMemo(
+    () => buildPostgresTypeGroups(diagramDocument, value),
+    [diagramDocument, value],
+  );
+  const filteredTypeGroups = useMemo(
+    () => filterPostgresTypeGroups(typeGroups, query),
+    [query, typeGroups],
+  );
+  const normalizedQuery = query.trim();
+  const canUseCustomType =
+    normalizedQuery.length > 0 &&
+    !hasExactTypeOption(typeGroups, normalizedQuery);
+  const updateMenuStyle = useCallback(() => {
+    const trigger = triggerRef.current;
+
+    if (!trigger) {
+      return;
+    }
+
+    const rect = trigger.getBoundingClientRect();
+    const viewportPadding = 12;
+    const spaceBelow = window.innerHeight - rect.bottom - viewportPadding;
+    const spaceAbove = rect.top - viewportPadding;
+    const maxHeight = Math.max(220, Math.min(320, Math.max(spaceBelow, spaceAbove)));
+    const placeAbove = spaceBelow < 260 && spaceAbove > spaceBelow;
+
+    setMenuStyle({
+      left: rect.left,
+      top: placeAbove ? Math.max(viewportPadding, rect.top - maxHeight - 4) : rect.bottom + 4,
+      width: rect.width,
+      maxHeight,
+    });
+  }, []);
+
+  useEffect(() => {
+    if (!open) {
+      return;
+    }
+
+    updateMenuStyle();
+
+    const handlePointerDown = (event: PointerEvent) => {
+      if (!rootRef.current?.contains(event.target as globalThis.Node)) {
+        setOpen(false);
+      }
+    };
+    const handleKeyDown = (event: KeyboardEvent) => {
+      if (event.key === "Escape") {
+        setOpen(false);
+      }
+    };
+    const handlePlacementChange = () => updateMenuStyle();
+
+    document.addEventListener("pointerdown", handlePointerDown);
+    document.addEventListener("keydown", handleKeyDown);
+    window.addEventListener("resize", handlePlacementChange);
+    window.addEventListener("scroll", handlePlacementChange, true);
+
+    return () => {
+      document.removeEventListener("pointerdown", handlePointerDown);
+      document.removeEventListener("keydown", handleKeyDown);
+      window.removeEventListener("resize", handlePlacementChange);
+      window.removeEventListener("scroll", handlePlacementChange, true);
+    };
+  }, [open, updateMenuStyle]);
+
+  const chooseType = (type: string) => {
+    onChange(type);
+    setQuery("");
+    setOpen(false);
+  };
+
+  return (
+    <div ref={rootRef} className="relative min-w-0">
+      <button
+        ref={triggerRef}
+        type="button"
+        aria-haspopup="listbox"
+        aria-expanded={open}
+        className={cn(
+          inputClassName,
+          "flex items-center justify-between gap-2 text-left",
+        )}
+        onClick={() => {
+          setOpen((current) => !current);
+          setQuery("");
+          updateMenuStyle();
+        }}
+      >
+        <span className="min-w-0 truncate">{value}</span>
+        <ChevronsUpDown
+          className="size-4 shrink-0 text-muted-foreground"
+          aria-hidden
+        />
+      </button>
+      {open && menuStyle ? (
+        <div
+          className="fixed z-50 overflow-hidden rounded-md border bg-popover text-popover-foreground shadow-lg"
+          style={{
+            left: menuStyle.left,
+            top: menuStyle.top,
+            width: menuStyle.width,
+          }}
+        >
+          <div className="border-b p-2">
+            <div className="flex h-8 items-center gap-2 rounded-md border bg-background px-2">
+              <Search className="size-3.5 shrink-0 text-muted-foreground" aria-hidden />
+              <input
+                value={query}
+                autoFocus
+                placeholder={copy.dataTypeSearch}
+                className="h-full min-w-0 flex-1 bg-transparent text-sm outline-none placeholder:text-muted-foreground"
+                onChange={(event) => setQuery(event.target.value)}
+              />
+            </div>
+          </div>
+          <div
+            className="overflow-y-auto p-1"
+            role="listbox"
+            style={{ maxHeight: menuStyle.maxHeight }}
+          >
+            {filteredTypeGroups.map((group) => (
+              <FieldBlock key={group.label} label={group.label}>
+                {group.types.map((type) => (
+                  <button
+                    key={type}
+                    type="button"
+                    role="option"
+                    aria-selected={type === value}
+                    className="flex h-8 w-full items-center gap-2 rounded-sm px-2 text-left text-sm hover:bg-accent hover:text-accent-foreground focus-visible:bg-accent focus-visible:text-accent-foreground focus-visible:outline-none"
+                    onClick={() => chooseType(type)}
+                  >
+                    <Check
+                      className={cn(
+                        "size-3.5 shrink-0",
+                        type === value ? "opacity-100" : "opacity-0",
+                      )}
+                      aria-hidden
+                    />
+                    <span className="min-w-0 truncate">{type}</span>
+                  </button>
+                ))}
+              </FieldBlock>
+            ))}
+            {canUseCustomType ? (
+              <FieldBlock label={copy.useCustomDataType}>
+                <button
+                  type="button"
+                  role="option"
+                  aria-selected={normalizedQuery === value}
+                  className="flex h-8 w-full items-center gap-2 rounded-sm px-2 text-left text-sm hover:bg-accent hover:text-accent-foreground focus-visible:bg-accent focus-visible:text-accent-foreground focus-visible:outline-none"
+                  onClick={() => chooseType(normalizedQuery)}
+                >
+                  <Check
+                    className={cn(
+                      "size-3.5 shrink-0",
+                      normalizedQuery === value ? "opacity-100" : "opacity-0",
+                    )}
+                    aria-hidden
+                  />
+                  <span className="min-w-0 truncate">{normalizedQuery}</span>
+                </button>
+              </FieldBlock>
+            ) : null}
+            {filteredTypeGroups.length === 0 && !canUseCustomType ? (
+              <div className="px-2 py-6 text-center text-xs text-muted-foreground">
+                {copy.noTypeMatches}
+              </div>
+            ) : null}
+          </div>
+        </div>
+      ) : null}
+    </div>
   );
 }
 
@@ -3161,32 +3528,6 @@ function TextArea({
   );
 }
 
-function NumberInput({
-  value,
-  min,
-  onChange,
-}: {
-  value: number;
-  min?: number;
-  onChange: (value: number) => void;
-}) {
-  return (
-    <input
-      type="number"
-      value={value}
-      min={min}
-      className={inputClassName}
-      onChange={(event) => {
-        const parsed = Number.parseInt(event.target.value, 10);
-
-        if (Number.isFinite(parsed)) {
-          onChange(min === undefined ? parsed : Math.max(min, parsed));
-        }
-      }}
-    />
-  );
-}
-
 function ColorInput({
   value,
   onChange,
@@ -3194,15 +3535,164 @@ function ColorInput({
   value: string;
   onChange: (value: string) => void;
 }) {
+  const [open, setOpen] = useState(false);
+  const [draftValue, setDraftValue] = useState(value);
+  const [menuStyle, setMenuStyle] = useState<FloatingMenuStyle | null>(null);
+  const rootRef = useRef<HTMLDivElement | null>(null);
+  const triggerRef = useRef<HTMLButtonElement | null>(null);
+  const previewColor = safeColor(value);
+
+  useEffect(() => {
+    setDraftValue(value);
+  }, [value]);
+
+  const updateMenuStyle = useCallback(() => {
+    const trigger = triggerRef.current;
+
+    if (!trigger) {
+      return;
+    }
+
+    const rect = trigger.getBoundingClientRect();
+    const viewportPadding = 12;
+    const menuHeight = 232;
+    const spaceBelow = window.innerHeight - rect.bottom - viewportPadding;
+    const spaceAbove = rect.top - viewportPadding;
+    const placeAbove = spaceBelow < menuHeight && spaceAbove > spaceBelow;
+
+    setMenuStyle({
+      left: rect.left,
+      top: placeAbove
+        ? Math.max(viewportPadding, rect.top - menuHeight - 4)
+        : rect.bottom + 4,
+      width: rect.width,
+      maxHeight: menuHeight,
+    });
+  }, []);
+
+  useEffect(() => {
+    if (!open) {
+      return;
+    }
+
+    updateMenuStyle();
+
+    const handlePointerDown = (event: PointerEvent) => {
+      if (!rootRef.current?.contains(event.target as globalThis.Node)) {
+        setOpen(false);
+      }
+    };
+    const handleKeyDown = (event: KeyboardEvent) => {
+      if (event.key === "Escape") {
+        setOpen(false);
+      }
+    };
+    const handlePlacementChange = () => updateMenuStyle();
+
+    document.addEventListener("pointerdown", handlePointerDown);
+    document.addEventListener("keydown", handleKeyDown);
+    window.addEventListener("resize", handlePlacementChange);
+    window.addEventListener("scroll", handlePlacementChange, true);
+
+    return () => {
+      document.removeEventListener("pointerdown", handlePointerDown);
+      document.removeEventListener("keydown", handleKeyDown);
+      window.removeEventListener("resize", handlePlacementChange);
+      window.removeEventListener("scroll", handlePlacementChange, true);
+    };
+  }, [open, updateMenuStyle]);
+
+  const chooseColor = (color: string) => {
+    setDraftValue(color);
+    onChange(color);
+    setOpen(false);
+  };
+
+  const updateDraftColor = (nextValue: string) => {
+    setDraftValue(nextValue);
+
+    if (isHexColor(nextValue)) {
+      onChange(nextValue);
+    }
+  };
+
   return (
-    <div className="flex min-w-0 gap-2">
-      <input
-        type="color"
-        value={safeColor(value)}
-        className="h-9 w-12 shrink-0 rounded-md border bg-background p-1"
-        onChange={(event) => onChange(event.target.value)}
-      />
-      <TextInput value={value} onChange={onChange} />
+    <div ref={rootRef} className="relative min-w-0">
+      <button
+        ref={triggerRef}
+        type="button"
+        aria-haspopup="dialog"
+        aria-expanded={open}
+        className={cn(
+          inputClassName,
+          "flex items-center justify-between gap-3 text-left",
+        )}
+        onClick={() => {
+          setOpen((current) => !current);
+          updateMenuStyle();
+        }}
+      >
+        <span className="flex min-w-0 items-center gap-2">
+          <span
+            className="size-5 shrink-0 rounded-sm border shadow-xs"
+            style={{ backgroundColor: previewColor }}
+            aria-hidden
+          />
+          <span className="min-w-0 truncate">{value}</span>
+        </span>
+        <ChevronsUpDown
+          className="size-4 shrink-0 text-muted-foreground"
+          aria-hidden
+        />
+      </button>
+      {open && menuStyle ? (
+        <div
+          className="fixed z-50 space-y-3 rounded-md border bg-popover p-3 text-popover-foreground shadow-lg"
+          style={{
+            left: menuStyle.left,
+            top: menuStyle.top,
+            width: menuStyle.width,
+          }}
+        >
+          <div className="grid grid-cols-6 gap-2">
+            {colorSwatches.map((color) => (
+              <button
+                key={color}
+                type="button"
+                aria-label={color}
+                className={cn(
+                  "flex size-8 items-center justify-center rounded-md border shadow-xs outline-none transition-transform hover:scale-105 focus-visible:ring-[3px] focus-visible:ring-ring/50",
+                  safeColor(value).toLowerCase() === color.toLowerCase()
+                    ? "ring-2 ring-ring ring-offset-2 ring-offset-popover"
+                    : "",
+                )}
+                style={{ backgroundColor: color }}
+                onClick={() => chooseColor(color)}
+              >
+                {safeColor(value).toLowerCase() === color.toLowerCase() ? (
+                  <Check
+                    className="size-4 text-white drop-shadow-[0_1px_1px_rgb(0_0_0_/_0.7)]"
+                    aria-hidden
+                  />
+                ) : null}
+              </button>
+            ))}
+          </div>
+          <div className="flex min-w-0 items-center gap-2">
+            <span
+              className="size-8 shrink-0 rounded-md border"
+              style={{ backgroundColor: safeColor(draftValue) }}
+              aria-hidden
+            />
+            <input
+              value={draftValue}
+              className={inputClassName}
+              placeholder="#2563eb"
+              onChange={(event) => updateDraftColor(event.target.value)}
+            />
+          </div>
+        </div>
+      ) : null}
     </div>
   );
 }
@@ -3388,7 +3878,11 @@ function createId(prefix: string): string {
 }
 
 function safeColor(value: string): string {
-  return /^#[0-9a-fA-F]{6}$/.test(value) ? value : "#2563eb";
+  return isHexColor(value) ? value : "#2563eb";
+}
+
+function isHexColor(value: string): boolean {
+  return /^#[0-9a-fA-F]{6}$/.test(value);
 }
 
 function slugify(value: string): string {
