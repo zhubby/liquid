@@ -470,6 +470,8 @@ const zhCN = {
       retry: "重试",
       empty: "暂无可引用资源",
       noResults: "没有匹配的资源",
+      selectedLabel: "已引用",
+      removeReference: (token: string) => `移除引用 ${token}`,
       groups: {
         databaseDesign: "数据库设计记录",
         backups: "备份记录",
@@ -1181,6 +1183,8 @@ const enUS: Messages = {
       retry: "Retry",
       empty: "No resources available",
       noResults: "No matching resources",
+      selectedLabel: "References",
+      removeReference: (token: string) => `Remove reference ${token}`,
       groups: {
         databaseDesign: "Database design records",
         backups: "Backup records",

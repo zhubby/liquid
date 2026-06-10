@@ -133,16 +133,16 @@ type ResourceMentionItem = {
   searchText: string;
 };
 
-type ChatHighlightSegment = {
-  text: string;
-  item?: ResourceMentionItem;
-};
-
 type ResourceMentionTokenRange = {
   start: number;
   end: number;
   token: string;
   item: ResourceMentionItem;
+};
+
+type ResourceMentionReplacementRange = {
+  start: number;
+  end: number;
 };
 
 type ResourceMentionGroup = {
@@ -2495,6 +2495,11 @@ const MessageComposer = ({
     () => mentionGroups.flatMap((group) => group.items),
     [mentionGroups],
   );
+  const selectedMentionRanges = useMemo(
+    () =>
+      isSqlMode ? [] : resourceMentionTokenRanges(input, mentionItems),
+    [input, isSqlMode, mentionItems],
+  );
 
   useEffect(() => {
     composerMountedRef.current = true;
@@ -2669,6 +2674,34 @@ const MessageComposer = ({
     [isSqlMode, loadMentionResources],
   );
 
+  const selectWholeMentionTokenAtCaret = useCallback(() => {
+    const textarea = textareaRef.current;
+
+    if (!textarea) {
+      return false;
+    }
+
+    if (isSqlMode || textarea.selectionStart !== textarea.selectionEnd) {
+      return false;
+    }
+
+    const caretPosition = textarea.selectionStart;
+    const range = resourceMentionTokenRanges(textarea.value, mentionItems).find(
+      (candidate) =>
+        caretPosition > candidate.start && caretPosition < candidate.end,
+    );
+
+    if (!range) {
+      return false;
+    }
+
+    textarea.setSelectionRange(range.start, range.end);
+    setMentionQuery(null);
+    setActiveMentionKey(null);
+
+    return true;
+  }, [isSqlMode, mentionItems]);
+
   const refreshMentionQueryFromTextarea = useCallback(() => {
     const textarea = textareaRef.current;
 
@@ -2676,8 +2709,18 @@ const MessageComposer = ({
       return;
     }
 
+    if (selectWholeMentionTokenAtCaret()) {
+      return;
+    }
+
+    if (textarea.selectionStart !== textarea.selectionEnd) {
+      setMentionQuery(null);
+      setActiveMentionKey(null);
+      return;
+    }
+
     updateMentionQuery(textarea.value, textarea.selectionStart);
-  }, [updateMentionQuery]);
+  }, [selectWholeMentionTokenAtCaret, updateMentionQuery]);
 
   const selectMentionItem = useCallback(
     (item: ResourceMentionItem) => {
@@ -2729,72 +2772,13 @@ const MessageComposer = ({
     [activeMentionKey, flattenedMentionItems],
   );
 
-  const replaceMentionTokenSelection = useCallback(
+  const replaceInputRange = useCallback(
     (
+      value: string,
+      replaceStart: number,
+      replaceEnd: number,
       replacement: string,
-      deleteDirection?: "backward" | "forward",
     ) => {
-      const textarea = textareaRef.current;
-
-      if (!textarea || isSqlMode) {
-        return false;
-      }
-
-      const value = textarea.value;
-      const selectionStart = textarea.selectionStart;
-      const selectionEnd = textarea.selectionEnd;
-      const ranges = resourceMentionTokenRanges(value, mentionItems);
-
-      if (ranges.length === 0) {
-        return false;
-      }
-
-      let replaceStart = selectionStart;
-      let replaceEnd = selectionEnd;
-
-      if (selectionStart === selectionEnd) {
-        const range =
-          deleteDirection === "backward"
-            ? ranges.find(
-                (candidate) =>
-                  selectionStart > candidate.start && selectionStart <= candidate.end,
-              )
-            : deleteDirection === "forward"
-              ? ranges.find(
-                  (candidate) =>
-                    selectionStart >= candidate.start &&
-                    selectionStart < candidate.end,
-                )
-              : ranges.find(
-                  (candidate) =>
-                    selectionStart > candidate.start && selectionStart < candidate.end,
-                );
-
-        if (!range) {
-          return false;
-        }
-
-        replaceStart = range.start;
-        replaceEnd = range.end;
-      } else {
-        const touchedRanges = ranges.filter(
-          (range) => selectionStart < range.end && selectionEnd > range.start,
-        );
-
-        if (touchedRanges.length === 0) {
-          return false;
-        }
-
-        replaceStart = Math.min(
-          selectionStart,
-          ...touchedRanges.map((range) => range.start),
-        );
-        replaceEnd = Math.max(
-          selectionEnd,
-          ...touchedRanges.map((range) => range.end),
-        );
-      }
-
       const nextInput =
         value.slice(0, replaceStart) + replacement + value.slice(replaceEnd);
       const nextCaret = replaceStart + replacement.length;
@@ -2813,10 +2797,48 @@ const MessageComposer = ({
         nextTextarea.focus();
         nextTextarea.setSelectionRange(nextCaret, nextCaret);
       });
+    },
+    [],
+  );
+
+  const removeMentionTokenRange = useCallback(
+    (range: ResourceMentionTokenRange) => {
+      replaceInputRange(input, range.start, range.end, "");
+    },
+    [input, replaceInputRange],
+  );
+
+  const replaceMentionTokenSelection = useCallback(
+    (
+      replacement: string,
+      deleteDirection?: "backward" | "forward",
+    ) => {
+      const textarea = textareaRef.current;
+
+      if (!textarea || isSqlMode) {
+        return false;
+      }
+
+      const value = textarea.value;
+      const selectionStart = textarea.selectionStart;
+      const selectionEnd = textarea.selectionEnd;
+      const range = resourceMentionReplacementRange(
+        value,
+        mentionItems,
+        selectionStart,
+        selectionEnd,
+        deleteDirection,
+      );
+
+      if (!range) {
+        return false;
+      }
+
+      replaceInputRange(value, range.start, range.end, replacement);
 
       return true;
     },
-    [isSqlMode, mentionItems],
+    [isSqlMode, mentionItems, replaceInputRange],
   );
 
   const submitInput = () => {
@@ -2840,17 +2862,25 @@ const MessageComposer = ({
         return;
       }
 
-      const selectedText = textarea.value.slice(
+      const range = resourceMentionReplacementRange(
+        textarea.value,
+        mentionItems,
         textarea.selectionStart,
         textarea.selectionEnd,
       );
 
-      if (replaceMentionTokenSelection("")) {
-        event.preventDefault();
-        event.clipboardData.setData("text/plain", selectedText);
+      if (!range) {
+        return;
       }
+
+      event.preventDefault();
+      event.clipboardData.setData(
+        "text/plain",
+        textarea.value.slice(range.start, range.end),
+      );
+      replaceInputRange(textarea.value, range.start, range.end, "");
     },
-    [replaceMentionTokenSelection],
+    [mentionItems, replaceInputRange],
   );
 
   const handlePaste = useCallback(
@@ -2914,17 +2944,6 @@ const MessageComposer = ({
     }
 
     if (event.key === "Delete" && replaceMentionTokenSelection("", "forward")) {
-      event.preventDefault();
-      return;
-    }
-
-    if (
-      event.key.length === 1 &&
-      !event.altKey &&
-      !event.ctrlKey &&
-      !event.metaKey &&
-      replaceMentionTokenSelection(event.key)
-    ) {
       event.preventDefault();
       return;
     }
@@ -3035,22 +3054,26 @@ const MessageComposer = ({
             onKeyDown={handleKeyDown}
           />
         ) : (
-          <ChatHighlightedTextarea
-            textareaRef={textareaRef}
-            input={input}
-            isLoading={isLoading}
-            placeholder={t.workspace.inputPlaceholder}
-            mentionItems={mentionItems}
-            onChange={(value, caretPosition) => {
-              setInput(value);
-              updateMentionQuery(value, caretPosition);
-            }}
-            onClick={refreshMentionQueryFromTextarea}
-            onCut={handleCut}
-            onKeyDown={handleKeyDown}
-            onKeyUp={refreshMentionQueryFromTextarea}
-            onPaste={handlePaste}
-          />
+          <>
+            <ResourceMentionChips
+              ranges={selectedMentionRanges}
+              onRemove={removeMentionTokenRange}
+            />
+            <ChatTextarea
+              textareaRef={textareaRef}
+              input={input}
+              isLoading={isLoading}
+              placeholder={t.workspace.inputPlaceholder}
+              onChange={(value, caretPosition) => {
+                setInput(value);
+                updateMentionQuery(value, caretPosition);
+              }}
+              onCut={handleCut}
+              onKeyDown={handleKeyDown}
+              onPaste={handlePaste}
+              onSelectionChange={refreshMentionQueryFromTextarea}
+            />
+          </>
         )}
         <div className="mt-2 flex flex-col gap-2 sm:flex-row sm:items-center sm:justify-between">
           <div className="flex min-w-0 flex-wrap items-center gap-x-3 gap-y-1">
@@ -3266,62 +3289,98 @@ function ResourceMentionState({ children }: { children: ReactNode }) {
   );
 }
 
-function ChatHighlightedTextarea({
+function ResourceMentionChips({
+  ranges,
+  onRemove,
+}: {
+  ranges: ResourceMentionTokenRange[];
+  onRemove: (range: ResourceMentionTokenRange) => void;
+}) {
+  const { t } = useI18n();
+
+  if (ranges.length === 0) {
+    return null;
+  }
+
+  return (
+    <div
+      className="mb-1.5 flex flex-wrap items-center gap-1.5 rounded-md bg-muted/40 px-2 py-1.5"
+      aria-label={t.workspace.resourceMentions.selectedLabel}
+    >
+      <span className="mr-0.5 text-[11px] font-medium text-muted-foreground">
+        {t.workspace.resourceMentions.selectedLabel}
+      </span>
+      {ranges.map((range) => {
+        const label =
+          range.item.kind === "database_backup"
+            ? t.workspace.resourceMentions.groups.backups
+            : t.workspace.resourceMentions.groups.databaseDesign;
+
+        return (
+          <span
+            key={`${range.item.key}:${range.start}:${range.end}`}
+            className={cn(
+              "inline-flex h-7 max-w-full items-center gap-1.5 rounded-md border px-2 text-xs font-medium shadow-xs",
+              range.item.kind === "database_backup"
+                ? "border-primary/20 bg-primary/10 text-primary"
+                : "border-border bg-secondary text-secondary-foreground",
+            )}
+          >
+            {range.item.kind === "database_backup" ? (
+              <Archive className="size-3.5 shrink-0" aria-hidden />
+            ) : (
+              <FileJson className="size-3.5 shrink-0" aria-hidden />
+            )}
+            <span className="shrink-0">{label}</span>
+            <span className="min-w-0 truncate font-mono text-[11px]">
+              {range.item.shortId}
+            </span>
+            <button
+              type="button"
+              className="ml-0.5 rounded-sm text-current/65 outline-none transition-colors hover:text-current focus-visible:ring-[2px] focus-visible:ring-ring/50"
+              aria-label={t.workspace.resourceMentions.removeReference(
+                range.token,
+              )}
+              title={t.workspace.resourceMentions.removeReference(range.token)}
+              onMouseDown={(event) => event.preventDefault()}
+              onClick={() => onRemove(range)}
+            >
+              <X className="size-3" aria-hidden />
+            </button>
+          </span>
+        );
+      })}
+    </div>
+  );
+}
+
+function ChatTextarea({
   textareaRef,
   input,
   isLoading,
   placeholder,
-  mentionItems,
   onChange,
-  onClick,
   onCut,
   onKeyDown,
-  onKeyUp,
   onPaste,
+  onSelectionChange,
 }: {
   textareaRef: Ref<HTMLTextAreaElement>;
   input: string;
   isLoading: boolean;
   placeholder: string;
-  mentionItems: ResourceMentionItem[];
   onChange: (value: string, caretPosition: number | null) => void;
-  onClick: () => void;
   onCut: (event: ClipboardEvent<HTMLTextAreaElement>) => void;
   onKeyDown: (event: KeyboardEvent<HTMLTextAreaElement>) => void;
-  onKeyUp: () => void;
   onPaste: (event: ClipboardEvent<HTMLTextAreaElement>) => void;
+  onSelectionChange: () => void;
 }) {
-  const highlightedInput = input || " ";
-  const segments = chatHighlightSegments(highlightedInput, mentionItems);
-
   return (
     <div className="relative max-h-[10.5rem] min-h-12 overflow-hidden">
-      <div
-        aria-hidden
-        className="pointer-events-none absolute inset-0 overflow-hidden px-2 py-1.5 text-sm leading-6 whitespace-pre-wrap break-words text-foreground"
-      >
-        {segments.map((segment, index) =>
-          segment.item ? (
-            <span
-              key={`${segment.item.key}-${index}`}
-              className={cn(
-                "rounded-md px-1 py-0.5 font-medium ring-1 [-webkit-box-decoration-break:clone] [box-decoration-break:clone]",
-                segment.item.kind === "database_backup"
-                  ? "bg-primary/10 text-primary ring-primary/25"
-                  : "bg-secondary text-secondary-foreground ring-border",
-              )}
-            >
-              {segment.text}
-            </span>
-          ) : (
-            <span key={`text-${index}`}>{segment.text}</span>
-          ),
-        )}
-      </div>
       <textarea
         ref={textareaRef}
         id="ai-message"
-        className="relative z-10 max-h-[10.5rem] min-h-12 w-full resize-none bg-transparent px-2 py-1.5 text-sm leading-6 text-transparent caret-foreground outline-none selection:bg-primary/20 placeholder:text-muted-foreground"
+        className="max-h-[10.5rem] min-h-12 w-full resize-none bg-transparent px-2 py-1.5 text-sm leading-6 text-foreground outline-none selection:bg-primary/20 placeholder:text-muted-foreground"
         placeholder={placeholder}
         value={input}
         disabled={isLoading}
@@ -3329,11 +3388,12 @@ function ChatHighlightedTextarea({
         onChange={(event) =>
           onChange(event.target.value, event.currentTarget.selectionStart)
         }
-        onClick={onClick}
+        onClick={onSelectionChange}
         onCut={onCut}
         onKeyDown={onKeyDown}
-        onKeyUp={onKeyUp}
+        onKeyUp={onSelectionChange}
         onPaste={onPaste}
+        onSelect={onSelectionChange}
       />
     </div>
   );
@@ -3444,33 +3504,51 @@ function groupResourceMentionItems(
   ];
 }
 
-function chatHighlightSegments(
+function resourceMentionReplacementRange(
   value: string,
   mentionItems: ResourceMentionItem[],
-): ChatHighlightSegment[] {
+  selectionStart: number,
+  selectionEnd: number,
+  deleteDirection?: "backward" | "forward",
+): ResourceMentionReplacementRange | null {
   const ranges = resourceMentionTokenRanges(value, mentionItems);
 
   if (ranges.length === 0) {
-    return [{ text: value }];
+    return null;
   }
 
-  const segments: ChatHighlightSegment[] = [];
-  let cursor = 0;
+  if (selectionStart === selectionEnd) {
+    const range =
+      deleteDirection === "backward"
+        ? ranges.find(
+            (candidate) =>
+              selectionStart > candidate.start && selectionStart <= candidate.end,
+          )
+        : deleteDirection === "forward"
+          ? ranges.find(
+              (candidate) =>
+                selectionStart >= candidate.start && selectionStart < candidate.end,
+            )
+          : ranges.find(
+              (candidate) =>
+                selectionStart > candidate.start && selectionStart < candidate.end,
+            );
 
-  for (const range of ranges) {
-    if (range.start > cursor) {
-      segments.push({ text: value.slice(cursor, range.start) });
-    }
-
-    segments.push({ text: range.token, item: range.item });
-    cursor = range.end;
+    return range ? { start: range.start, end: range.end } : null;
   }
 
-  if (cursor < value.length) {
-    segments.push({ text: value.slice(cursor) });
+  const touchedRanges = ranges.filter(
+    (range) => selectionStart < range.end && selectionEnd > range.start,
+  );
+
+  if (touchedRanges.length === 0) {
+    return null;
   }
 
-  return segments.length > 0 ? segments : [{ text: value }];
+  return {
+    start: Math.min(selectionStart, ...touchedRanges.map((range) => range.start)),
+    end: Math.max(selectionEnd, ...touchedRanges.map((range) => range.end)),
+  };
 }
 
 function resourceMentionTokenRanges(
