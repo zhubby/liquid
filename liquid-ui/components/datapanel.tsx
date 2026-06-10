@@ -16,6 +16,7 @@ import ReactGridLayout, {
   useContainerWidth,
 } from "react-grid-layout";
 import {
+  BarChart3,
   Download,
   Eye,
   GripVertical,
@@ -400,30 +401,35 @@ export function DatapanelWorkspacePanel({
   return (
     <section className="mt-3 flex min-h-[calc(100vh-1.5rem)] min-w-0 flex-col overflow-hidden rounded-lg border bg-card text-card-foreground shadow-sm lg:mt-0 lg:h-[calc(100vh-1.5rem)]">
       <header className="flex shrink-0 flex-col gap-3 border-b px-4 py-3 xl:flex-row xl:items-center xl:justify-between">
-        <div className="min-w-0 flex-1">
-          <div className="flex min-w-0 items-center gap-2">
+        <div className="flex min-w-0 flex-1 items-start gap-3">
+          <span className="mt-0.5 flex size-9 shrink-0 items-center justify-center rounded-md border bg-secondary text-secondary-foreground">
+            <BarChart3 className="size-4" aria-hidden />
+          </span>
+          <div className="min-w-0 flex-1">
+            <div className="flex min-w-0 items-center gap-2">
+              <input
+                className="min-w-0 flex-1 truncate rounded-sm bg-transparent text-base font-semibold outline-none transition-colors hover:bg-muted/50 focus-visible:bg-background focus-visible:ring-[3px] focus-visible:ring-ring/50 disabled:opacity-70"
+                value={titleInput}
+                disabled={isLoading || isSavingPanel}
+                aria-label={t.dashboard.panelTitleLabel}
+                onChange={(event) => setTitleInput(event.target.value)}
+                onBlur={() => void savePanelMetadata()}
+                onKeyDown={handleCommitKey}
+              />
+              {isSavingPanel || isSavingLayout ? (
+                <Loader2 className="size-4 shrink-0 animate-spin text-muted-foreground" />
+              ) : null}
+            </div>
             <input
-              className="min-w-0 flex-1 truncate rounded-sm bg-transparent text-base font-semibold outline-none transition-colors hover:bg-muted/50 focus-visible:bg-background focus-visible:ring-[3px] focus-visible:ring-ring/50 disabled:opacity-70"
-              value={titleInput}
-              disabled={isLoading || isSavingPanel}
-              aria-label={t.dashboard.panelTitleLabel}
-              onChange={(event) => setTitleInput(event.target.value)}
+              className="mt-1 w-full min-w-0 truncate rounded-sm bg-transparent text-xs text-muted-foreground outline-none transition-colors hover:bg-muted/50 focus-visible:bg-background focus-visible:ring-[3px] focus-visible:ring-ring/50"
+              value={descriptionInput}
+              placeholder={`${selectedDatabase.host}:${selectedDatabase.port} / ${selectedDatabase.database}`}
+              aria-label={t.dashboard.panelDescriptionLabel}
+              onChange={(event) => setDescriptionInput(event.target.value)}
               onBlur={() => void savePanelMetadata()}
               onKeyDown={handleCommitKey}
             />
-            {isSavingPanel || isSavingLayout ? (
-              <Loader2 className="size-4 shrink-0 animate-spin text-muted-foreground" />
-            ) : null}
           </div>
-          <input
-            className="mt-1 w-full min-w-0 truncate rounded-sm bg-transparent text-xs text-muted-foreground outline-none transition-colors hover:bg-muted/50 focus-visible:bg-background focus-visible:ring-[3px] focus-visible:ring-ring/50"
-            value={descriptionInput}
-            placeholder={`${selectedDatabase.host}:${selectedDatabase.port} / ${selectedDatabase.database}`}
-            aria-label={t.dashboard.panelDescriptionLabel}
-            onChange={(event) => setDescriptionInput(event.target.value)}
-            onBlur={() => void savePanelMetadata()}
-            onKeyDown={handleCommitKey}
-          />
         </div>
         <div className="flex flex-wrap items-center gap-2">
           <Button

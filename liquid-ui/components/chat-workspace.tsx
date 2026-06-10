@@ -26,6 +26,7 @@ import {
   BarChart3,
   FileJson,
   Loader2,
+  MessageSquare,
   PanelRightOpen,
   RotateCcw,
   Send,
@@ -1124,42 +1125,47 @@ function ChatHeader({
 
   return (
     <header className="flex shrink-0 items-center justify-between gap-3 border-b bg-card/95 px-4 py-3">
-      <div className="min-w-0 flex-1">
-        <div className="flex min-w-0 items-center gap-2">
-          <label
-            className="sr-only"
-            htmlFor={`workspace-title-${conversation.id}`}
-          >
-            {t.workspace.workspaceName}
-          </label>
-          <input
-            id={`workspace-title-${conversation.id}`}
-            className="min-w-0 flex-1 truncate rounded-sm bg-transparent text-base font-semibold outline-none transition-colors hover:bg-muted/50 focus-visible:bg-background focus-visible:ring-[3px] focus-visible:ring-ring/50 disabled:opacity-70"
-            value={titleInput}
-            disabled={isSavingTitle}
-            onChange={(event) => onTitleChange(event.target.value)}
-            onBlur={onTitleCommit}
-            onKeyDown={(event) => {
-              if (event.key === "Enter") {
-                event.preventDefault();
-                event.currentTarget.blur();
-              }
+      <div className="flex min-w-0 flex-1 items-start gap-3">
+        <span className="mt-0.5 flex size-9 shrink-0 items-center justify-center rounded-md border bg-secondary text-secondary-foreground">
+          <MessageSquare className="size-4" aria-hidden />
+        </span>
+        <div className="min-w-0 flex-1">
+          <div className="flex min-w-0 items-center gap-2">
+            <label
+              className="sr-only"
+              htmlFor={`workspace-title-${conversation.id}`}
+            >
+              {t.workspace.workspaceName}
+            </label>
+            <input
+              id={`workspace-title-${conversation.id}`}
+              className="min-w-0 flex-1 truncate rounded-sm bg-transparent text-base font-semibold outline-none transition-colors hover:bg-muted/50 focus-visible:bg-background focus-visible:ring-[3px] focus-visible:ring-ring/50 disabled:opacity-70"
+              value={titleInput}
+              disabled={isSavingTitle}
+              onChange={(event) => onTitleChange(event.target.value)}
+              onBlur={onTitleCommit}
+              onKeyDown={(event) => {
+                if (event.key === "Enter") {
+                  event.preventDefault();
+                  event.currentTarget.blur();
+                }
 
-              if (event.key === "Escape") {
-                onTitleReset();
-                event.currentTarget.blur();
-              }
-            }}
-          />
-          {isSavingTitle ? (
-            <Loader2 className="size-4 shrink-0 animate-spin text-muted-foreground" />
-          ) : null}
-        </div>
-        <div className="mt-1 flex min-w-0 flex-wrap items-center gap-1.5 text-xs text-muted-foreground">
-          <Database className="size-3.5 shrink-0" aria-hidden />
-          <span className="truncate">
-            {selectedDatabase.name} / {selectedDatabase.database}
-          </span>
+                if (event.key === "Escape") {
+                  onTitleReset();
+                  event.currentTarget.blur();
+                }
+              }}
+            />
+            {isSavingTitle ? (
+              <Loader2 className="size-4 shrink-0 animate-spin text-muted-foreground" />
+            ) : null}
+          </div>
+          <div className="mt-1 flex min-w-0 flex-wrap items-center gap-1.5 text-xs text-muted-foreground">
+            <Database className="size-3.5 shrink-0" aria-hidden />
+            <span className="truncate">
+              {selectedDatabase.name} / {selectedDatabase.database}
+            </span>
+          </div>
         </div>
       </div>
       <Button
