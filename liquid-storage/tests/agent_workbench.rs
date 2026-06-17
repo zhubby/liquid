@@ -138,6 +138,119 @@ async fn agent_workbench_store_persists_turn_events_and_actions() {
 }
 
 #[tokio::test]
+async fn agent_workbench_get_or_create_conversation_is_idempotent() {
+    let Some(storage) = test_storage().await else {
+        return;
+    };
+
+    let auth = storage
+        .register_user(RegisterRequest {
+            email: unique_email("agent-workbench-default"),
+            display_name: "Agent Workbench Default Test".to_owned(),
+            password: "password123".to_owned(),
+        })
+        .await
+        .unwrap();
+    let database = storage
+        .create_managed_database(
+            &auth.user.id,
+            CreateManagedDatabaseRequest {
+                name: "Warehouse".to_owned(),
+                engine: ManagedDatabaseEngine::Postgres,
+                host: "localhost".to_owned(),
+                port: 5432,
+                database: "app".to_owned(),
+                username: "postgres".to_owned(),
+                password: "password123".to_owned(),
+                tags: None,
+                ssl_mode: ManagedDatabaseSslMode::Disable,
+            },
+        )
+        .await
+        .unwrap();
+    let legacy_conversation = storage
+        .create_agent_conversation(
+            &auth.user.id,
+            CreateAgentConversationRequest {
+                title: Some("Existing workspace".to_owned()),
+                managed_database_id: None,
+            },
+        )
+        .await
+        .unwrap();
+
+    let rebound_conversation = storage
+        .get_or_create_agent_conversation(
+            &auth.user.id,
+            CreateAgentConversationRequest {
+                title: Some("Default workspace".to_owned()),
+                managed_database_id: Some(database.id.clone()),
+            },
+        )
+        .await
+        .unwrap();
+    assert_eq!(rebound_conversation.id, legacy_conversation.id);
+    assert_eq!(rebound_conversation.title, "Existing workspace");
+    assert_eq!(
+        rebound_conversation.managed_database_id.as_deref(),
+        Some(database.id.as_str())
+    );
+
+    let same_conversation = storage
+        .get_or_create_agent_conversation(
+            &auth.user.id,
+            CreateAgentConversationRequest {
+                title: Some("Should not overwrite".to_owned()),
+                managed_database_id: Some(database.id.clone()),
+            },
+        )
+        .await
+        .unwrap();
+    assert_eq!(same_conversation.id, rebound_conversation.id);
+    assert_eq!(same_conversation.title, "Existing workspace");
+
+    let second_database = storage
+        .create_managed_database(
+            &auth.user.id,
+            CreateManagedDatabaseRequest {
+                name: "Doro".to_owned(),
+                engine: ManagedDatabaseEngine::Postgres,
+                host: "localhost".to_owned(),
+                port: 5432,
+                database: "doro".to_owned(),
+                username: "postgres".to_owned(),
+                password: "password123".to_owned(),
+                tags: None,
+                ssl_mode: ManagedDatabaseSslMode::Disable,
+            },
+        )
+        .await
+        .unwrap();
+    let created_conversation = storage
+        .get_or_create_agent_conversation(
+            &auth.user.id,
+            CreateAgentConversationRequest {
+                title: Some("Doro workspace".to_owned()),
+                managed_database_id: Some(second_database.id.clone()),
+            },
+        )
+        .await
+        .unwrap();
+    let created_again = storage
+        .get_or_create_agent_conversation(
+            &auth.user.id,
+            CreateAgentConversationRequest {
+                title: Some("Another Doro workspace".to_owned()),
+                managed_database_id: Some(second_database.id.clone()),
+            },
+        )
+        .await
+        .unwrap();
+    assert_eq!(created_again.id, created_conversation.id);
+    assert_eq!(created_again.title, "Doro workspace");
+}
+
+#[tokio::test]
 async fn datapanel_store_persists_cards_layouts_and_export() {
     let Some(storage) = test_storage().await else {
         return;

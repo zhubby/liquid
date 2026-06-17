@@ -188,6 +188,11 @@ pub trait LiquidStore: Send + Sync {
         owner_user_id: &str,
         request: CreateAgentConversationRequest,
     ) -> Result<AgentConversation, StorageError>;
+    async fn get_or_create_agent_conversation(
+        &self,
+        owner_user_id: &str,
+        request: CreateAgentConversationRequest,
+    ) -> Result<AgentConversation, StorageError>;
     async fn get_agent_conversation(
         &self,
         owner_user_id: &str,

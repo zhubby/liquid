@@ -10,7 +10,7 @@ use axum::{
     extract::{Path, Query, State},
     http::{HeaderMap, StatusCode},
     response::sse::{Event, KeepAlive, Sse},
-    routing::{get, post},
+    routing::{get, post, put},
 };
 use futures_util::Stream;
 use liquid_core::{
@@ -48,6 +48,10 @@ pub(crate) fn routes() -> Router<ApiState> {
         .route(
             "/api/v1/chat/conversations",
             get(list_conversations).post(create_conversation),
+        )
+        .route(
+            "/api/v1/chat/conversations/default",
+            put(get_or_create_default_conversation),
         )
         .route(
             "/api/v1/chat/conversations/{conversation_id}",
@@ -147,6 +151,33 @@ async fn create_conversation(
     let conversation = state
         .store
         .create_agent_conversation(
+            &user.id,
+            create_agent_conversation_request(
+                request,
+                selected_database
+                    .as_ref()
+                    .map(|database| database.id.clone()),
+            ),
+        )
+        .await?;
+
+    Ok(Json(chat_conversation(
+        conversation,
+        selected_database.as_ref(),
+    )))
+}
+
+async fn get_or_create_default_conversation(
+    State(state): State<ApiState>,
+    headers: HeaderMap,
+    Json(request): Json<CreateChatConversationRequest>,
+) -> Result<Json<ChatConversation>, ApiError> {
+    let user = authenticated_user(&state, &headers).await?;
+    let selected_database =
+        selected_chat_database(&state, &user.id, request.managed_database_id.as_deref()).await?;
+    let conversation = state
+        .store
+        .get_or_create_agent_conversation(
             &user.id,
             create_agent_conversation_request(
                 request,

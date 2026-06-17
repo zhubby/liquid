@@ -765,6 +765,55 @@ impl LiquidStore for TestStore {
         Ok(conversation)
     }
 
+    async fn get_or_create_agent_conversation(
+        &self,
+        owner_user_id: &str,
+        request: CreateAgentConversationRequest,
+    ) -> Result<AgentConversation, StorageError> {
+        let managed_database_id = request.managed_database_id;
+        if let Some(database_id) = managed_database_id.as_deref() {
+            let exists = self
+                .databases
+                .lock()
+                .unwrap()
+                .iter()
+                .any(|database| database.id == database_id);
+
+            if !exists {
+                return Err(StorageError::NotFound);
+            }
+        }
+
+        let mut conversations = self.conversations.lock().unwrap();
+        if let Some(conversation) = conversations.iter().find(|conversation| {
+            conversation.owner_user_id == owner_user_id
+                && conversation.managed_database_id == managed_database_id
+        }) {
+            return Ok(conversation.clone());
+        }
+
+        if let Some(database_id) = managed_database_id.as_ref() {
+            if let Some(conversation) = conversations.iter_mut().find(|conversation| {
+                conversation.owner_user_id == owner_user_id
+                    && conversation.managed_database_id.is_none()
+            }) {
+                conversation.managed_database_id = Some(database_id.clone());
+                return Ok(conversation.clone());
+            }
+        }
+
+        let conversation = AgentConversation {
+            id: format!("conversation-{}", conversations.len() + 1),
+            owner_user_id: owner_user_id.to_owned(),
+            title: request.title.unwrap_or_else(|| "新的会话".to_owned()),
+            managed_database_id,
+            created_at: time::OffsetDateTime::UNIX_EPOCH,
+            updated_at: time::OffsetDateTime::UNIX_EPOCH,
+        };
+        conversations.push(conversation.clone());
+        Ok(conversation)
+    }
+
     async fn get_agent_conversation(
         &self,
         owner_user_id: &str,
@@ -3266,6 +3315,104 @@ async fn chat_conversations_are_scoped_to_managed_database() {
     assert_eq!(doro_conversations.as_array().unwrap().len(), 1);
     assert_eq!(doro_conversations[0]["title"], "Doro workspace");
     assert_eq!(doro_conversations[0]["managed_database_id"], "db-2");
+}
+
+#[tokio::test]
+async fn default_chat_conversation_is_idempotent() {
+    let app = test_app();
+    create_test_database(&app).await;
+
+    let first_response = app
+        .clone()
+        .oneshot(auth_json_request(
+            "PUT",
+            "/api/v1/chat/conversations/default",
+            json!({
+                "title": "默认工作区",
+                "managed_database_id": "db-1"
+            }),
+        ))
+        .await
+        .unwrap();
+    assert_eq!(first_response.status(), StatusCode::OK);
+    let first = response_json(first_response).await;
+    assert_eq!(first["title"], "默认工作区");
+    assert_eq!(first["managed_database_id"], "db-1");
+
+    let second_response = app
+        .clone()
+        .oneshot(auth_json_request(
+            "PUT",
+            "/api/v1/chat/conversations/default",
+            json!({
+                "title": "不会覆盖已有标题",
+                "managed_database_id": "db-1"
+            }),
+        ))
+        .await
+        .unwrap();
+    assert_eq!(second_response.status(), StatusCode::OK);
+    let second = response_json(second_response).await;
+    assert_eq!(second["id"], first["id"]);
+    assert_eq!(second["title"], "默认工作区");
+
+    let list_response = app
+        .oneshot(auth_request(
+            "/api/v1/chat/conversations?managed_database_id=db-1",
+        ))
+        .await
+        .unwrap();
+    assert_eq!(list_response.status(), StatusCode::OK);
+    let conversations = response_json(list_response).await;
+    assert_eq!(conversations.as_array().unwrap().len(), 1);
+    assert_eq!(conversations[0]["id"], first["id"]);
+}
+
+#[tokio::test]
+async fn default_chat_conversation_reuses_unscoped_existing_workspace() {
+    let store = Arc::new(TestStore::default());
+    let app = test_app_with_agent_store_execution_and_executor(
+        Arc::new(MockSqlAuditAgent),
+        store.clone(),
+        PostgresToolExecutionMode::Readonly,
+        Arc::new(FakeApprovedSqlExecutor::default()),
+    );
+    create_test_database(&app).await;
+    let existing = store
+        .create_agent_conversation(
+            "user-1",
+            CreateAgentConversationRequest {
+                title: Some("Existing workspace".to_owned()),
+                managed_database_id: None,
+            },
+        )
+        .await
+        .unwrap();
+
+    let default_response = app
+        .clone()
+        .oneshot(auth_json_request(
+            "PUT",
+            "/api/v1/chat/conversations/default",
+            json!({
+                "title": "默认工作区",
+                "managed_database_id": "db-1"
+            }),
+        ))
+        .await
+        .unwrap();
+    assert_eq!(default_response.status(), StatusCode::OK);
+    let default_conversation = response_json(default_response).await;
+    assert_eq!(default_conversation["id"], existing.id);
+    assert_eq!(default_conversation["title"], "Existing workspace");
+    assert_eq!(default_conversation["managed_database_id"], "db-1");
+
+    let conversations = store.conversations.lock().unwrap();
+    assert_eq!(conversations.len(), 1);
+    assert_eq!(
+        conversations[0].managed_database_id.as_deref(),
+        Some("db-1")
+    );
 }
 
 #[tokio::test]

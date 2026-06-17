@@ -721,6 +721,14 @@ impl LiquidStore for Storage {
         agent_workbench::create_agent_conversation(self, owner_user_id, request).await
     }
 
+    async fn get_or_create_agent_conversation(
+        &self,
+        owner_user_id: &str,
+        request: CreateAgentConversationRequest,
+    ) -> Result<AgentConversation, StorageError> {
+        agent_workbench::get_or_create_agent_conversation(self, owner_user_id, request).await
+    }
+
     async fn get_agent_conversation(
         &self,
         owner_user_id: &str,

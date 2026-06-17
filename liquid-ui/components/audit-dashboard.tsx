@@ -98,27 +98,29 @@ export function AuditDashboard({
       setIsWorkspaceLoading(true);
 
       try {
+        const initialConversation = await apiRequest<ChatConversation>(
+          "/api/v1/chat/conversations/default",
+          {
+            method: "PUT",
+            token,
+            body: createWorkspaceBody(),
+          },
+        );
         const existingConversations = await apiRequest<ChatConversation[]>(
           conversationsPath,
           { token },
         );
-        const initialConversation =
-          existingConversations[0] ??
-          (await apiRequest<ChatConversation>("/api/v1/chat/conversations", {
-            method: "POST",
-            token,
-            body: createWorkspaceBody(),
-          }));
 
         if (cancelled) {
           return;
         }
 
-        setConversations(
-          existingConversations.length > 0
-            ? existingConversations
-            : [initialConversation],
-        );
+        setConversations([
+          initialConversation,
+          ...existingConversations.filter(
+            (conversation) => conversation.id !== initialConversation.id,
+          ),
+        ]);
         setActiveConversation(initialConversation);
       } catch (error) {
         if (!cancelled) {

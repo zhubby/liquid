@@ -22,6 +22,15 @@ created_at,
 updated_at
 "#;
 
+const AGENT_CONVERSATION_COLUMNS_QUALIFIED: &str = r#"
+agent_conversations.id::text,
+agent_conversations.owner_user_id::text,
+agent_conversations.title,
+agent_conversations.managed_database_id::text,
+agent_conversations.created_at,
+agent_conversations.updated_at
+"#;
+
 const AGENT_MESSAGE_COLUMNS: &str = r#"
 id::text,
 conversation_id::text,
@@ -135,6 +144,113 @@ pub(crate) async fn create_agent_conversation(
     .map_err(map_database_error)?;
 
     row.ok_or(StorageError::NotFound)?.try_into()
+}
+
+pub(crate) async fn get_or_create_agent_conversation(
+    storage: &Storage,
+    owner_user_id: &str,
+    request: CreateAgentConversationRequest,
+) -> Result<AgentConversation, StorageError> {
+    let title = optional_string("title", request.title)?
+        .unwrap_or_else(|| DEFAULT_AGENT_CONVERSATION_TITLE.into());
+    let managed_database_id = optional_string("managed_database_id", request.managed_database_id)?;
+    let mut transaction = storage.pool.begin().await.map_err(map_database_error)?;
+
+    sqlx::query(
+        r#"
+        -- Default workspace initialization can also bind legacy unscoped
+        -- conversations, so serialize it per user instead of per database.
+        select pg_advisory_xact_lock(
+            hashtextextended($1::text, 0)
+        )
+        "#,
+    )
+    .bind(owner_user_id)
+    .execute(&mut *transaction)
+    .await
+    .map_err(map_database_error)?;
+
+    let existing_row = sqlx::query_as::<_, AgentConversationRow>(&format!(
+        r#"
+        select {AGENT_CONVERSATION_COLUMNS}
+        from agent_conversations
+        where owner_user_id = $1::uuid
+          and managed_database_id is not distinct from $2::uuid
+        order by updated_at desc, created_at desc, id desc
+        limit 1
+        "#
+    ))
+    .bind(owner_user_id)
+    .bind(managed_database_id.as_deref())
+    .fetch_optional(&mut *transaction)
+    .await
+    .map_err(map_database_error)?;
+
+    if let Some(row) = existing_row {
+        let conversation = row.try_into()?;
+        transaction.commit().await.map_err(map_database_error)?;
+        return Ok(conversation);
+    }
+
+    if let Some(database_id) = managed_database_id.as_deref() {
+        let rebound_row = sqlx::query_as::<_, AgentConversationRow>(&format!(
+            r#"
+            update agent_conversations
+            set managed_database_id = managed_databases.id,
+                updated_at = now()
+            from managed_databases
+            where agent_conversations.id = (
+                select id
+                from agent_conversations
+                where owner_user_id = $1::uuid
+                  and managed_database_id is null
+                order by updated_at desc, created_at desc, id desc
+                limit 1
+            )
+              and agent_conversations.owner_user_id = $1::uuid
+              and agent_conversations.managed_database_id is null
+              and managed_databases.id = $2::uuid
+              and managed_databases.owner_user_id = $1::uuid
+            returning {AGENT_CONVERSATION_COLUMNS_QUALIFIED}
+            "#
+        ))
+        .bind(owner_user_id)
+        .bind(database_id)
+        .fetch_optional(&mut *transaction)
+        .await
+        .map_err(map_database_error)?;
+
+        if let Some(row) = rebound_row {
+            let conversation = row.try_into()?;
+            transaction.commit().await.map_err(map_database_error)?;
+            return Ok(conversation);
+        }
+    }
+
+    let created_row = sqlx::query_as::<_, AgentConversationRow>(&format!(
+        r#"
+        insert into agent_conversations (owner_user_id, title, managed_database_id)
+        select $1::uuid, $2, null
+        where $3::uuid is null
+        union all
+        select $1::uuid, $2, managed_databases.id
+        from managed_databases
+        where managed_databases.id = $3::uuid
+          and managed_databases.owner_user_id = $1::uuid
+        returning {AGENT_CONVERSATION_COLUMNS}
+        "#
+    ))
+    .bind(owner_user_id)
+    .bind(title)
+    .bind(managed_database_id.as_deref())
+    .fetch_optional(&mut *transaction)
+    .await
+    .map_err(map_database_error)?;
+
+    let conversation = created_row.ok_or(StorageError::NotFound)?.try_into()?;
+    transaction.commit().await.map_err(map_database_error)?;
+
+    Ok(conversation)
 }
 
 pub(crate) async fn get_agent_conversation(
