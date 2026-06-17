@@ -326,6 +326,12 @@ async fn stream_conversation(
                     after_message_id = None;
                 }
                 Err(error) => {
+                    tracing::error!(
+                        owner_user_id = %owner_user_id,
+                        conversation_id = %conversation_id,
+                        error = %error,
+                        "failed to list chat conversation messages while streaming"
+                    );
                     yield Ok(sse_chat_event(ChatStreamEvent::TurnFailed {
                         turn_id: conversation_id.clone(),
                         error_code: ChatErrorCode::StorageError,
@@ -386,9 +392,7 @@ async fn create_turn(
     let runner_turn_id = turn.id.clone();
 
     tokio::spawn(async move {
-        if let Err(error) = run_agent_turn(runner_state, runner_user, runner_turn_id).await {
-            tracing::warn!(error = %error, "chat turn runner failed");
-        }
+        let _ = run_agent_turn(runner_state, runner_user, runner_turn_id).await;
     });
 
     Ok(Json(chat_turn(turn)))
@@ -650,6 +654,12 @@ async fn stream_turn(
                     }
                 }
                 Err(error) => {
+                    tracing::error!(
+                        owner_user_id = %owner_user_id,
+                        turn_id = %turn_id,
+                        error = %error,
+                        "failed to list chat turn events while streaming"
+                    );
                     yield Ok(sse_chat_event(ChatStreamEvent::TurnFailed {
                         turn_id: turn_id.clone(),
                         error_code: ChatErrorCode::StorageError,
@@ -667,7 +677,15 @@ async fn stream_turn(
                     !turn_has_applying_actions(&store, &owner_user_id, &turn).await
                 }
                 Ok(_) => false,
-                Err(_) => true,
+                Err(error) => {
+                    tracing::error!(
+                        owner_user_id = %owner_user_id,
+                        turn_id = %turn_id,
+                        error = %error,
+                        "failed to load chat turn while streaming"
+                    );
+                    true
+                }
             };
 
             if should_stop {
@@ -697,7 +715,7 @@ async fn turn_has_applying_actions(
     {
         Ok(actions) => actions.iter().any(|action| action.turn_id == turn.id),
         Err(error) => {
-            tracing::warn!(
+            tracing::error!(
                 turn_id = %turn.id,
                 conversation_id = %turn.conversation_id,
                 error = %error,

@@ -127,18 +127,56 @@ pub(crate) async fn run_agent_turn(
             } else {
                 AgentTurnStatus::Failed
             };
-            let _ = state
+            if status == AgentTurnStatus::Failed {
+                tracing::error!(
+                    owner_user_id = %user.id,
+                    turn_id = %turn_id,
+                    status = %status.as_str(),
+                    error = %error_message,
+                    error_debug = ?error,
+                    "chat turn runner failed"
+                );
+            } else {
+                tracing::warn!(
+                    owner_user_id = %user.id,
+                    turn_id = %turn_id,
+                    status = %status.as_str(),
+                    error = %error_message,
+                    "chat turn runner blocked"
+                );
+            }
+
+            if let Err(status_error) = state
                 .store
                 .update_agent_turn_status(&user.id, &turn_id, status, Some(error_message.clone()))
-                .await;
-            let _ = append_event(
+                .await
+            {
+                tracing::error!(
+                    owner_user_id = %user.id,
+                    turn_id = %turn_id,
+                    status = %status.as_str(),
+                    error = %status_error,
+                    original_error = %error_message,
+                    "failed to persist failed chat turn status"
+                );
+            }
+            if let Err(event_error) = append_event(
                 &state,
                 &user.id,
                 &turn_id,
                 AgentEventType::TurnFailed,
-                json!({ "error": error_message }),
+                json!({ "error": error_message.clone() }),
             )
-            .await;
+            .await
+            {
+                tracing::error!(
+                    owner_user_id = %user.id,
+                    turn_id = %turn_id,
+                    error = %event_error,
+                    original_error = %error_message,
+                    "failed to append failed chat turn event"
+                );
+            }
 
             Err(error)
         }
@@ -541,7 +579,16 @@ async fn prepare_workbench_action(
         payload.limit.unwrap_or(100),
     )
     .await
-    .map_err(|error| anyhow::anyhow!("{error}"))?;
+    .map_err(|error| {
+        tracing::error!(
+            owner_user_id = %owner_user_id,
+            managed_database_id = %payload.managed_database_id,
+            action_title = %payload.title,
+            error = %error,
+            "failed to materialize Datapanel card action"
+        );
+        anyhow::anyhow!("{error}")
+    })?;
 
     ensure_chart_keys_available(payload.chart.as_ref(), &result)?;
     payload.layout = Some(default_card_layout(payload.kind));

@@ -7,7 +7,7 @@ use liquid_llm::ToolDefinition;
 use liquid_sql::{PgSqlAnalysis, PgSqlRiskSeverity, PgSqlStatementKind};
 use pg_query::NodeEnum;
 use serde_json::{Value, json};
-use sqlx::Row;
+use sqlx::{Column, Executor, Row};
 
 use crate::{tools::AgentTool, types::ToolOutput};
 
@@ -80,6 +80,7 @@ impl AgentTool for PgExecuteReadonlySqlTool {
             executable_sql, fetch_limit
         );
         let mut transaction = readonly_transaction(&self.context).await?;
+        let mut columns = describe_query_columns(&mut transaction, &executable_sql).await?;
         let rows = sqlx::query(&wrapped_sql)
             .fetch_all(&mut *transaction)
             .await?;
@@ -95,7 +96,7 @@ impl AgentTool for PgExecuteReadonlySqlTool {
             row_values.truncate(limit);
         }
 
-        let columns = json_columns(&row_values);
+        append_json_columns(&mut columns, &row_values);
         let payload = readonly_payload(
             columns,
             row_values,
@@ -355,6 +356,20 @@ async fn reset_session_tool_timeouts(
     Ok(())
 }
 
+async fn describe_query_columns(
+    transaction: &mut sqlx::Transaction<'_, sqlx::Postgres>,
+    sql: &str,
+) -> Result<Vec<String>> {
+    let description = (&mut **transaction).describe(sql).await?;
+
+    let mut columns = Vec::new();
+    for column in description.columns() {
+        append_column(&mut columns, column.name());
+    }
+
+    Ok(columns)
+}
+
 pub(super) fn readonly_payload(
     columns: Vec<String>,
     mut rows: Vec<Value>,
@@ -386,20 +401,20 @@ pub(super) fn readonly_payload(
     }
 }
 
-fn json_columns(rows: &[Value]) -> Vec<String> {
-    let mut columns = Vec::new();
-
+fn append_json_columns(columns: &mut Vec<String>, rows: &[Value]) {
     for row in rows {
         let Some(object) = row.as_object() else {
             continue;
         };
 
         for key in object.keys() {
-            if !columns.contains(key) {
-                columns.push(key.clone());
-            }
+            append_column(columns, key);
         }
     }
+}
 
-    columns
+fn append_column(columns: &mut Vec<String>, key: &str) {
+    if !columns.iter().any(|column| column == key) {
+        columns.push(key.to_owned());
+    }
 }

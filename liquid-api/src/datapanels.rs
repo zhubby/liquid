@@ -14,7 +14,7 @@ use liquid_core::{
 };
 use liquid_sql::{PgSqlAnalysisRequest, PgSqlStatementKind, analyze_postgres_sql};
 use serde_json::Value;
-use sqlx::Row;
+use sqlx::{Column, Executor, Row};
 use time::OffsetDateTime;
 
 use crate::{auth::authenticated_user, error::ApiError, state::ApiState};
@@ -267,6 +267,7 @@ pub(crate) async fn materialize_datapanel_query_with_pool(
         .await
         .map_err(|error| ApiError::bad_request(format!("failed to set query timeout: {error}")))?;
 
+    let mut columns = describe_query_columns(&mut transaction, &executable_sql).await?;
     let rows = sqlx::query(&wrapped_sql)
         .fetch_all(&mut *transaction)
         .await
@@ -288,10 +289,11 @@ pub(crate) async fn materialize_datapanel_query_with_pool(
         row_values.truncate(limit);
     }
 
+    append_json_columns(&mut columns, &row_values);
     let row_count = row_values.len() as i32;
 
     Ok(DatapanelQueryResult {
-        columns: json_columns(&row_values),
+        columns,
         rows: row_values,
         row_count,
         truncated,
@@ -334,6 +336,22 @@ fn validate_readonly_select(sql: &str) -> Result<String, ApiError> {
     Ok(strip_trailing_semicolon(trimmed))
 }
 
+async fn describe_query_columns(
+    transaction: &mut sqlx::Transaction<'_, sqlx::Postgres>,
+    sql: &str,
+) -> Result<Vec<String>, ApiError> {
+    let description = (&mut **transaction).describe(sql).await.map_err(|error| {
+        ApiError::bad_request(format!("failed to describe datapanel query: {error}"))
+    })?;
+
+    let mut columns = Vec::new();
+    for column in description.columns() {
+        append_column(&mut columns, column.name());
+    }
+
+    Ok(columns)
+}
+
 fn next_table_card_layout(panel: &Datapanel) -> DatapanelCardLayout {
     DatapanelCardLayout {
         x: 0,
@@ -356,20 +374,46 @@ fn strip_trailing_semicolon(sql: &str) -> String {
         .to_owned()
 }
 
-fn json_columns(rows: &[Value]) -> Vec<String> {
-    let mut columns = Vec::new();
-
+fn append_json_columns(columns: &mut Vec<String>, rows: &[Value]) {
     for row in rows {
         let Some(object) = row.as_object() else {
             continue;
         };
 
         for key in object.keys() {
-            if !columns.iter().any(|column| column == key) {
-                columns.push(key.clone());
-            }
+            append_column(columns, key);
         }
     }
+}
 
-    columns
+fn append_column(columns: &mut Vec<String>, key: &str) {
+    if !columns.iter().any(|column| column == key) {
+        columns.push(key.to_owned());
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use serde_json::json;
+
+    use super::*;
+
+    #[test]
+    fn append_json_columns_keeps_described_columns_for_empty_rows() {
+        let mut columns = vec!["month".to_owned(), "total".to_owned()];
+
+        append_json_columns(&mut columns, &[]);
+
+        assert_eq!(columns, vec!["month", "total"]);
+    }
+
+    #[test]
+    fn append_json_columns_adds_columns_seen_in_rows() {
+        let mut columns = vec!["month".to_owned()];
+        let rows = vec![json!({ "month": "2026-06", "total": 12 })];
+
+        append_json_columns(&mut columns, &rows);
+
+        assert_eq!(columns, vec!["month", "total"]);
+    }
 }
