@@ -1,0 +1,4 @@
+interface:
+  display_name: "Liquid Release"
+  short_description: "Release Liquid by version"
+  default_prompt: "Use $liquid-release to publish version 0.2.0."

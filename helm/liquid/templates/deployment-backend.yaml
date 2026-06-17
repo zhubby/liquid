@@ -1,0 +1,121 @@
+{{- include "liquid.validateDatabase" . -}}
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: {{ include "liquid.backendFullname" . }}
+  labels:
+    {{- include "liquid.componentLabels" (dict "root" . "component" "backend") | nindent 4 }}
+spec:
+  {{- if not .Values.backend.autoscaling.enabled }}
+  replicas: {{ .Values.backend.replicaCount }}
+  {{- end }}
+  selector:
+    matchLabels:
+      {{- include "liquid.selectorLabels" (dict "root" . "component" "backend") | nindent 6 }}
+  template:
+    metadata:
+      annotations:
+        checksum/config: {{ include (print $.Template.BasePath "/configmap.yaml") . | sha256sum }}
+        checksum/secret: {{ include (print $.Template.BasePath "/secret.yaml") . | sha256sum }}
+        {{- with .Values.backend.podAnnotations }}
+        {{- toYaml . | nindent 8 }}
+        {{- end }}
+      labels:
+        {{- include "liquid.selectorLabels" (dict "root" . "component" "backend") | nindent 8 }}
+        {{- with .Values.backend.podLabels }}
+        {{- toYaml . | nindent 8 }}
+        {{- end }}
+    spec:
+      {{- with .Values.imagePullSecrets }}
+      imagePullSecrets:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+      serviceAccountName: {{ include "liquid.serviceAccountName" . }}
+      securityContext:
+        {{- toYaml .Values.backend.podSecurityContext | nindent 8 }}
+      {{- if .Values.backend.waitForDatabase.enabled }}
+      initContainers:
+        - name: wait-for-database
+          image: {{ include "liquid.backendImage" . | quote }}
+          imagePullPolicy: {{ .Values.backend.image.pullPolicy }}
+          command:
+            - sh
+            - -ec
+            - |
+              until pg_isready -d "$LIQUID_DATABASE_URL"; do
+                echo "waiting for database"
+                sleep 2
+              done
+          env:
+            - name: LIQUID_DATABASE_URL
+              valueFrom:
+                secretKeyRef:
+                  name: {{ default (include "liquid.secretName" .) .Values.database.existingSecret }}
+                  key: {{ ternary .Values.database.existingSecretKey "database-url" (ne .Values.database.existingSecret "") }}
+      {{- end }}
+      containers:
+        - name: backend
+          image: {{ include "liquid.backendImage" . | quote }}
+          imagePullPolicy: {{ .Values.backend.image.pullPolicy }}
+          securityContext:
+            {{- toYaml .Values.backend.securityContext | nindent 12 }}
+          ports:
+            - name: http
+              containerPort: {{ .Values.backend.containerPort }}
+              protocol: TCP
+          envFrom:
+            - configMapRef:
+                name: {{ include "liquid.configName" . }}
+            {{- with .Values.backend.extraEnvFrom }}
+            {{- toYaml . | nindent 12 }}
+            {{- end }}
+          env:
+            - name: LIQUID_DATABASE_URL
+              valueFrom:
+                secretKeyRef:
+                  name: {{ default (include "liquid.secretName" .) .Values.database.existingSecret }}
+                  key: {{ ternary .Values.database.existingSecretKey "database-url" (ne .Values.database.existingSecret "") }}
+            - name: LIQUID_ENCRYPTION_KEY
+              valueFrom:
+                secretKeyRef:
+                  name: {{ default (include "liquid.secretName" .) .Values.secrets.existingSecret }}
+                  key: {{ .Values.secrets.encryptionKeyKey }}
+            {{- if .Values.llm.openaiApiKey }}
+            - name: OPENAI_API_KEY
+              valueFrom:
+                secretKeyRef:
+                  name: {{ include "liquid.secretName" . }}
+                  key: openai-api-key
+            {{- else if .Values.secrets.existingSecret }}
+            - name: OPENAI_API_KEY
+              valueFrom:
+                secretKeyRef:
+                  name: {{ .Values.secrets.existingSecret }}
+                  key: {{ .Values.secrets.openaiApiKeyKey }}
+                  optional: true
+            {{- end }}
+            {{- with .Values.backend.extraEnv }}
+            {{- toYaml . | nindent 12 }}
+            {{- end }}
+          livenessProbe:
+            httpGet:
+              path: /healthz
+              port: http
+          readinessProbe:
+            httpGet:
+              path: /healthz
+              port: http
+          resources:
+            {{- toYaml .Values.backend.resources | nindent 12 }}
+      {{- with .Values.backend.nodeSelector }}
+      nodeSelector:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+      {{- with .Values.backend.affinity }}
+      affinity:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+      {{- with .Values.backend.tolerations }}
+      tolerations:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}

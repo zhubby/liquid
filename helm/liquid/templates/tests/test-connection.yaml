@@ -1,0 +1,21 @@
+apiVersion: v1
+kind: Pod
+metadata:
+  name: "{{ include "liquid.fullname" . }}-test-connection"
+  labels:
+    {{- include "liquid.labels" . | nindent 4 }}
+  annotations:
+    "helm.sh/hook": test
+spec:
+  containers:
+    - name: wget
+      image: busybox:1.36
+      command:
+        - sh
+        - -ec
+        - |
+          wget -qO- "http://{{ include "liquid.backendFullname" . }}:{{ .Values.backend.service.port }}/healthz"
+          {{- if .Values.frontend.enabled }}
+          wget -qO- "http://{{ include "liquid.frontendFullname" . }}:{{ .Values.frontend.service.port }}/"
+          {{- end }}
+  restartPolicy: Never

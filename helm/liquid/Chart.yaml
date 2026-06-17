@@ -1,0 +1,9 @@
+apiVersion: v2
+name: liquid
+description: Liquid API and dashboard, backed by PostgreSQL.
+type: application
+version: 0.2.0
+appVersion: "v0.2.0"
+home: https://github.com/zhubby/liquid
+sources:
+  - https://github.com/zhubby/liquid

@@ -1,0 +1,39 @@
+Liquid has been installed.
+
+Images:
+  Backend:  {{ include "liquid.backendImage" . }}
+{{- if .Values.frontend.enabled }}
+  Frontend: {{ include "liquid.frontendImage" . }}
+{{- end }}
+
+Database:
+{{- if .Values.database.existingSecret }}
+  Using database URL from Secret {{ .Values.database.existingSecret }}/{{ .Values.database.existingSecretKey }}.
+{{- else if .Values.postgresql.enabled }}
+  Using built-in PostgreSQL service {{ include "liquid.postgresqlFullname" . }}:{{ .Values.postgresql.service.port }}.
+{{- else }}
+  Using external PostgreSQL host {{ .Values.externalDatabase.host }}:{{ .Values.externalDatabase.port }}.
+{{- end }}
+
+Backend health check:
+  kubectl -n {{ .Release.Namespace }} port-forward svc/{{ include "liquid.backendFullname" . }} 3001:{{ .Values.backend.service.port }}
+  curl http://127.0.0.1:3001/healthz
+
+{{- if .Values.frontend.enabled }}
+Frontend:
+{{- if .Values.frontend.ingress.enabled }}
+{{- range $host := .Values.frontend.ingress.hosts }}
+{{- range .paths }}
+  http{{ if $.Values.frontend.ingress.tls }}s{{ end }}://{{ $host.host }}{{ .path }}
+{{- end }}
+{{- end }}
+{{- else }}
+  kubectl -n {{ .Release.Namespace }} port-forward svc/{{ include "liquid.frontendFullname" . }} 3000:{{ .Values.frontend.service.port }}
+  open http://127.0.0.1:3000
+{{- end }}
+{{- end }}
+
+Production reminders:
+  - Set secrets.encryptionKey or use secrets.existingSecret.
+  - Set frontend.apiBaseUrl to the browser-reachable backend URL when using the dashboard.
+  - For external databases with special characters in credentials, prefer database.existingSecret with a full PostgreSQL URL.
