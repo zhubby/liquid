@@ -24,6 +24,7 @@ import {
   PencilLine,
   Plug,
   Plus,
+  RotateCcw,
   Save,
   Search,
   Server,
@@ -38,6 +39,7 @@ import { AccountSettingsDialog } from "@/components/account-settings-dialog";
 import { AppTopNav } from "@/components/app-top-nav";
 import { DatabaseBackupHistory } from "@/components/database-backup-history";
 import { DatabaseDiagramWorkspace } from "@/components/database-diagram-workspace";
+import { DatabaseRestoreHistory } from "@/components/database-restore-history";
 import { SqlAuditHistory } from "@/components/sql-audit-history";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
@@ -85,7 +87,12 @@ type ManagedDatabaseForm = {
   ssl_mode: ManagedDatabase["ssl_mode"];
 };
 
-type ManagedDatabaseView = "overview" | "audits" | "backups" | "designs";
+type ManagedDatabaseView =
+  | "overview"
+  | "audits"
+  | "backups"
+  | "restores"
+  | "designs";
 
 const emptyManagedDatabaseForm: ManagedDatabaseForm = {
   name: "",
@@ -229,6 +236,13 @@ export function ManagedDatabasePicker({
       icon: Archive,
       label: t.databasePicker.backupMenu,
       description: t.databasePicker.backupMenuDescription,
+      badge: null,
+    },
+    {
+      value: "restores" as const,
+      icon: RotateCcw,
+      label: t.databasePicker.restoreMenu,
+      description: t.databasePicker.restoreMenuDescription,
       badge: null,
     },
   ];
@@ -640,6 +654,9 @@ export function ManagedDatabasePicker({
             ) : null}
             {activeView === "backups" ? (
               <DatabaseBackupHistory token={token} databases={databases} />
+            ) : null}
+            {activeView === "restores" ? (
+              <DatabaseRestoreHistory token={token} databases={databases} />
             ) : null}
             {activeView === "designs" ? (
               <DatabaseDiagramWorkspace token={token} />

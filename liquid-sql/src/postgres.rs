@@ -187,7 +187,7 @@ async fn fetch_indexes(
         r#"
         select
           t.oid::bigint as relation_oid,
-          i.indexrelid::bigint as index_oid,
+          ix.indexrelid::bigint as index_oid,
           ni.nspname as schema_name,
           ci.relname as index_name,
           coalesce(array_remove(array_agg(a.attname order by key_ord.ordinality), null), array[]::text[]) as columns,
@@ -196,16 +196,15 @@ async fn fetch_indexes(
           ix.indisvalid,
           ix.indisready,
           pg_get_expr(ix.indpred, ix.indrelid) as predicate,
-          pg_get_indexdef(i.indexrelid) as definition
+          pg_get_indexdef(ix.indexrelid) as definition
         from pg_class t
         join pg_index ix on ix.indrelid = t.oid
         join pg_class ci on ci.oid = ix.indexrelid
         join pg_namespace ni on ni.oid = ci.relnamespace
-        join pg_class i on i.oid = ix.indexrelid
         left join unnest(ix.indkey) with ordinality as key_ord(attnum, ordinality) on true
         left join pg_attribute a on a.attrelid = t.oid and a.attnum = key_ord.attnum
         where t.oid::bigint = any($1::bigint[])
-        group by t.oid, i.indexrelid, ni.nspname, ci.relname, ix.indisunique, ix.indisprimary,
+        group by t.oid, ix.indexrelid, ni.nspname, ci.relname, ix.indisunique, ix.indisprimary,
                  ix.indisvalid, ix.indisready, ix.indpred, ix.indrelid
         "#,
     )
@@ -252,7 +251,8 @@ async fn fetch_constraints(
         left join unnest(conkey) with ordinality as key(attnum, ordinality) on true
         left join pg_attribute a on a.attrelid = conrelid and a.attnum = key.attnum
         where conrelid::bigint = any($1::bigint[])
-        group by pg_constraint.oid
+        group by pg_constraint.oid, pg_constraint.conrelid, pg_constraint.conname,
+                 pg_constraint.contype, pg_constraint.convalidated
         "#,
     )
     .bind(relation_oids)
@@ -412,17 +412,17 @@ async fn fetch_locks(
     let rows = sqlx::query(
         r#"
         select
-          relation::bigint as relation_oid,
-          count(*) filter (where granted)::bigint as conflicting_granted_locks,
-          count(*) filter (where not granted)::bigint as conflicting_waiting_locks,
+          l.relation::bigint as relation_oid,
+          count(*) filter (where l.granted)::bigint as conflicting_granted_locks,
+          count(*) filter (where not l.granted)::bigint as conflicting_waiting_locks,
           extract(epoch from max(now() - a.query_start))::bigint * 1000 as longest_conflict_age_ms
         from pg_locks l
         left join pg_stat_activity a on a.pid = l.pid
-        where relation::bigint = any($1::bigint[])
-          and pid <> pg_backend_pid()
-          and locktype = 'relation'
-          and mode = any($2::text[])
-        group by relation
+        where l.relation::bigint = any($1::bigint[])
+          and l.pid <> pg_backend_pid()
+          and l.locktype = 'relation'
+          and l.mode = any($2::text[])
+        group by l.relation
         "#,
     )
     .bind(relation_oids)

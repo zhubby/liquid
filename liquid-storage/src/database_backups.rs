@@ -5,8 +5,9 @@ use liquid_core::{
     DatabaseBackupScheduleStatus, DatabaseBackupStatus, DatabaseBackupStorageKind,
     DatabaseBackupStorageMetadata, DatabaseBackupTrigger, DatabaseOperationDiagnosticFilters,
     DatabaseOperationDiagnosticRecord, DatabaseOperationEventRecord, DatabaseOperationEventType,
-    DatabaseOperationKind, DatabaseRestoreRecord, EnqueueDatabaseBackup, EnqueueDatabaseRestore,
-    ManagedDatabaseSnapshot, UpdateDatabaseBackupScheduleRequest,
+    DatabaseOperationKind, DatabaseRestoreListFilters, DatabaseRestoreListPage,
+    DatabaseRestoreRecord, EnqueueDatabaseBackup, EnqueueDatabaseRestore, ManagedDatabaseSnapshot,
+    UpdateDatabaseBackupScheduleRequest,
 };
 use serde_json::Value;
 use sqlx::Row;
@@ -518,6 +519,68 @@ pub(crate) async fn list_database_restores(
     rows.into_iter()
         .map(DatabaseRestoreRecord::try_from)
         .collect()
+}
+
+pub(crate) async fn list_database_restores_page(
+    storage: &Storage,
+    owner_user_id: &str,
+    filters: DatabaseRestoreListFilters<'_>,
+) -> Result<DatabaseRestoreListPage, StorageError> {
+    let page = filters.page.max(1);
+    let page_size = filters.page_size.clamp(1, 100);
+    let offset = (page - 1) * page_size;
+    let status = filters.status.map(DatabaseBackupStatus::as_str);
+    let total_count = sqlx::query_scalar::<_, i64>(
+        r#"
+        select count(*)
+        from database_restore_jobs
+        where owner_user_id = $1::uuid
+          and ($2::uuid is null or backup_id = $2::uuid)
+          and ($3::uuid is null or target_managed_database_id = $3::uuid)
+          and ($4::text is null or status = $4)
+        "#,
+    )
+    .bind(owner_user_id)
+    .bind(filters.backup_id)
+    .bind(filters.target_managed_database_id)
+    .bind(status)
+    .fetch_one(&storage.pool)
+    .await
+    .map_err(map_database_error)?;
+
+    let rows = sqlx::query_as::<_, DatabaseRestoreRow>(&format!(
+        r#"
+        select {DATABASE_RESTORE_COLUMNS}
+        from database_restore_jobs
+        where owner_user_id = $1::uuid
+          and ($2::uuid is null or backup_id = $2::uuid)
+          and ($3::uuid is null or target_managed_database_id = $3::uuid)
+          and ($4::text is null or status = $4)
+        order by created_at desc
+        limit $5
+        offset $6
+        "#
+    ))
+    .bind(owner_user_id)
+    .bind(filters.backup_id)
+    .bind(filters.target_managed_database_id)
+    .bind(status)
+    .bind(page_size)
+    .bind(offset)
+    .fetch_all(&storage.pool)
+    .await
+    .map_err(map_database_error)?;
+    let records = rows
+        .into_iter()
+        .map(DatabaseRestoreRecord::try_from)
+        .collect::<Result<Vec<_>, _>>()?;
+
+    Ok(DatabaseRestoreListPage {
+        records,
+        total_count,
+        page,
+        page_size,
+    })
 }
 
 pub(crate) async fn claim_next_database_backup(

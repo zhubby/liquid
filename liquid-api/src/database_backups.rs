@@ -9,8 +9,8 @@ use liquid_core::{
     CreateDatabaseBackupRequest, CreateDatabaseBackupScheduleRequest, CreateDatabaseRestoreRequest,
     DatabaseBackupListFilters, DatabaseBackupMetadataStoreError, DatabaseBackupRecord,
     DatabaseBackupScheduleRecord, DatabaseBackupScheduleStatus, DatabaseBackupStatus,
-    DatabaseBackupTrigger, DatabaseRestoreRecord, EnqueueDatabaseBackup, EnqueueDatabaseRestore,
-    UpdateDatabaseBackupScheduleRequest,
+    DatabaseBackupTrigger, DatabaseRestoreListFilters, DatabaseRestoreRecord,
+    EnqueueDatabaseBackup, EnqueueDatabaseRestore, UpdateDatabaseBackupScheduleRequest,
 };
 use serde::Deserialize;
 use time::OffsetDateTime;
@@ -65,6 +65,8 @@ struct ListDatabaseRestoresQuery {
     backup_id: Option<String>,
     target_managed_database_id: Option<String>,
     status: Option<DatabaseBackupStatus>,
+    page: Option<i64>,
+    page_size: Option<i64>,
     limit: Option<i64>,
 }
 
@@ -294,21 +296,41 @@ async fn list_database_restores(
     State(state): State<ApiState>,
     headers: HeaderMap,
     Query(query): Query<ListDatabaseRestoresQuery>,
-) -> Result<Json<Vec<DatabaseRestoreRecord>>, ApiError> {
+) -> Result<(HeaderMap, Json<Vec<DatabaseRestoreRecord>>), ApiError> {
     let user = authenticated_user(&state, &headers).await?;
-    let restores = state
+    let page = query.page.unwrap_or(1);
+    if page < 1 {
+        return Err(ApiError::bad_request(
+            "page must be greater than or equal to 1",
+        ));
+    }
+    let page_size = list_page_size(query.page_size, query.limit)?;
+    let result = state
         .database_backups
-        .list_database_restores(
+        .list_database_restores_page(
             &user.id,
-            query.backup_id.as_deref(),
-            query.target_managed_database_id.as_deref(),
-            query.status,
-            query.limit.unwrap_or(50),
+            DatabaseRestoreListFilters {
+                backup_id: query.backup_id.as_deref(),
+                target_managed_database_id: query.target_managed_database_id.as_deref(),
+                status: query.status,
+                page,
+                page_size,
+            },
         )
         .await
         .map_err(database_backup_api_error)?;
+    let mut response_headers = HeaderMap::new();
+    response_headers.insert(
+        "x-total-count",
+        header_value(result.total_count, "X-Total-Count")?,
+    );
+    response_headers.insert("x-page", header_value(result.page, "X-Page")?);
+    response_headers.insert(
+        "x-page-size",
+        header_value(result.page_size, "X-Page-Size")?,
+    );
 
-    Ok(Json(restores))
+    Ok((response_headers, Json(result.records)))
 }
 
 async fn get_database_restore(

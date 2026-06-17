@@ -4,7 +4,7 @@ use sqlx::{PgPool, postgres::PgPoolOptions};
 async fn test_pool() -> Option<PgPool> {
     let database_url = std::env::var("LIQUID_TEST_DATABASE_URL").ok()?;
     PgPoolOptions::new()
-        .max_connections(2)
+        .max_connections(1)
         .connect(&database_url)
         .await
         .ok()
@@ -37,7 +37,11 @@ async fn postgres_metadata_provider_collects_catalog_and_explain_facts() {
 
     assert!(analysis.parse_ok());
     let metadata = analysis.metadata.expect("metadata report");
-    assert!(!metadata.statements.is_empty());
+    assert!(
+        !metadata.statements.is_empty(),
+        "metadata warnings: {:?}",
+        metadata.warnings
+    );
     assert!(
         metadata.statements[0]
             .relations

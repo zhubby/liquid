@@ -2,8 +2,8 @@ use liquid_core::{
     AppendDatabaseOperationDiagnostic, CompleteDatabaseBackup, CreateManagedDatabaseRequest,
     DatabaseBackupListFilters, DatabaseBackupMetadataStore, DatabaseBackupStatus,
     DatabaseBackupStorageKind, DatabaseBackupTrigger, DatabaseOperationDiagnosticFilters,
-    DatabaseOperationKind, EnqueueDatabaseBackup, ManagedDatabaseEngine, ManagedDatabaseSslMode,
-    RegisterRequest,
+    DatabaseOperationKind, DatabaseRestoreListFilters, EnqueueDatabaseBackup,
+    ManagedDatabaseEngine, ManagedDatabaseSslMode, RegisterRequest,
 };
 use liquid_storage::{LiquidStore, Storage, StorageOptions};
 
@@ -465,6 +465,220 @@ async fn database_backup_store_pages_and_filters_backup_records() {
     assert_ne!(other_owner_page.records[0].id, second.id);
 }
 
+#[tokio::test]
+async fn database_backup_store_pages_and_filters_restore_records() {
+    let Some(storage) = test_storage().await else {
+        return;
+    };
+
+    let owner = storage
+        .register_user(RegisterRequest {
+            email: unique_email("restore-page-owner"),
+            display_name: "Restore Page Owner".to_owned(),
+            password: "password123".to_owned(),
+        })
+        .await
+        .unwrap();
+    let other = storage
+        .register_user(RegisterRequest {
+            email: unique_email("restore-page-other"),
+            display_name: "Restore Page Other".to_owned(),
+            password: "password123".to_owned(),
+        })
+        .await
+        .unwrap();
+    let source = create_database(&storage, &owner.user.id, "Restore Source").await;
+    let first_target = create_database(&storage, &owner.user.id, "Restore Target A").await;
+    let second_target = create_database(&storage, &owner.user.id, "Restore Target B").await;
+    let other_source = create_database(&storage, &other.user.id, "Other Restore Source").await;
+    let other_target = create_database(&storage, &other.user.id, "Other Restore Target").await;
+
+    let first_backup = storage
+        .create_database_backup(&owner.user.id, &source.id, Some("first".to_owned()))
+        .await
+        .unwrap();
+    complete_backup(&storage, &first_backup.id).await;
+    let second_backup = storage
+        .create_database_backup(&owner.user.id, &source.id, Some("second".to_owned()))
+        .await
+        .unwrap();
+    complete_backup(&storage, &second_backup.id).await;
+    let other_backup = storage
+        .create_database_backup(&other.user.id, &other_source.id, Some("other".to_owned()))
+        .await
+        .unwrap();
+    complete_backup(&storage, &other_backup.id).await;
+
+    let first_restore = storage
+        .create_database_restore(
+            &owner.user.id,
+            &first_backup.id,
+            &first_target.id,
+            "first restore".to_owned(),
+        )
+        .await
+        .unwrap();
+    tokio::time::sleep(std::time::Duration::from_millis(5)).await;
+    let second_restore = storage
+        .create_database_restore(
+            &owner.user.id,
+            &second_backup.id,
+            &first_target.id,
+            "second restore".to_owned(),
+        )
+        .await
+        .unwrap();
+    tokio::time::sleep(std::time::Duration::from_millis(5)).await;
+    let third_restore = storage
+        .create_database_restore(
+            &owner.user.id,
+            &second_backup.id,
+            &second_target.id,
+            "third restore".to_owned(),
+        )
+        .await
+        .unwrap();
+    storage
+        .create_database_restore(
+            &other.user.id,
+            &other_backup.id,
+            &other_target.id,
+            "other restore".to_owned(),
+        )
+        .await
+        .unwrap();
+
+    let claimed_first = storage
+        .claim_next_database_restore("restore-page-worker")
+        .await
+        .unwrap()
+        .unwrap();
+    assert_eq!(claimed_first.id, first_restore.id);
+    storage
+        .complete_database_restore(&first_restore.id)
+        .await
+        .unwrap();
+    let claimed_second = storage
+        .claim_next_database_restore("restore-page-worker")
+        .await
+        .unwrap()
+        .unwrap();
+    assert_eq!(claimed_second.id, second_restore.id);
+    storage
+        .fail_database_restore(&second_restore.id, "restore failed".to_owned())
+        .await
+        .unwrap();
+
+    let first_page = storage
+        .list_database_restores_page(
+            &owner.user.id,
+            DatabaseRestoreListFilters {
+                backup_id: None,
+                target_managed_database_id: None,
+                status: None,
+                page: 1,
+                page_size: 2,
+            },
+        )
+        .await
+        .unwrap();
+    assert_eq!(first_page.total_count, 3);
+    assert_eq!(first_page.page, 1);
+    assert_eq!(first_page.page_size, 2);
+    assert_eq!(first_page.records.len(), 2);
+
+    let second_page = storage
+        .list_database_restores_page(
+            &owner.user.id,
+            DatabaseRestoreListFilters {
+                backup_id: None,
+                target_managed_database_id: None,
+                status: None,
+                page: 2,
+                page_size: 2,
+            },
+        )
+        .await
+        .unwrap();
+    assert_eq!(second_page.total_count, 3);
+    assert_eq!(second_page.records.len(), 1);
+
+    let backup_page = storage
+        .list_database_restores_page(
+            &owner.user.id,
+            DatabaseRestoreListFilters {
+                backup_id: Some(&second_backup.id),
+                target_managed_database_id: None,
+                status: None,
+                page: 1,
+                page_size: 10,
+            },
+        )
+        .await
+        .unwrap();
+    assert_eq!(backup_page.total_count, 2);
+    assert!(
+        backup_page
+            .records
+            .iter()
+            .all(|record| record.backup_id == second_backup.id)
+    );
+
+    let target_page = storage
+        .list_database_restores_page(
+            &owner.user.id,
+            DatabaseRestoreListFilters {
+                backup_id: None,
+                target_managed_database_id: Some(&first_target.id),
+                status: None,
+                page: 1,
+                page_size: 10,
+            },
+        )
+        .await
+        .unwrap();
+    assert_eq!(target_page.total_count, 2);
+    assert!(
+        target_page
+            .records
+            .iter()
+            .all(|record| record.target.id == first_target.id)
+    );
+
+    let succeeded_page = storage
+        .list_database_restores_page(
+            &owner.user.id,
+            DatabaseRestoreListFilters {
+                backup_id: None,
+                target_managed_database_id: None,
+                status: Some(DatabaseBackupStatus::Succeeded),
+                page: 1,
+                page_size: 10,
+            },
+        )
+        .await
+        .unwrap();
+    assert_eq!(succeeded_page.total_count, 1);
+    assert_eq!(succeeded_page.records[0].id, first_restore.id);
+
+    let other_owner_page = storage
+        .list_database_restores_page(
+            &other.user.id,
+            DatabaseRestoreListFilters {
+                backup_id: None,
+                target_managed_database_id: None,
+                status: None,
+                page: 1,
+                page_size: 10,
+            },
+        )
+        .await
+        .unwrap();
+    assert_eq!(other_owner_page.total_count, 1);
+    assert_ne!(other_owner_page.records[0].id, first_restore.id);
+    assert_ne!(other_owner_page.records[0].id, third_restore.id);
+}
+
 async fn test_storage() -> Option<Storage> {
     let database_url = std::env::var("LIQUID_TEST_DATABASE_URL").ok()?;
     let storage = Storage::connect_with_options(StorageOptions::new(database_url))
@@ -472,6 +686,35 @@ async fn test_storage() -> Option<Storage> {
         .ok()?;
     storage.migrate().await.ok()?;
     Some(storage)
+}
+
+async fn complete_backup(_storage: &Storage, backup_id: &str) {
+    let database_url = std::env::var("LIQUID_TEST_DATABASE_URL").unwrap();
+    let pool = sqlx::PgPool::connect(&database_url).await.unwrap();
+    let result = sqlx::query(
+        r#"
+        update database_backups
+        set status = 'succeeded',
+            phase = 'succeeded',
+            progress_percent = 100,
+            storage_kind = 'local',
+            local_path = $2,
+            size_bytes = 123,
+            checksum_sha256 = $3,
+            postgres_server_version = '16',
+            pg_dump_version = 'pg_dump 16',
+            completed_at = now(),
+            updated_at = now()
+        where id = $1::uuid
+        "#,
+    )
+    .bind(backup_id)
+    .bind(format!("/var/liquid/backups/{backup_id}.dump"))
+    .bind(format!("checksum-{backup_id}"))
+    .execute(&pool)
+    .await
+    .unwrap();
+    assert_eq!(result.rows_affected(), 1);
 }
 
 async fn create_database(

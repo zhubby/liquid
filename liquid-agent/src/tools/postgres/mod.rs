@@ -288,7 +288,7 @@ mod tests {
     async fn integration_pool() -> Option<PgPool> {
         let database_url = std::env::var("LIQUID_TEST_DATABASE_URL").ok()?;
         PgPoolOptions::new()
-            .max_connections(2)
+            .max_connections(1)
             .connect(&database_url)
             .await
             .ok()

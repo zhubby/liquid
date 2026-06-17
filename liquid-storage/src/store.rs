@@ -10,16 +10,16 @@ use liquid_core::{
     DatabaseBackupRecord, DatabaseBackupScheduleRecord, DatabaseBackupScheduleStatus,
     DatabaseBackupStatus, DatabaseDiagram, DatabaseOperationDiagnosticFilters,
     DatabaseOperationDiagnosticRecord, DatabaseOperationEventRecord, DatabaseOperationEventType,
-    DatabaseOperationKind, DatabaseRestoreRecord, Datapanel, DatapanelCard,
-    DatapanelCardLayoutUpdate, DatapanelExport, DatapanelPreview, DatapanelPreviewLink,
-    DatapanelQueryResult, EnqueueDatabaseBackup, EnqueueDatabaseRestore, LlmProviderSettings,
-    LoginRequest, ManagedDatabase, ManagedDatabaseConnectionLoader,
-    ManagedDatabaseConnectionLoaderError, ManagedDatabaseConnectionSpec, ManagedDatabasePoolKey,
-    PublicUser, RegisterRequest, RejectSqlAuditRequest, ResolvedLlmProviderSettings,
-    SqlAuditExecutionResult, SqlAuditRecord, UpdateAgentConversationRequest,
-    UpdateCurrentUserRequest, UpdateDatabaseBackupScheduleRequest, UpdateDatabaseDiagramRequest,
-    UpdateDatapanelCardRequest, UpdateDatapanelRequest, UpdateLlmProviderSettingsRequest,
-    UpdateManagedDatabaseRequest, UpdatePasswordRequest,
+    DatabaseOperationKind, DatabaseRestoreListFilters, DatabaseRestoreListPage,
+    DatabaseRestoreRecord, Datapanel, DatapanelCard, DatapanelCardLayoutUpdate, DatapanelExport,
+    DatapanelPreview, DatapanelPreviewLink, DatapanelQueryResult, EnqueueDatabaseBackup,
+    EnqueueDatabaseRestore, LlmProviderSettings, LoginRequest, ManagedDatabase,
+    ManagedDatabaseConnectionLoader, ManagedDatabaseConnectionLoaderError,
+    ManagedDatabaseConnectionSpec, ManagedDatabasePoolKey, PublicUser, RegisterRequest,
+    RejectSqlAuditRequest, ResolvedLlmProviderSettings, SqlAuditExecutionResult, SqlAuditRecord,
+    UpdateAgentConversationRequest, UpdateCurrentUserRequest, UpdateDatabaseBackupScheduleRequest,
+    UpdateDatabaseDiagramRequest, UpdateDatapanelCardRequest, UpdateDatapanelRequest,
+    UpdateLlmProviderSettingsRequest, UpdateManagedDatabaseRequest, UpdatePasswordRequest,
 };
 use serde_json::Value;
 use sqlx::{
@@ -228,6 +228,16 @@ impl DatabaseBackupMetadataStore for Storage {
         )
         .await
         .map_err(database_backups::metadata_store_error)
+    }
+
+    async fn list_database_restores_page(
+        &self,
+        owner_user_id: &str,
+        filters: DatabaseRestoreListFilters<'_>,
+    ) -> Result<DatabaseRestoreListPage, DatabaseBackupMetadataStoreError> {
+        database_backups::list_database_restores_page(self, owner_user_id, filters)
+            .await
+            .map_err(database_backups::metadata_store_error)
     }
 
     async fn claim_next_database_backup(

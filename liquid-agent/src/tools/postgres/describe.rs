@@ -274,7 +274,8 @@ async fn fetch_describe_constraints(
         left join unnest(conkey) with ordinality as key(attnum, ordinality) on true
         left join pg_attribute a on a.attrelid = conrelid and a.attnum = key.attnum
         where conrelid = $1::bigint::oid
-        group by pg_constraint.oid
+        group by pg_constraint.oid, pg_constraint.conname, pg_constraint.contype,
+                 pg_constraint.convalidated
         order by conname
         "#,
     )

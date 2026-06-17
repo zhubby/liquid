@@ -36,9 +36,10 @@ use liquid_core::{
     DatabaseBackupMetadataStoreError, DatabaseBackupRecord, DatabaseBackupStatus,
     DatabaseBackupTrigger, DatabaseDiagram, DatabaseDiagramCardinality, DatabaseDiagramColumn,
     DatabaseDiagramDocument, DatabaseDiagramPoint, DatabaseDiagramRelationship,
-    DatabaseDiagramRelationshipEndpoint, DatabaseDiagramTable, DatabaseRestoreRecord, Datapanel,
-    DatapanelCard, DatapanelCardLayoutUpdate, DatapanelExport, DatapanelPreview,
-    DatapanelPreviewLink, DatapanelQueryResult, LlmProviderSettings, LoginRequest, ManagedDatabase,
+    DatabaseDiagramRelationshipEndpoint, DatabaseDiagramTable, DatabaseRestoreListFilters,
+    DatabaseRestoreListPage, DatabaseRestoreRecord, Datapanel, DatapanelCard,
+    DatapanelCardLayoutUpdate, DatapanelExport, DatapanelPreview, DatapanelPreviewLink,
+    DatapanelQueryResult, LlmProviderSettings, LoginRequest, ManagedDatabase,
     ManagedDatabaseConnectionLoader, ManagedDatabaseConnectionLoaderError,
     ManagedDatabaseConnectionSpec, ManagedDatabaseEngine, ManagedDatabasePoolKey,
     ManagedDatabasePoolPolicy, ManagedDatabaseSslMode, PublicUser, RegisterRequest,
@@ -1783,6 +1784,7 @@ impl ManagedDatabaseConnectionTester for FakeManagedDatabaseConnectionTester {
 
 struct FakeDatabaseBackupStore {
     records: Vec<DatabaseBackupRecord>,
+    restores: Vec<DatabaseRestoreRecord>,
 }
 
 #[async_trait]
@@ -1871,21 +1873,58 @@ impl DatabaseBackupMetadataStore for FakeDatabaseBackupStore {
 
     async fn get_database_restore(
         &self,
-        _owner_user_id: &str,
-        _id: &str,
+        owner_user_id: &str,
+        id: &str,
     ) -> Result<DatabaseRestoreRecord, DatabaseBackupMetadataStoreError> {
-        unreachable!()
+        self.restores
+            .iter()
+            .find(|record| record.owner_user_id == owner_user_id && record.id == id)
+            .cloned()
+            .ok_or(DatabaseBackupMetadataStoreError::NotFound)
     }
 
     async fn list_database_restores(
         &self,
-        _owner_user_id: &str,
-        _backup_id: Option<&str>,
-        _target_managed_database_id: Option<&str>,
-        _status: Option<DatabaseBackupStatus>,
-        _limit: i64,
+        owner_user_id: &str,
+        backup_id: Option<&str>,
+        target_managed_database_id: Option<&str>,
+        status: Option<DatabaseBackupStatus>,
+        limit: i64,
     ) -> Result<Vec<DatabaseRestoreRecord>, DatabaseBackupMetadataStoreError> {
-        unreachable!()
+        Ok(self
+            .filtered_restores(owner_user_id, backup_id, target_managed_database_id, status)
+            .into_iter()
+            .take(limit.clamp(1, 100) as usize)
+            .collect())
+    }
+
+    async fn list_database_restores_page(
+        &self,
+        owner_user_id: &str,
+        filters: DatabaseRestoreListFilters<'_>,
+    ) -> Result<DatabaseRestoreListPage, DatabaseBackupMetadataStoreError> {
+        let page = filters.page.max(1);
+        let page_size = filters.page_size.clamp(1, 100);
+        let offset = ((page - 1) * page_size) as usize;
+        let restores = self.filtered_restores(
+            owner_user_id,
+            filters.backup_id,
+            filters.target_managed_database_id,
+            filters.status,
+        );
+        let total_count = restores.len() as i64;
+        let records = restores
+            .into_iter()
+            .skip(offset)
+            .take(page_size as usize)
+            .collect();
+
+        Ok(DatabaseRestoreListPage {
+            records,
+            total_count,
+            page,
+            page_size,
+        })
     }
 
     async fn claim_next_database_backup(
@@ -1981,6 +2020,27 @@ impl FakeDatabaseBackupStore {
                     .map(|trigger| record.trigger == trigger)
                     .unwrap_or(true)
             })
+            .cloned()
+            .collect()
+    }
+
+    fn filtered_restores(
+        &self,
+        owner_user_id: &str,
+        backup_id: Option<&str>,
+        target_managed_database_id: Option<&str>,
+        status: Option<DatabaseBackupStatus>,
+    ) -> Vec<DatabaseRestoreRecord> {
+        self.restores
+            .iter()
+            .filter(|record| record.owner_user_id == owner_user_id)
+            .filter(|record| backup_id.map(|id| record.backup_id == id).unwrap_or(true))
+            .filter(|record| {
+                target_managed_database_id
+                    .map(|database_id| record.target.id == database_id)
+                    .unwrap_or(true)
+            })
+            .filter(|record| status.map(|status| record.status == status).unwrap_or(true))
             .cloned()
             .collect()
     }
@@ -2718,6 +2778,7 @@ async fn database_backup_routes_return_paginated_headers_filters_and_detail() {
                 DatabaseBackupTrigger::Cron,
             ),
         ],
+        restores: Vec::new(),
     }));
 
     let response = app
@@ -2778,6 +2839,106 @@ async fn database_backup_routes_return_paginated_headers_filters_and_detail() {
     assert_eq!(invalid_page_response.status(), StatusCode::BAD_REQUEST);
 }
 
+#[tokio::test]
+async fn database_restore_routes_return_paginated_headers_filters_and_detail() {
+    let app = test_app_with_database_backup_store(Arc::new(FakeDatabaseBackupStore {
+        records: Vec::new(),
+        restores: vec![
+            test_restore_record(
+                "restore-1",
+                "user-1",
+                "backup-1",
+                "db-1",
+                "Warehouse",
+                DatabaseBackupStatus::Queued,
+            ),
+            test_restore_record(
+                "restore-2",
+                "user-1",
+                "backup-2",
+                "db-1",
+                "Warehouse",
+                DatabaseBackupStatus::Succeeded,
+            ),
+            test_restore_record(
+                "restore-3",
+                "user-1",
+                "backup-2",
+                "db-2",
+                "Analytics",
+                DatabaseBackupStatus::Failed,
+            ),
+            test_restore_record(
+                "restore-4",
+                "other-user",
+                "backup-2",
+                "db-1",
+                "Other",
+                DatabaseBackupStatus::Succeeded,
+            ),
+        ],
+    }));
+
+    let response = app
+        .clone()
+        .oneshot(auth_request(
+            "/api/v1/database-restores?page=1&page_size=10&backup_id=backup-2&target_managed_database_id=db-1&status=succeeded",
+        ))
+        .await
+        .unwrap();
+    assert_eq!(response.status(), StatusCode::OK);
+    assert_eq!(
+        response
+            .headers()
+            .get("x-total-count")
+            .unwrap()
+            .to_str()
+            .unwrap(),
+        "1"
+    );
+    assert_eq!(
+        response.headers().get("x-page").unwrap().to_str().unwrap(),
+        "1"
+    );
+    assert_eq!(
+        response
+            .headers()
+            .get("x-page-size")
+            .unwrap()
+            .to_str()
+            .unwrap(),
+        "10"
+    );
+    let payload = response_json(response).await;
+    assert_eq!(payload.as_array().unwrap().len(), 1);
+    assert_eq!(payload[0]["id"], "restore-2");
+    assert_eq!(payload[0]["backup_id"], "backup-2");
+    assert_eq!(payload[0]["target"]["id"], "db-1");
+
+    let detail_response = app
+        .clone()
+        .oneshot(auth_request("/api/v1/database-restores/restore-2"))
+        .await
+        .unwrap();
+    assert_eq!(detail_response.status(), StatusCode::OK);
+    let detail = response_json(detail_response).await;
+    assert_eq!(detail["id"], "restore-2");
+    assert_eq!(detail["target"]["name"], "Warehouse");
+
+    let invalid_page_size_response = app
+        .clone()
+        .oneshot(auth_request("/api/v1/database-restores?page_size=25"))
+        .await
+        .unwrap();
+    assert_eq!(invalid_page_size_response.status(), StatusCode::BAD_REQUEST);
+
+    let invalid_page_response = app
+        .oneshot(auth_request("/api/v1/database-restores?page=0"))
+        .await
+        .unwrap();
+    assert_eq!(invalid_page_response.status(), StatusCode::BAD_REQUEST);
+}
+
 fn test_backup_record(
     id: &str,
     owner_user_id: &str,
@@ -2828,6 +2989,68 @@ fn test_backup_record(
         heartbeat_at: None,
         started_at: None,
         completed_at: if status == DatabaseBackupStatus::Succeeded {
+            Some(time::OffsetDateTime::UNIX_EPOCH)
+        } else {
+            None
+        },
+        created_at: time::OffsetDateTime::UNIX_EPOCH,
+        updated_at: time::OffsetDateTime::UNIX_EPOCH,
+    }
+}
+
+fn test_restore_record(
+    id: &str,
+    owner_user_id: &str,
+    backup_id: &str,
+    database_id: &str,
+    database_name: &str,
+    status: DatabaseBackupStatus,
+) -> DatabaseRestoreRecord {
+    DatabaseRestoreRecord {
+        id: id.to_owned(),
+        owner_user_id: owner_user_id.to_owned(),
+        backup_id: backup_id.to_owned(),
+        target: liquid_core::ManagedDatabaseSnapshot {
+            id: database_id.to_owned(),
+            name: database_name.to_owned(),
+            engine: ManagedDatabaseEngine::Postgres,
+            host: "localhost".to_owned(),
+            port: 5432,
+            database: database_name.to_lowercase(),
+            username: "postgres".to_owned(),
+            ssl_mode: ManagedDatabaseSslMode::Disable,
+        },
+        format: DatabaseBackupFormat::PostgresCustom,
+        status,
+        phase: status.as_str().to_owned(),
+        progress_percent: if matches!(
+            status,
+            DatabaseBackupStatus::Succeeded | DatabaseBackupStatus::Failed
+        ) {
+            100
+        } else {
+            0
+        },
+        restore_options: serde_json::json!({}),
+        conversation_id: None,
+        created_from_turn_id: None,
+        error: if status == DatabaseBackupStatus::Failed {
+            Some("restore failed".to_owned())
+        } else {
+            None
+        },
+        purpose: Some("route test restore".to_owned()),
+        worker_id: None,
+        heartbeat_at: None,
+        started_at: if status == DatabaseBackupStatus::Queued {
+            None
+        } else {
+            Some(time::OffsetDateTime::UNIX_EPOCH)
+        },
+        completed_at: if matches!(
+            status,
+            DatabaseBackupStatus::Succeeded | DatabaseBackupStatus::Failed
+        ) {
             Some(time::OffsetDateTime::UNIX_EPOCH)
         } else {
             None

@@ -363,6 +363,23 @@ pub struct DatabaseBackupListPage {
     pub page_size: i64,
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct DatabaseRestoreListFilters<'a> {
+    pub backup_id: Option<&'a str>,
+    pub target_managed_database_id: Option<&'a str>,
+    pub status: Option<DatabaseBackupStatus>,
+    pub page: i64,
+    pub page_size: i64,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct DatabaseRestoreListPage {
+    pub records: Vec<DatabaseRestoreRecord>,
+    pub total_count: i64,
+    pub page: i64,
+    pub page_size: i64,
+}
+
 #[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize, TS)]
 #[ts(export)]
 pub struct CreateDatabaseRestoreRequest {
@@ -697,6 +714,39 @@ pub trait DatabaseBackupMetadataStore: Send + Sync {
         status: Option<DatabaseBackupStatus>,
         limit: i64,
     ) -> Result<Vec<DatabaseRestoreRecord>, DatabaseBackupMetadataStoreError>;
+
+    async fn list_database_restores_page(
+        &self,
+        owner_user_id: &str,
+        filters: DatabaseRestoreListFilters<'_>,
+    ) -> Result<DatabaseRestoreListPage, DatabaseBackupMetadataStoreError> {
+        let page = filters.page.max(1);
+        let page_size = filters.page_size.clamp(1, 100);
+        let limit = page.saturating_mul(page_size).clamp(1, 100);
+        let records = self
+            .list_database_restores(
+                owner_user_id,
+                filters.backup_id,
+                filters.target_managed_database_id,
+                filters.status,
+                limit,
+            )
+            .await?;
+        let total_count = records.len() as i64;
+        let offset = ((page - 1) * page_size) as usize;
+        let records = records
+            .into_iter()
+            .skip(offset)
+            .take(page_size as usize)
+            .collect();
+
+        Ok(DatabaseRestoreListPage {
+            records,
+            total_count,
+            page,
+            page_size,
+        })
+    }
 
     async fn claim_next_database_backup(
         &self,
