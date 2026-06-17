@@ -24,6 +24,7 @@ import {
   CardHeader,
   CardTitle,
 } from "@/components/ui/card";
+import { RecordIdButton } from "@/components/record-id-button";
 import {
   type DatabaseBackupStatus,
   type DatabaseRestoreRecord,
@@ -458,14 +459,11 @@ function RestoreTableRow({
   return (
     <tr className="transition-colors hover:bg-muted/30">
       <td className="px-3 py-2 align-top">
-        <button
-          type="button"
-          className="max-w-32 truncate rounded-sm font-mono text-xs font-medium text-foreground underline-offset-4 outline-none hover:underline focus-visible:ring-[3px] focus-visible:ring-ring/50"
-          title={record.id}
-          onClick={onOpen}
-        >
-          {shortId(record.id)}
-        </button>
+        <RecordIdButton
+          id={record.id}
+          label={shortId(record.id)}
+          onOpen={onOpen}
+        />
       </td>
       <td className="px-3 py-2 align-top">
         <div className="max-w-36 truncate font-medium">
@@ -521,14 +519,12 @@ function RestoreMobileCard({
     <article className="p-3">
       <div className="flex items-start justify-between gap-3">
         <div className="min-w-0">
-          <button
-            type="button"
-            className="max-w-full truncate rounded-sm font-mono text-xs font-medium underline-offset-4 outline-none hover:underline focus-visible:ring-[3px] focus-visible:ring-ring/50"
-            title={record.id}
-            onClick={onOpen}
-          >
-            {shortId(record.id)}
-          </button>
+          <RecordIdButton
+            id={record.id}
+            label={shortId(record.id)}
+            onOpen={onOpen}
+            className="max-w-full"
+          />
           <div className="mt-1 truncate text-sm font-medium">
             {record.target.name}
           </div>
