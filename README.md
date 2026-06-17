@@ -147,6 +147,51 @@ The image runs `liquid server` and binds to `0.0.0.0:3001` inside the container.
 It does not serve the Next.js dashboard; run `liquid-ui` separately or deploy it
 as a separate frontend service.
 
+## Helm
+
+The `helm/liquid` chart deploys the GHCR backend and dashboard images:
+
+- `ghcr.io/zhubby/liquid:<tag>`
+- `ghcr.io/zhubby/liquid-ui:<tag>`
+
+Install with built-in PostgreSQL:
+
+```bash
+helm upgrade --install liquid ./helm/liquid \
+  --namespace liquid --create-namespace \
+  --set secrets.encryptionKey=replace-with-a-real-secret \
+  --set postgresql.auth.password=replace-with-postgres-password \
+  --set frontend.apiBaseUrl=http://localhost:3001
+```
+
+Install with an existing PostgreSQL database:
+
+```bash
+kubectl create namespace liquid
+
+kubectl -n liquid create secret generic liquid-database \
+  --from-literal=database-url='postgres://liquid:password@postgres.example.internal:5432/liquid?sslmode=require'
+
+helm upgrade --install liquid ./helm/liquid \
+  --namespace liquid \
+  --set postgresql.enabled=false \
+  --set database.existingSecret=liquid-database \
+  --set database.existingSecretKey=database-url \
+  --set secrets.encryptionKey=replace-with-a-real-secret
+```
+
+Validate chart changes locally:
+
+```bash
+helm lint helm/liquid
+helm template liquid helm/liquid --namespace liquid > /tmp/liquid.yaml
+kubectl apply --dry-run=client --validate=false -f /tmp/liquid.yaml
+helm package helm/liquid --destination /tmp
+```
+
+See [Helm Deployment](docs/src/helm-deployment.md) for full deployment,
+external database, ingress, and local cluster smoke-test instructions.
+
 ## Development Commands
 
 Run Rust checks from the repository root:

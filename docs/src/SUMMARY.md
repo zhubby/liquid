@@ -8,5 +8,6 @@
 - [Data Model](./data-model.md)
 - [SQL Safety Model](./sql-safety-model.md)
 - [Configuration and Operations](./configuration-and-operations.md)
+- [Helm Deployment](./helm-deployment.md)
 - [Development](./development.md)
 - [Frontend Design System](./frontend-design-system.md)
