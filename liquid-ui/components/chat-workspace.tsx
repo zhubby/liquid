@@ -233,6 +233,31 @@ export function ChatPanel({
     return actions.filter((action) => !assistantTurnIds.has(action.turn_id));
   }, [actions, messages]);
 
+  const notifyDatapanelActionApplied = useCallback(
+    (action: ChatAction) => {
+      if (
+        action.status !== "applied" ||
+        action.resource_kind !== "datapanel_card" ||
+        notifiedDatapanelActionIdsRef.current.has(action.id)
+      ) {
+        return;
+      }
+
+      notifiedDatapanelActionIdsRef.current.add(action.id);
+      onDatapanelChanged();
+    },
+    [onDatapanelChanged],
+  );
+
+  const loadConversationActions = useCallback(
+    (conversationId: string) =>
+      apiRequest<ChatAction[]>(
+        `/api/v1/chat/conversations/${conversationId}/actions`,
+        { token },
+      ),
+    [token],
+  );
+
   const loadConversationState = useCallback(
     async (conversationId: string) => {
       const [nextMessages, nextActions, provider] = await Promise.all([
@@ -240,10 +265,7 @@ export function ChatPanel({
           `/api/v1/chat/conversations/${conversationId}/messages?limit=100`,
           { token },
         ),
-        apiRequest<ChatAction[]>(
-          `/api/v1/chat/conversations/${conversationId}/actions`,
-          { token },
-        ),
+        loadConversationActions(conversationId),
         apiRequest<LlmProviderSettingsResponse>("/api/v1/settings/llm-provider", {
           token,
         }),
@@ -255,7 +277,25 @@ export function ChatPanel({
         providerReady: Boolean(provider.settings?.has_api_key),
       };
     },
-    [token],
+    [loadConversationActions, token],
+  );
+
+  const refreshConversationActions = useCallback(
+    async (conversationId: string) => {
+      try {
+        const nextActions = await loadConversationActions(conversationId);
+
+        if (activeConversationIdRef.current !== conversationId) {
+          return;
+        }
+
+        setActions(nextActions);
+        nextActions.forEach(notifyDatapanelActionApplied);
+      } catch {
+        // The next conversation load or action stream event can still reconcile state.
+      }
+    },
+    [loadConversationActions, notifyDatapanelActionApplied],
   );
 
   useEffect(() => {
@@ -320,6 +360,9 @@ export function ChatPanel({
               }
 
               setMessages((current) => upsertMessage(current, event.payload.message));
+              if (event.payload.message.role === "assistant") {
+                void refreshConversationActions(conversation.id);
+              }
             },
           },
         ).catch((error) => {
@@ -360,7 +403,13 @@ export function ChatPanel({
       activeSendRef.current = null;
       activeActionStreamKeyRef.current = null;
     };
-  }, [conversation.id, loadConversationState, t.workspace.agentLoadFailed, token]);
+  }, [
+    conversation.id,
+    loadConversationState,
+    refreshConversationActions,
+    t.workspace.agentLoadFailed,
+    token,
+  ]);
 
   useEffect(() => {
     if (!nearBottomRef.current) {
@@ -385,22 +434,6 @@ export function ChatPanel({
       return [...current, action];
     });
   }, []);
-
-  const notifyDatapanelActionApplied = useCallback(
-    (action: ChatAction) => {
-      if (
-        action.status !== "applied" ||
-        action.resource_kind !== "datapanel_card" ||
-        notifiedDatapanelActionIdsRef.current.has(action.id)
-      ) {
-        return;
-      }
-
-      notifiedDatapanelActionIdsRef.current.add(action.id);
-      onDatapanelChanged();
-    },
-    [onDatapanelChanged],
-  );
 
   const commitWorkspaceTitle = useCallback(async () => {
     const title = titleInput.trim();
@@ -912,6 +945,13 @@ export function ChatPanel({
             },
           },
         );
+
+        if (
+          activeConversationIdRef.current === conversationId &&
+          activeActionStreamKeyRef.current === streamKey
+        ) {
+          await refreshConversationActions(conversationId);
+        }
       } catch (error) {
         if (error instanceof DOMException && error.name === "AbortError") {
           return;
@@ -953,6 +993,7 @@ export function ChatPanel({
       conversation.id,
       handleStreamEvent,
       loadConversationState,
+      refreshConversationActions,
       t,
       token,
     ],
@@ -1228,6 +1269,13 @@ const MessageList = ({
   onDatapanelChanged: () => void;
 }) => {
   const { t } = useI18n();
+  const activityTimelineItems =
+    activityItems.length > 0
+      ? activityItems
+      : isSending
+        ? [createStatusActivity("planning", undefined, t)]
+        : [];
+  const activityHasAssistantShell = messages.at(-1)?.role === "assistant";
   const actionAnchorMessageIds = useMemo(() => {
     const anchoredTurnIds = new Set<string>();
     const messageIds = new Set<string>();
@@ -1296,14 +1344,12 @@ const MessageList = ({
         })}
       </div>
 
-      {activityItems.length > 0 || isSending ? (
-        <ActivityTimeline
-          items={
-            activityItems.length > 0
-              ? activityItems
-              : [createStatusActivity("planning", undefined, t)]
-          }
-        />
+      {activityTimelineItems.length > 0 ? (
+        activityHasAssistantShell ? (
+          <ActivityTimeline items={activityTimelineItems} />
+        ) : (
+          <ActivityMessage items={activityTimelineItems} />
+        )
       ) : null}
 
       {orphanActions.length > 0 ? (
@@ -1323,6 +1369,40 @@ const MessageList = ({
     </div>
   );
 };
+
+function ActivityMessage({ items }: { items: ActivityItem[] }) {
+  const { locale, t } = useI18n();
+  const [createdAt] = useState(() => new Date().toISOString());
+  const isFailed = items.some((item) => item.status === "failed");
+  const isRunning = items.some((item) => item.status === "running");
+
+  return (
+    <article className="group mt-5 flex min-w-0 gap-3">
+      <div
+        className={cn(
+          "mt-1 flex size-8 shrink-0 items-center justify-center rounded-md border bg-secondary text-secondary-foreground",
+          isFailed && "border-destructive/25 bg-destructive/10 text-destructive",
+        )}
+        aria-hidden
+      >
+        {isFailed ? (
+          <AlertTriangle className="size-4" />
+        ) : (
+          <Bot className="size-4" />
+        )}
+      </div>
+      <div className="min-w-0 max-w-[92%]">
+        <div className="flex items-center gap-2 text-xs text-muted-foreground">
+          <span>{t.workspace.assistantLabel}</span>
+          <span>{timeLabel(createdAt, locale)}</span>
+          {isRunning ? <span>{t.workspace.pending}</span> : null}
+          <span>{t.workspace.localPending}</span>
+        </div>
+        <ActivityTimeline items={items} className="mt-3 pl-0" />
+      </div>
+    </article>
+  );
+}
 
 function ChatEmptyState({
   selectedDatabase,
@@ -2391,11 +2471,17 @@ function MiniDatapanelChart({
   );
 }
 
-function ActivityTimeline({ items }: { items: ActivityItem[] }) {
+function ActivityTimeline({
+  items,
+  className,
+}: {
+  items: ActivityItem[];
+  className?: string;
+}) {
   const { t } = useI18n();
 
   return (
-    <div className="mt-4 pl-11">
+    <div className={cn("mt-4 pl-11", className)}>
       <div className="relative">
         {items.length > 1 ? (
           <div

@@ -1245,8 +1245,11 @@ function ExecutionStatusBadge({ status }: { status: SqlAuditExecutionStatus }) {
 function RiskBadge({ score }: { score: number }) {
   return (
     <Badge
-      variant={score >= 80 ? "destructive" : score >= 50 ? "secondary" : "outline"}
-      className="rounded-md"
+      variant="outline"
+      className={cn(
+        "rounded-md font-semibold tabular-nums",
+        severityBadgeClass(riskScoreSeverity(score)),
+      )}
     >
       {score}
     </Badge>
@@ -1258,12 +1261,41 @@ function SeverityBadge({ severity }: { severity: RiskSeverity }) {
 
   return (
     <Badge
-      variant={severity === "critical" || severity === "high" ? "destructive" : "outline"}
-      className="rounded-md"
+      variant="outline"
+      className={cn("rounded-md font-semibold", severityBadgeClass(severity))}
     >
       {t.auditHistory.severities[severity]}
     </Badge>
   );
+}
+
+function severityBadgeClass(severity: RiskSeverity) {
+  switch (severity) {
+    case "low":
+      return "border-emerald-500/35 bg-emerald-500/15 text-emerald-700 dark:text-emerald-300";
+    case "medium":
+      return "border-amber-500/45 bg-amber-400/20 text-amber-800 dark:text-amber-300";
+    case "high":
+      return "border-orange-500/45 bg-orange-500/20 text-orange-800 dark:text-orange-300";
+    case "critical":
+      return "border-red-500/45 bg-red-500/20 text-red-700 dark:text-red-300";
+  }
+}
+
+function riskScoreSeverity(score: number): RiskSeverity {
+  if (score >= 90) {
+    return "critical";
+  }
+
+  if (score >= 75) {
+    return "high";
+  }
+
+  if (score >= 50) {
+    return "medium";
+  }
+
+  return "low";
 }
 
 const auditStatusOptions: SqlAuditLifecycleStatus[] = [
