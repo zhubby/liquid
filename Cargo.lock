@@ -1633,7 +1633,7 @@ checksum = "32a66949e030da00e8c7d4434b251670a91556f4144941d37452769c25d58a53"
 
 [[package]]
 name = "liquid-agent"
-version = "0.1.0"
+version = "0.2.0"
 dependencies = [
  "anyhow",
  "async-stream",
@@ -1661,7 +1661,7 @@ dependencies = [
 
 [[package]]
 name = "liquid-api"
-version = "0.1.0"
+version = "0.2.0"
 dependencies = [
  "anyhow",
  "async-stream",
@@ -1687,7 +1687,7 @@ dependencies = [
 
 [[package]]
 name = "liquid-cli"
-version = "0.1.0"
+version = "0.2.0"
 dependencies = [
  "anyhow",
  "clap",
@@ -1705,7 +1705,7 @@ dependencies = [
 
 [[package]]
 name = "liquid-config"
-version = "0.1.0"
+version = "0.2.0"
 dependencies = [
  "anyhow",
  "serde",
@@ -1714,7 +1714,7 @@ dependencies = [
 
 [[package]]
 name = "liquid-core"
-version = "0.1.0"
+version = "0.2.0"
 dependencies = [
  "async-trait",
  "serde",
@@ -1725,7 +1725,7 @@ dependencies = [
 
 [[package]]
 name = "liquid-llm"
-version = "0.1.0"
+version = "0.2.0"
 dependencies = [
  "anyhow",
  "async-stream",
@@ -1739,7 +1739,7 @@ dependencies = [
 
 [[package]]
 name = "liquid-sql"
-version = "0.1.0"
+version = "0.2.0"
 dependencies = [
  "async-trait",
  "criterion",
@@ -1752,7 +1752,7 @@ dependencies = [
 
 [[package]]
 name = "liquid-storage"
-version = "0.1.0"
+version = "0.2.0"
 dependencies = [
  "argon2",
  "async-trait",
