@@ -1,6 +1,7 @@
 use std::{
     collections::VecDeque,
     sync::{Arc, Mutex},
+    time::Duration,
 };
 
 use async_trait::async_trait;
@@ -16,6 +17,7 @@ use axum::{
         },
     },
 };
+use futures_util::StreamExt;
 use liquid_agent::{
     AgentStream, ApprovedWriteExecutionResult, MockSqlAuditAgent, PostgresToolConfig,
     PostgresToolExecutionMode, SqlAuditAgent, ToolRegistry,
@@ -4081,6 +4083,74 @@ async fn chat_sql_execution_persists_select_result_table_without_llm_provider() 
     let messages = response_json(messages_response).await;
     assert_eq!(messages[1]["parts"][1]["kind"], "query_result_table");
     assert_eq!(messages[1]["parts"][1]["result"]["columns"][0], "id");
+}
+
+#[tokio::test]
+async fn chat_conversation_stream_marks_sql_mode_user_message_as_code() {
+    let store = Arc::new(TestStore::default());
+    let executor = Arc::new(FakeChatSqlExecutor::with_outcomes(vec![
+        FakeChatSqlOutcome::Ok(ChatSqlExecutionOutcome::Query {
+            statement_kind: SqlStatementKind::Select,
+            result: DatapanelQueryResult {
+                columns: vec!["id".to_owned()],
+                rows: vec![json!({ "id": 1 })],
+                row_count: 1,
+                truncated: false,
+                elapsed_ms: 4,
+                refreshed_at: time::OffsetDateTime::UNIX_EPOCH,
+            },
+            saveable: true,
+            rollback: None,
+        }),
+    ]));
+    let app = test_app_with_agent_store_executors(
+        Arc::new(MockSqlAuditAgent),
+        store.clone(),
+        PostgresToolExecutionMode::Readonly,
+        Arc::new(FakeApprovedSqlExecutor::default()),
+        executor,
+    );
+    let (_database, conversation) = create_sql_mode_workspace(&store).await;
+
+    let response = app
+        .clone()
+        .oneshot(auth_json_request(
+            "POST",
+            &format!(
+                "/api/v1/chat/conversations/{}/sql-executions",
+                conversation.id
+            ),
+            json!({
+                "sql": "select id from agent_events",
+                "client_request_id": "sql-mode-test-1"
+            }),
+        ))
+        .await
+        .unwrap();
+
+    assert_eq!(response.status(), StatusCode::OK);
+
+    let stream_response = app
+        .oneshot(auth_request(&format!(
+            "/api/v1/chat/conversations/{}/stream",
+            conversation.id
+        )))
+        .await
+        .unwrap();
+    assert_eq!(stream_response.status(), StatusCode::OK);
+
+    let mut body_stream = stream_response.into_body().into_data_stream();
+    let chunk = tokio::time::timeout(Duration::from_secs(1), body_stream.next())
+        .await
+        .unwrap()
+        .unwrap()
+        .unwrap();
+    let stream_body = String::from_utf8(chunk.to_vec()).unwrap();
+
+    assert!(stream_body.contains(r#""type":"message_created""#));
+    assert!(stream_body.contains(
+        r#""parts":[{"kind":"code","language":"sql","code":"select id from agent_events"}]"#
+    ));
 }
 
 #[tokio::test]

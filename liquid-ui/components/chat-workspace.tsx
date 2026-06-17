@@ -359,7 +359,9 @@ export function ChatPanel({
                 return;
               }
 
-              setMessages((current) => upsertMessage(current, event.payload.message));
+              setMessages((current) =>
+                upsertIncomingMessage(current, event.payload.message),
+              );
               if (event.payload.message.role === "assistant") {
                 void refreshConversationActions(conversation.id);
               }
@@ -499,7 +501,9 @@ export function ChatPanel({
           );
           return false;
         case "message_created":
-          setMessages((current) => upsertMessage(current, event.payload.message));
+          setMessages((current) =>
+            upsertIncomingMessage(current, event.payload.message),
+          );
           return false;
         case "status_changed":
           setActivityItems((current) =>
@@ -662,17 +666,13 @@ export function ChatPanel({
         activeStreamRef.current = controller;
         setActiveTurn(turn);
         setMessages((current) =>
-          current.map((message) =>
-            message.id === localUserId
-              ? {
-                  ...message,
-                  id: turn.input_message_id,
-                  turn_id: turn.id,
-                  status: "complete",
-                  local: false,
-                }
-              : message,
-          ),
+          replaceLocalOrUpsertMessage(current, localUserId, {
+            ...localUserMessage,
+            id: turn.input_message_id,
+            turn_id: turn.id,
+            status: "complete",
+            local: false,
+          }),
         );
 
         await apiStream<ChatStreamEvent>(
@@ -795,13 +795,11 @@ export function ChatPanel({
         setActivityItems([]);
         setMessages((current) => {
           const userMessage = sqlUserMessage(response.user_message, sql);
-          const withUser = current.some((message) => message.id === localUserId)
-            ? current.map((message) =>
-                message.id === localUserId
-                  ? { ...userMessage, local: false }
-                  : message,
-              )
-            : upsertMessage(current, userMessage);
+          const withUser = replaceLocalOrUpsertMessage(
+            current,
+            localUserId,
+            userMessage,
+          );
 
           return upsertMessage(withUser, response.assistant_message);
         });
@@ -4149,15 +4147,73 @@ function groupActionsByTurn(actions: ChatAction[]) {
 
 function upsertMessage(
   messages: DisplayMessage[],
-  nextMessage: ChatMessage,
+  nextMessage: DisplayMessage,
 ): DisplayMessage[] {
-  if (messages.some((message) => message.id === nextMessage.id)) {
-    return messages.map((message) =>
-      message.id === nextMessage.id ? { ...nextMessage, local: false } : message,
-    );
+  let replaced = false;
+
+  const nextMessages = messages.flatMap((message) => {
+    if (message.id !== nextMessage.id) {
+      return [message];
+    }
+
+    if (replaced) {
+      return [];
+    }
+
+    replaced = true;
+    return [{ ...nextMessage, local: false }];
+  });
+
+  if (replaced) {
+    return nextMessages;
   }
 
-  return [...messages, nextMessage];
+  return [...messages, { ...nextMessage, local: false }];
+}
+
+function upsertIncomingMessage(
+  messages: DisplayMessage[],
+  nextMessage: DisplayMessage,
+): DisplayMessage[] {
+  if (nextMessage.role === "user") {
+    const localMessage = messages.find(
+      (message) =>
+        message.local &&
+        message.role === "user" &&
+        message.status === "streaming" &&
+        message.content === nextMessage.content,
+    );
+
+    if (localMessage) {
+      return replaceLocalOrUpsertMessage(messages, localMessage.id, nextMessage);
+    }
+  }
+
+  return upsertMessage(messages, nextMessage);
+}
+
+function replaceLocalOrUpsertMessage(
+  messages: DisplayMessage[],
+  localMessageId: string,
+  nextMessage: DisplayMessage,
+): DisplayMessage[] {
+  if (!messages.some((message) => message.id === localMessageId)) {
+    return upsertMessage(messages, nextMessage);
+  }
+
+  const replacement = { ...nextMessage, local: false };
+
+  return messages.flatMap((message) => {
+    if (message.id === localMessageId) {
+      return [replacement];
+    }
+
+    if (message.id === nextMessage.id) {
+      return [];
+    }
+
+    return [message];
+  });
 }
 
 function upsertStreamingAssistantMessage(

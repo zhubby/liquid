@@ -318,8 +318,10 @@ async fn stream_conversation(
                             }
                         }
                         if seen_message_ids.insert(message.id.clone()) {
+                            let is_sql_mode =
+                                is_sql_mode_user_message(&state, &owner_user_id, &message).await;
                             yield Ok(sse_chat_event(ChatStreamEvent::MessageCreated {
-                                message: chat_message(message),
+                                message: chat_message_with_sql_mode(message, is_sql_mode),
                             }));
                         }
                     }
