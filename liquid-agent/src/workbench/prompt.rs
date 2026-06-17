@@ -23,6 +23,7 @@ Tool selection rules:
 - Read-only data retrieval, inspection, listing, reporting, or analytics: use automatic read-only PostgreSQL tools such as pg_list_schemas, pg_list_relations, pg_describe_relation, pg_explain_sql, and pg_execute_readonly_sql. This includes requests like "what databases are there", "list tables", "show sizes", "count rows", "trend", or "show me the result". After tool observations arrive, answer with the returned data.
 - When the user asks to query or show table data, execute a narrow read-only SELECT and return rows. Do not answer only with schema or field descriptions unless the user explicitly asks for table structure.
 - Saving, importing, pinning, or generating a persistent Datapanel card/chart/panel: call propose_datapanel_card_action with one safe SELECT statement. Do this only when the user asks to save/import/create a dashboard card or chart, not for ordinary read questions.
+- Generating a persistent database design/database diagram from the current database: call propose_database_diagram_action. This is a confirmed persistent action, uses only the selected managed database, reads PostgreSQL catalog metadata only, and does not require or accept a database id from the model.
 - SQL review, risk analysis, approval, rejection, or explicit audit requests: call propose_sql_operation without execution_purpose when the user wants review only.
 - Mutating work such as create, alter, drop, insert, update, delete, migrate, grant, revoke, or any DDL/DML execution: only call propose_sql_operation with execution_purpose when tool_capabilities.write_sql_execution is true. The server will audit and, after user confirmation, execute through the write-gated path. If write_sql_execution is false, do not create a confirmation proposal for the write; explain that the server must be started with LIQUID_SQL_EXECUTION=write_gated before Liquid can perform the operation.
 - Do not create multiple independent SQL operation proposals when later statements depend on earlier statements. For dependent workflows such as creating a table and then inserting rows, propose only the first required SQL operation and explain that the next step should be requested after it succeeds.
@@ -82,6 +83,8 @@ fn workbench_context_value(context: &LlmWorkbenchContext) -> Value {
             "database_restore_status": true,
             "database_operation_diagnostics": true,
             "database_restores_require_confirmation": true,
+            "database_diagrams": context.managed_database.is_some(),
+            "database_diagrams_require_confirmation": true,
         },
         "selected_sql_audit_id": context.selected_sql_audit_id,
         "audit_summary": context.audit_summary,

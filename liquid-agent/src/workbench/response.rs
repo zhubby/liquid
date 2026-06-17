@@ -10,8 +10,8 @@ use crate::types::ToolOutput;
 use super::{
     LlmWorkbenchContext,
     actions::{
-        DatapanelCardSuggestionInput, datapanel_card_suggestion, required_trimmed,
-        sql_audit_llm_action, sql_operation_suggestion,
+        DatapanelCardSuggestionInput, database_diagram_suggestion, datapanel_card_suggestion,
+        required_trimmed, sql_audit_llm_action, sql_operation_suggestion,
     },
 };
 
@@ -169,6 +169,11 @@ enum LlmWorkbenchAction {
         #[serde(default)]
         limit: Option<usize>,
     },
+    CreateDatabaseDiagram {
+        title: String,
+        #[serde(default)]
+        description: Option<String>,
+    },
     ApproveSqlAudit {
         title: String,
         description: String,
@@ -235,6 +240,9 @@ impl LlmWorkbenchAction {
                     limit,
                 },
             ),
+            Self::CreateDatabaseDiagram { title, description } => {
+                database_diagram_suggestion(context, title, description)
+            }
             Self::ApproveSqlAudit {
                 title,
                 description,

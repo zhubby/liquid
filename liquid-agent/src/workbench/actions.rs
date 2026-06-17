@@ -34,6 +34,35 @@ pub(super) struct DatapanelCardSuggestionInput {
     pub(super) limit: Option<usize>,
 }
 
+pub(super) fn database_diagram_suggestion(
+    context: &LlmWorkbenchContext,
+    title: String,
+    description: Option<String>,
+) -> Result<WorkbenchActionSuggestion> {
+    let Some(database) = context.managed_database.as_ref() else {
+        bail!("create_database_diagram requires a selected managed database");
+    };
+    let title = required_trimmed("title", title)?;
+    let description = optional_trimmed(description);
+
+    Ok(WorkbenchActionSuggestion {
+        kind: AgentActionKind::CreateDatabaseDiagram,
+        title: title.clone(),
+        description: description.clone().unwrap_or_else(|| {
+            "Create a database design from the selected database catalog.".to_owned()
+        }),
+        payload: json!({
+            "managed_database_id": database.id,
+            "managed_database_name": database.name,
+            "title": title,
+            "description": description,
+        }),
+        resource_kind: Some(AgentResourceKind::DatabaseDiagram),
+        resource_id: None,
+        requires_confirmation: true,
+    })
+}
+
 pub(super) fn sql_operation_suggestion(
     context: &LlmWorkbenchContext,
     title: String,

@@ -22,8 +22,9 @@ use liquid_agent::{
 };
 use liquid_api::{
     ApiState, ApprovedSqlExecutionFuture, ApprovedSqlExecutor, ChatSqlExecutionFuture,
-    ChatSqlExecutionOutcome, ChatSqlExecutor, ManagedDatabaseConnectionTestFuture,
-    ManagedDatabaseConnectionTester, router, router_with_cors,
+    ChatSqlExecutionOutcome, ChatSqlExecutor, DatabaseDiagramGenerationFuture,
+    DatabaseDiagramGenerator, ManagedDatabaseConnectionTestFuture, ManagedDatabaseConnectionTester,
+    router, router_with_cors,
 };
 use liquid_core::{
     AgentAction, AgentActionKind, AgentActionStatus, AgentConversation, AgentEventRecord,
@@ -33,9 +34,11 @@ use liquid_core::{
     CreateDatapanelCardRequest, CreateManagedDatabaseRequest, DatabaseBackupFormat,
     DatabaseBackupListFilters, DatabaseBackupListPage, DatabaseBackupMetadataStore,
     DatabaseBackupMetadataStoreError, DatabaseBackupRecord, DatabaseBackupStatus,
-    DatabaseBackupTrigger, DatabaseDiagram, DatabaseRestoreRecord, Datapanel, DatapanelCard,
-    DatapanelCardLayoutUpdate, DatapanelExport, DatapanelPreview, DatapanelPreviewLink,
-    DatapanelQueryResult, LlmProviderSettings, LoginRequest, ManagedDatabase,
+    DatabaseBackupTrigger, DatabaseDiagram, DatabaseDiagramCardinality, DatabaseDiagramColumn,
+    DatabaseDiagramDocument, DatabaseDiagramPoint, DatabaseDiagramRelationship,
+    DatabaseDiagramRelationshipEndpoint, DatabaseDiagramTable, DatabaseRestoreRecord, Datapanel,
+    DatapanelCard, DatapanelCardLayoutUpdate, DatapanelExport, DatapanelPreview,
+    DatapanelPreviewLink, DatapanelQueryResult, LlmProviderSettings, LoginRequest, ManagedDatabase,
     ManagedDatabaseConnectionLoader, ManagedDatabaseConnectionLoaderError,
     ManagedDatabaseConnectionSpec, ManagedDatabaseEngine, ManagedDatabasePoolKey,
     ManagedDatabasePoolPolicy, ManagedDatabaseSslMode, PublicUser, RegisterRequest,
@@ -1691,6 +1694,35 @@ impl ChatSqlExecutor for FakeChatSqlExecutor {
     }
 }
 
+struct FakeDatabaseDiagramGenerator {
+    result: Mutex<Result<DatabaseDiagramDocument, String>>,
+}
+
+impl FakeDatabaseDiagramGenerator {
+    fn ok(document: DatabaseDiagramDocument) -> Self {
+        Self {
+            result: Mutex::new(Ok(document)),
+        }
+    }
+
+    fn err(message: impl Into<String>) -> Self {
+        Self {
+            result: Mutex::new(Err(message.into())),
+        }
+    }
+}
+
+impl DatabaseDiagramGenerator for FakeDatabaseDiagramGenerator {
+    fn generate<'a>(&'a self, _pool: PgPool) -> DatabaseDiagramGenerationFuture<'a> {
+        Box::pin(async move {
+            match self.result.lock().unwrap().clone() {
+                Ok(document) => Ok(document),
+                Err(message) => Err(anyhow::anyhow!(message)),
+            }
+        })
+    }
+}
+
 #[derive(Default)]
 struct FakeManagedDatabaseConnectionTester;
 
@@ -2302,6 +2334,31 @@ fn test_app_with_agent_store_execution_and_executor(
         executor,
         Arc::new(FakeManagedDatabaseConnectionTester),
     ))
+}
+
+fn test_app_with_database_diagram_generator(
+    store: Arc<TestStore>,
+    generator: Arc<dyn DatabaseDiagramGenerator>,
+) -> Router {
+    let loader: Arc<dyn ManagedDatabaseConnectionLoader> = store.clone();
+    let pool_manager = Arc::new(ManagedDatabasePoolManager::with_connector(
+        loader,
+        Arc::new(TestPoolConnector),
+        ManagedDatabasePoolPolicy::default(),
+    ));
+
+    router(
+        ApiState::with_pool_manager_executor_and_connection_tester(
+            Arc::new(MockSqlAuditAgent),
+            store,
+            pool_manager,
+            false,
+            PostgresToolExecutionMode::Readonly,
+            Arc::new(FakeApprovedSqlExecutor::default()),
+            Arc::new(FakeManagedDatabaseConnectionTester),
+        )
+        .with_database_diagram_generator(generator),
+    )
 }
 
 fn test_app_with_agent_store_executors(
@@ -4937,6 +4994,107 @@ async fn applying_chat_datapanel_card_action_imports_card_into_workspace_panel()
 }
 
 #[tokio::test]
+async fn applying_chat_database_diagram_action_creates_diagram_record() {
+    let store = Arc::new(TestStore::default());
+    let app = test_app_with_database_diagram_generator(
+        store.clone(),
+        Arc::new(FakeDatabaseDiagramGenerator::ok(
+            generated_database_diagram_document(),
+        )),
+    );
+    let (conversation, action) = create_database_diagram_action_fixture(&store).await;
+
+    let actions_response = app
+        .clone()
+        .oneshot(auth_request(&format!(
+            "/api/v1/chat/conversations/{}/actions",
+            conversation.id
+        )))
+        .await
+        .unwrap();
+    assert_eq!(actions_response.status(), StatusCode::OK);
+    let actions_payload = response_json(actions_response).await;
+    assert_eq!(actions_payload[0]["preview"]["kind"], "database_diagram");
+    assert_eq!(actions_payload[0]["preview"]["title"], "Warehouse design");
+    assert_eq!(actions_payload[0]["preview"]["database_name"], "Warehouse");
+
+    let apply_response = app
+        .clone()
+        .oneshot(auth_json_request(
+            "POST",
+            &format!("/api/v1/chat/actions/{}/apply", action.id),
+            json!({}),
+        ))
+        .await
+        .unwrap();
+    assert_eq!(apply_response.status(), StatusCode::OK);
+    let apply_payload = response_json(apply_response).await;
+    assert_eq!(apply_payload["status"], "applying");
+    assert_eq!(apply_payload["preview"]["kind"], "database_diagram");
+    assert_eq!(apply_payload["preview"]["title"], "Warehouse design");
+
+    let final_action =
+        wait_for_store_action_status(&store, &action.id, AgentActionStatus::Applied).await;
+    assert_eq!(
+        final_action.resource_kind,
+        Some(AgentResourceKind::DatabaseDiagram)
+    );
+    assert_eq!(final_action.resource_id.as_deref(), Some("diagram-1"));
+
+    let diagrams = store.list_database_diagrams("user-1").await.unwrap();
+    assert_eq!(diagrams.len(), 1);
+    assert_eq!(diagrams[0].title, "Warehouse design");
+    assert_eq!(
+        diagrams[0].description.as_deref(),
+        Some("Generated from chat")
+    );
+    assert_eq!(diagrams[0].document.tables.len(), 2);
+    assert_eq!(diagrams[0].document.relationships.len(), 1);
+}
+
+#[tokio::test]
+async fn applying_chat_database_diagram_action_marks_failed_when_generation_fails() {
+    let store = Arc::new(TestStore::default());
+    let app = test_app_with_database_diagram_generator(
+        store.clone(),
+        Arc::new(FakeDatabaseDiagramGenerator::err("catalog query failed")),
+    );
+    let (_conversation, action) = create_database_diagram_action_fixture(&store).await;
+
+    let apply_response = app
+        .oneshot(auth_json_request(
+            "POST",
+            &format!("/api/v1/chat/actions/{}/apply", action.id),
+            json!({}),
+        ))
+        .await
+        .unwrap();
+    assert_eq!(apply_response.status(), StatusCode::OK);
+    let apply_payload = response_json(apply_response).await;
+    assert_eq!(apply_payload["status"], "applying");
+
+    let final_action =
+        wait_for_store_action_status(&store, &action.id, AgentActionStatus::Failed).await;
+    assert_eq!(final_action.resource_id, None);
+    assert!(
+        store
+            .list_database_diagrams("user-1")
+            .await
+            .unwrap()
+            .is_empty()
+    );
+    assert!(
+        store
+            .messages
+            .lock()
+            .unwrap()
+            .iter()
+            .any(|message| message.role == AgentMessageRole::Tool
+                && message.content.contains("catalog query failed"))
+    );
+}
+
+#[tokio::test]
 async fn applying_terminal_chat_action_returns_diagnostic_details() {
     let store = Arc::new(TestStore::default());
     let app = test_app_with_agent_store_execution_and_executor(
@@ -5229,6 +5387,151 @@ async fn create_datapanel_card_action_fixture(
         .unwrap();
 
     (conversation, action)
+}
+
+async fn create_database_diagram_action_fixture(
+    store: &Arc<TestStore>,
+) -> (AgentConversation, AgentAction) {
+    let database = store
+        .create_managed_database(
+            "user-1",
+            CreateManagedDatabaseRequest {
+                name: "Warehouse".to_owned(),
+                engine: ManagedDatabaseEngine::Postgres,
+                host: "localhost".to_owned(),
+                port: 5432,
+                database: "warehouse".to_owned(),
+                username: "readonly".to_owned(),
+                password: "password123".to_owned(),
+                tags: None,
+                ssl_mode: ManagedDatabaseSslMode::Disable,
+            },
+        )
+        .await
+        .unwrap();
+    let conversation = store
+        .create_agent_conversation(
+            "user-1",
+            CreateAgentConversationRequest {
+                title: Some("database diagram workspace".to_owned()),
+                managed_database_id: Some(database.id.clone()),
+            },
+        )
+        .await
+        .unwrap();
+    let turn = store
+        .create_agent_turn(
+            "user-1",
+            &conversation.id,
+            CreateAgentTurnRequest {
+                message: "生成数据库设计".to_owned(),
+                managed_database_id: Some(database.id.clone()),
+                dashboard_context: None,
+                client_request_id: None,
+            },
+        )
+        .await
+        .unwrap();
+    let action = store
+        .create_agent_action(
+            "user-1",
+            &turn.id,
+            CreateAgentActionRequest {
+                kind: AgentActionKind::CreateDatabaseDiagram,
+                title: "Create database design".to_owned(),
+                description: "Create a database design record from catalog metadata.".to_owned(),
+                payload: json!({
+                    "managed_database_id": database.id,
+                    "managed_database_name": database.name,
+                    "title": "Warehouse design",
+                    "description": "Generated from chat"
+                }),
+                resource_kind: Some(AgentResourceKind::DatabaseDiagram),
+                resource_id: None,
+                requires_confirmation: true,
+            },
+        )
+        .await
+        .unwrap();
+
+    (conversation, action)
+}
+
+fn generated_database_diagram_document() -> DatabaseDiagramDocument {
+    DatabaseDiagramDocument {
+        tables: vec![
+            DatabaseDiagramTable {
+                id: "table_public_users".to_owned(),
+                name: "users".to_owned(),
+                schema: Some("public".to_owned()),
+                position: DatabaseDiagramPoint { x: 80, y: 80 },
+                color: None,
+                comment: None,
+                columns: vec![DatabaseDiagramColumn {
+                    id: "column_public_users_id".to_owned(),
+                    name: "id".to_owned(),
+                    data_type: "uuid".to_owned(),
+                    nullable: false,
+                    primary_key: true,
+                    unique: true,
+                    default_value: None,
+                    comment: None,
+                }],
+                indexes: Vec::new(),
+            },
+            DatabaseDiagramTable {
+                id: "table_public_orders".to_owned(),
+                name: "orders".to_owned(),
+                schema: Some("public".to_owned()),
+                position: DatabaseDiagramPoint { x: 440, y: 80 },
+                color: None,
+                comment: None,
+                columns: vec![
+                    DatabaseDiagramColumn {
+                        id: "column_public_orders_id".to_owned(),
+                        name: "id".to_owned(),
+                        data_type: "uuid".to_owned(),
+                        nullable: false,
+                        primary_key: true,
+                        unique: true,
+                        default_value: None,
+                        comment: None,
+                    },
+                    DatabaseDiagramColumn {
+                        id: "column_public_orders_user_id".to_owned(),
+                        name: "user_id".to_owned(),
+                        data_type: "uuid".to_owned(),
+                        nullable: false,
+                        primary_key: false,
+                        unique: false,
+                        default_value: None,
+                        comment: None,
+                    },
+                ],
+                indexes: Vec::new(),
+            },
+        ],
+        relationships: vec![DatabaseDiagramRelationship {
+            id: "relationship_orders_user".to_owned(),
+            name: "orders_user_id_fkey".to_owned(),
+            source: DatabaseDiagramRelationshipEndpoint {
+                table_id: "table_public_orders".to_owned(),
+                table_name: "orders".to_owned(),
+                column_id: "column_public_orders_user_id".to_owned(),
+                column_name: "user_id".to_owned(),
+            },
+            target: DatabaseDiagramRelationshipEndpoint {
+                table_id: "table_public_users".to_owned(),
+                table_name: "users".to_owned(),
+                column_id: "column_public_users_id".to_owned(),
+                column_name: "id".to_owned(),
+            },
+            cardinality: DatabaseDiagramCardinality::ManyToOne,
+            on_update: Some("no_action".to_owned()),
+            on_delete: Some("cascade".to_owned()),
+        }],
+        ..DatabaseDiagramDocument::default()
+    }
 }
 
 async fn create_dependent_sql_actions_fixture(

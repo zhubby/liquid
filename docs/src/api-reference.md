@@ -134,6 +134,13 @@ Conversation query parameters:
 The stream endpoint emits typed `ChatStreamEvent` JSON frames and `ping` keepalive
 frames.
 
+Confirmed chat actions currently include SQL audit creation/lifecycle actions,
+Datapanel card creation, database restore queuing, and database design
+generation. A `create_database_diagram` action reads only PostgreSQL catalog
+metadata from the conversation's selected managed database after the user
+confirms `/api/v1/chat/actions/{action_id}/apply`; it then creates a normal
+`database_diagrams` record. There is no separate generation route.
+
 SQL mode assistant message parts may include rollback metadata:
 
 - `query_result_table.rollback` for write statements with `RETURNING`,
@@ -167,6 +174,21 @@ Datapanel SQL constraints:
 - result limit is clamped to `1..1000`,
 - materialization runs in a read-only transaction with a 5 second statement
   timeout.
+
+## Database Diagrams
+
+| Method | Path | Auth | Purpose |
+| --- | --- | --- | --- |
+| `GET` | `/api/v1/database-diagrams` | Yes | List the user's database design records. |
+| `POST` | `/api/v1/database-diagrams` | Yes | Create a database design record from a supplied document. |
+| `GET` | `/api/v1/database-diagrams/{id}` | Yes | Fetch one database design record. |
+| `PATCH` | `/api/v1/database-diagrams/{id}` | Yes | Update title, description, or document. |
+| `DELETE` | `/api/v1/database-diagrams/{id}` | Yes | Delete a database design record. |
+
+Chat-driven database design generation reuses these records through the existing
+chat action apply endpoint. The generated document contains table, column,
+primary key, unique index, index, foreign key relationship, and PostgreSQL enum
+metadata; it never reads business table data.
 
 ## Settings
 

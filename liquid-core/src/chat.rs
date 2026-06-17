@@ -363,4 +363,29 @@ pub enum ChatActionPreview {
         chart: Option<DatapanelChartConfig>,
         result: DatapanelQueryResult,
     },
+    DatabaseDiagram {
+        title: String,
+        description: Option<String>,
+        database_name: Option<String>,
+    },
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn database_diagram_action_preview_serializes_as_snake_case_variant() {
+        let preview = ChatActionPreview::DatabaseDiagram {
+            title: "Warehouse design".to_owned(),
+            description: Some("Generated from catalog metadata.".to_owned()),
+            database_name: Some("Warehouse".to_owned()),
+        };
+        let value = serde_json::to_value(preview).unwrap();
+
+        assert_eq!(value["kind"], "database_diagram");
+        assert_eq!(value["title"], "Warehouse design");
+        assert_eq!(value["description"], "Generated from catalog metadata.");
+        assert_eq!(value["database_name"], "Warehouse");
+    }
 }

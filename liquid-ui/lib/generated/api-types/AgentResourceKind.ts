@@ -5,4 +5,5 @@ export type AgentResourceKind =
   | "datapanel_card"
   | "managed_database"
   | "database_backup"
-  | "database_restore";
+  | "database_restore"
+  | "database_diagram";

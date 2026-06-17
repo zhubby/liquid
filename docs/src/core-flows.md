@@ -86,6 +86,14 @@ Applying an action records status changes and streams action updates back to the
 client. SQL action application uses the same SQL audit helpers as direct SQL
 audit routes, so action execution follows the same deterministic safety gates.
 
+`create_database_diagram` is also an apply-time action. The proposal payload
+stores the selected managed database id/name plus the requested diagram title
+and description. After confirmation, the API loads that managed database pool,
+reads PostgreSQL catalog metadata from non-system schemas, generates a
+`DatabaseDiagramDocument`, and persists it with the existing
+`database_diagrams` store. The generator is read-only: it does not inspect
+business table rows and does not run DDL or DML.
+
 ## SQL Audit Creation Flow
 
 ```mermaid
@@ -183,6 +191,29 @@ Card refresh runs the stored SELECT again and replaces `result`. Layout saves
 debounce on the frontend and call `PATCH /api/v1/datapanels/{panel_id}/layout`.
 Preview creation stores or returns a unique slug and exposes sanitized panel data
 through `/api/v1/datapanel-previews/{slug}` without authentication.
+
+## Database Diagram Flow
+
+Database design records can be created directly through
+`POST /api/v1/database-diagrams` or by applying a chat-proposed
+`create_database_diagram` action.
+
+The chat flow is:
+
+1. The user asks to generate a database design in a conversation scoped to a
+   managed database.
+2. The workbench agent proposes `create_database_diagram`; the frontend shows a
+   confirmation card with the target database, title, and description.
+3. On confirmation, `/api/v1/chat/actions/{action_id}/apply` reads the selected
+   PostgreSQL catalog and creates a `database_diagrams` record.
+4. The action is marked `applied` with `resource_kind=database_diagram` and the
+   new diagram id. If catalog reading or document generation fails, the action
+   is marked `failed` and the chat observation contains the error.
+
+Generated documents include ordinary tables and partitioned tables, columns,
+primary keys, unique constraints/indexes, indexes, foreign key relationships,
+and PostgreSQL enum types. Views, materialized views, foreign tables, and system
+schemas are excluded.
 
 ## Database Backup and Restore Foundation
 

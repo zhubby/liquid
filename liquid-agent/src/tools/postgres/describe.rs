@@ -216,7 +216,7 @@ async fn fetch_describe_indexes(pool: &PgPool, relation_oid: i64) -> Result<Vec<
     let rows = sqlx::query(
         r#"
         select
-          i.indexrelid::bigint as index_oid,
+          ix.indexrelid::bigint as index_oid,
           ni.nspname as schema_name,
           ci.relname as index_name,
           coalesce(array_remove(array_agg(a.attname order by key_ord.ordinality), null), array[]::text[]) as columns,
@@ -225,15 +225,14 @@ async fn fetch_describe_indexes(pool: &PgPool, relation_oid: i64) -> Result<Vec<
           ix.indisvalid,
           ix.indisready,
           pg_get_expr(ix.indpred, ix.indrelid) as predicate,
-          pg_get_indexdef(i.indexrelid) as definition
+          pg_get_indexdef(ix.indexrelid) as definition
         from pg_index ix
         join pg_class ci on ci.oid = ix.indexrelid
         join pg_namespace ni on ni.oid = ci.relnamespace
-        join pg_class i on i.oid = ix.indexrelid
         left join unnest(ix.indkey) with ordinality as key_ord(attnum, ordinality) on true
         left join pg_attribute a on a.attrelid = ix.indrelid and a.attnum = key_ord.attnum
         where ix.indrelid = $1::bigint::oid
-        group by i.indexrelid, ni.nspname, ci.relname, ix.indisunique, ix.indisprimary,
+        group by ix.indexrelid, ni.nspname, ci.relname, ix.indisunique, ix.indisprimary,
                  ix.indisvalid, ix.indisready, ix.indpred, ix.indrelid
         order by ci.relname
         "#,

@@ -1425,19 +1425,31 @@ function DatabaseDiagramEditor({
           <Button
             type="button"
             variant="outline"
-            size="sm"
+            size="icon"
+            className="size-9"
+            aria-label={copy.importJson}
+            title={copy.importJson}
             onClick={() => fileInputRef.current?.click()}
           >
             <Upload className="size-4" aria-hidden />
-            {copy.importJson}
-          </Button>
-          <Button type="button" variant="outline" size="sm" onClick={exportJson}>
-            <Download className="size-4" aria-hidden />
-            {copy.exportJson}
           </Button>
           <Button
             type="button"
-            size="sm"
+            variant="outline"
+            size="icon"
+            className="size-9"
+            aria-label={copy.exportJson}
+            title={copy.exportJson}
+            onClick={exportJson}
+          >
+            <Download className="size-4" aria-hidden />
+          </Button>
+          <Button
+            type="button"
+            size="icon"
+            className="size-9"
+            aria-label={isSaving ? copy.saving : copy.save}
+            title={isSaving ? copy.saving : copy.save}
             disabled={isSaving}
             onClick={() => void handleSave()}
           >
@@ -1446,7 +1458,6 @@ function DatabaseDiagramEditor({
             ) : (
               <Save className="size-4" aria-hidden />
             )}
-            {isSaving ? copy.saving : copy.save}
           </Button>
           <input
             ref={fileInputRef}

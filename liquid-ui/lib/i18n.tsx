@@ -549,6 +549,7 @@ const zhCN = {
       sql_execute: "执行 SQL",
       synthesize_observation: "整理结果",
       create_datapanel_card: "创建数据面板卡片",
+      database_diagram_generation: "生成数据库设计",
     },
     toolStatuses: {
       running: "处理中",
@@ -559,9 +560,12 @@ const zhCN = {
     confirming: "确认中",
     importToDatapanel: "导入数据面板",
     importingToDatapanel: "导入中",
+    generateDatabaseDesign: "生成数据库设计",
+    generatingDatabaseDesign: "生成中",
     reject: "拒绝",
     rejecting: "拒绝中",
     datapanelPreview: "数据面板卡片预览",
+    databaseDiagramPreview: "数据库设计预览",
     datapanelRows: (count: number) => `${count} 行`,
     queryResult: {
       title: "查询结果",
@@ -585,6 +589,7 @@ const zhCN = {
       delete_managed_database: "删除数据库",
       start_database_backup: "备份",
       start_database_restore: "恢复",
+      create_database_diagram: "创建数据库设计",
     },
     actionStatuses: {
       proposed: "待确认",
@@ -1265,6 +1270,7 @@ const enUS: Messages = {
       sql_execute: "Execute SQL",
       synthesize_observation: "Synthesize result",
       create_datapanel_card: "Create Datapanel card",
+      database_diagram_generation: "Generate database design",
     },
     toolStatuses: {
       running: "Running",
@@ -1275,9 +1281,12 @@ const enUS: Messages = {
     confirming: "Confirming",
     importToDatapanel: "Import to Datapanel",
     importingToDatapanel: "Importing",
+    generateDatabaseDesign: "Generate database design",
+    generatingDatabaseDesign: "Generating",
     reject: "Reject",
     rejecting: "Rejecting",
     datapanelPreview: "Datapanel card preview",
+    databaseDiagramPreview: "Database design preview",
     datapanelRows: (count: number) => `${count} ${count === 1 ? "row" : "rows"}`,
     queryResult: {
       title: "Query result",
@@ -1303,6 +1312,7 @@ const enUS: Messages = {
       delete_managed_database: "Delete database",
       start_database_backup: "Backup",
       start_database_restore: "Restore",
+      create_database_diagram: "Create database design",
     },
     actionStatuses: {
       proposed: "Proposed",

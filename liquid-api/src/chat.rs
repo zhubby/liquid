@@ -21,8 +21,8 @@ use liquid_core::{
     ChatSqlExecutionResponse, ChatStreamEvent, ChatStreamStage, ChatToolStatus, ChatTurn,
     ChatTurnDashboardContext, CreateAgentConversationRequest, CreateAgentTurnRequest,
     CreateChatConversationRequest, CreateChatSqlExecutionRequest, CreateChatTurnRequest,
-    DatabaseBackupRecord, DatabaseRestoreRecord, DatapanelQueryResult, ManagedDatabase,
-    ManagedDatabasePoolKey, SqlAuditRecord, SqlRollbackPlan, SqlStatementKind,
+    DatabaseBackupRecord, DatabaseDiagram, DatabaseRestoreRecord, DatapanelQueryResult,
+    ManagedDatabase, ManagedDatabasePoolKey, SqlAuditRecord, SqlRollbackPlan, SqlStatementKind,
     UpdateAgentConversationRequest, UpdateChatConversationRequest,
 };
 use liquid_storage::StorageError;
@@ -31,7 +31,7 @@ use serde_json::Value;
 use tokio::{spawn, time::sleep};
 
 use crate::{
-    agent_workbench::CreateDatapanelCardActionPayload,
+    agent_workbench::{CreateDatabaseDiagramActionPayload, CreateDatapanelCardActionPayload},
     agent_workbench::{
         append_event, apply_agent_action, run_agent_turn, synthesize_action_observation,
     },
@@ -1290,6 +1290,22 @@ fn action_result_message(
                 "Datapanel card created. Card ID: {}.",
                 resource_id.unwrap_or("unknown")
             ),
+            Some(liquid_core::AgentResourceKind::DatabaseDiagram) => result_payload
+                .and_then(database_diagram_record_from_result_payload)
+                .map(|diagram| {
+                    format!(
+                        "Database diagram created. Diagram ID: {}. Tables: {}. Relationships: {}.",
+                        diagram.id,
+                        diagram.document.tables.len(),
+                        diagram.document.relationships.len()
+                    )
+                })
+                .unwrap_or_else(|| {
+                    format!(
+                        "Database diagram created. Diagram ID: {}.",
+                        resource_id.unwrap_or("unknown")
+                    )
+                }),
             Some(kind) => format!(
                 "Action applied. Resource {kind:?}: {}.",
                 resource_id.unwrap_or("unknown")
@@ -1306,6 +1322,13 @@ fn action_result_message(
         | AgentActionStatus::Applying
         | AgentActionStatus::Superseded => "Action status updated.".to_owned(),
     }
+}
+
+fn database_diagram_record_from_result_payload(payload: &Value) -> Option<DatabaseDiagram> {
+    payload
+        .get("record")
+        .cloned()
+        .and_then(|record| serde_json::from_value::<DatabaseDiagram>(record).ok())
 }
 
 fn sql_audit_record_from_result_payload(payload: &Value) -> Option<SqlAuditRecord> {
@@ -2030,6 +2053,9 @@ fn chat_action_preview(action: &AgentAction) -> Option<ChatActionPreview> {
     match action.kind {
         liquid_core::AgentActionKind::CreateSqlAudit => chat_sql_audit_preview(action),
         liquid_core::AgentActionKind::CreateDatapanelCard => chat_datapanel_card_preview(action),
+        liquid_core::AgentActionKind::CreateDatabaseDiagram => {
+            chat_database_diagram_preview(action)
+        }
         _ => None,
     }
 }
@@ -2066,6 +2092,18 @@ fn chat_datapanel_card_preview(action: &AgentAction) -> Option<ChatActionPreview
         sql: payload.sql,
         chart: payload.chart,
         result,
+    })
+}
+
+fn chat_database_diagram_preview(action: &AgentAction) -> Option<ChatActionPreview> {
+    let payload =
+        serde_json::from_value::<CreateDatabaseDiagramActionPayload>(action.payload.clone())
+            .ok()?;
+
+    Some(ChatActionPreview::DatabaseDiagram {
+        title: payload.title,
+        description: payload.description,
+        database_name: Some(payload.managed_database_name),
     })
 }
 

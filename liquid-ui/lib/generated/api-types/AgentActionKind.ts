@@ -10,4 +10,5 @@ export type AgentActionKind =
   | "update_managed_database"
   | "delete_managed_database"
   | "start_database_backup"
-  | "start_database_restore";
+  | "start_database_restore"
+  | "create_database_diagram";

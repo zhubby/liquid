@@ -612,6 +612,65 @@ mod tests {
     }
 
     #[test]
+    fn parses_llm_database_diagram_action() {
+        let response = parse_llm_workbench_response(
+            r#"{
+                "message": "I prepared a database design action.",
+                "actions": [{
+                    "kind": "create_database_diagram",
+                    "title": "Warehouse design",
+                    "description": "Generate a database design from the selected catalog."
+                }]
+            }"#,
+            &llm_context(),
+        )
+        .unwrap();
+
+        assert_eq!(response.actions.len(), 1);
+        assert_eq!(
+            response.actions[0].kind,
+            AgentActionKind::CreateDatabaseDiagram
+        );
+        assert_eq!(
+            response.actions[0].resource_kind,
+            Some(AgentResourceKind::DatabaseDiagram)
+        );
+        assert_eq!(response.actions[0].payload["managed_database_id"], "db-1");
+        assert_eq!(
+            response.actions[0].payload["managed_database_name"],
+            "Warehouse"
+        );
+        assert_eq!(response.actions[0].payload["title"], "Warehouse design");
+        assert_eq!(
+            response.actions[0].payload["description"],
+            "Generate a database design from the selected catalog."
+        );
+        assert!(response.actions[0].requires_confirmation);
+    }
+
+    #[test]
+    fn rejects_database_diagram_action_without_selected_database() {
+        let mut context = llm_context();
+        context.managed_database = None;
+        let error = parse_llm_workbench_response(
+            r#"{
+                "message": "I prepared a database design action.",
+                "actions": [{
+                    "kind": "create_database_diagram",
+                    "title": "Warehouse design"
+                }]
+            }"#,
+            &context,
+        )
+        .unwrap_err();
+
+        assert_eq!(
+            error.to_string(),
+            "create_database_diagram requires a selected managed database"
+        );
+    }
+
+    #[test]
     fn rejects_bi_chart_without_y_keys() {
         let error = parse_llm_workbench_response(
             r#"{
@@ -1121,6 +1180,55 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn workbench_tool_loop_returns_database_diagram_proposal() {
+        let client = Arc::new(ScriptedWorkbenchLlmClient::new(vec![
+            LlmResponse::text("").with_tool_calls(vec![ToolCall::new(
+                "call_1",
+                "propose_database_diagram_action",
+                r#"{
+                    "title": "Warehouse design",
+                    "description": "Generate a database design from the selected catalog."
+                }"#,
+            )]),
+            LlmResponse::text(
+                r#"{
+                    "message": "我已准备好生成数据库设计，确认后会创建记录。",
+                    "actions": []
+                }"#,
+            ),
+        ]));
+        let agent = LlmWorkbenchAgent::new(
+            client,
+            "chat-model",
+            liquid_llm::LlmProtocol::ChatCompletions,
+        );
+
+        let response = agent
+            .respond_with_tools(llm_context(), ToolRegistry::new())
+            .await
+            .unwrap();
+
+        assert_eq!(response.actions.len(), 1);
+        assert_eq!(
+            response.actions[0].kind,
+            AgentActionKind::CreateDatabaseDiagram
+        );
+        assert_eq!(
+            response.actions[0].resource_kind,
+            Some(AgentResourceKind::DatabaseDiagram)
+        );
+        assert_eq!(response.actions[0].payload["managed_database_id"], "db-1");
+        assert_eq!(
+            response.actions[0].payload["managed_database_name"],
+            "Warehouse"
+        );
+        assert_eq!(response.actions[0].payload["title"], "Warehouse design");
+        assert!(response.waiting_for_user);
+        assert_eq!(response.tool_steps.len(), 1);
+        assert!(response.tool_steps[0].proposal.is_some());
+    }
+
+    #[tokio::test]
     async fn workbench_tool_loop_returns_tool_errors_to_model_for_correction() {
         let client = Arc::new(ScriptedWorkbenchLlmClient::new(vec![
             LlmResponse::text("").with_tool_calls(vec![ToolCall::new(
@@ -1319,6 +1427,7 @@ mod tests {
         assert!(system_prompt.contains("tool_capabilities.write_sql_execution"));
         assert!(system_prompt.contains("LIQUID_SQL_EXECUTION=write_gated"));
         assert!(system_prompt.contains("propose_datapanel_card_action"));
+        assert!(system_prompt.contains("propose_database_diagram_action"));
         assert!(system_prompt.contains("not for ordinary read questions"));
         assert!(
             request.messages[1]
@@ -1329,6 +1438,11 @@ mod tests {
             request.messages[1]
                 .content
                 .contains("\"write_sql_execution\": true")
+        );
+        assert!(
+            request.messages[1]
+                .content
+                .contains("\"database_diagrams\": true")
         );
     }
 }

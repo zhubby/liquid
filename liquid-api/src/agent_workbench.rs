@@ -12,10 +12,11 @@ use liquid_agent::{
 use liquid_core::{
     AgentAction, AgentActionKind, AgentEventRecord, AgentEventType, AgentMessageRole,
     AgentResourceKind, AgentTurn, AgentTurnStatus, ApproveSqlAuditRequest,
-    CreateAgentActionRequest, CreateDatapanelCardRequest, CreateSqlAuditRequest, Datapanel,
-    DatapanelCard, DatapanelCardKind, DatapanelCardLayout, DatapanelChartConfig,
-    DatapanelChartType, DatapanelQueryResult, EnqueueDatabaseRestore, ManagedDatabasePoolKey,
-    PublicUser, RejectSqlAuditRequest, SqlAuditRecord, SqlAuditStatus,
+    CreateAgentActionRequest, CreateDatabaseDiagramRequest, CreateDatapanelCardRequest,
+    CreateSqlAuditRequest, DatabaseDiagram, Datapanel, DatapanelCard, DatapanelCardKind,
+    DatapanelCardLayout, DatapanelChartConfig, DatapanelChartType, DatapanelQueryResult,
+    EnqueueDatabaseRestore, ManagedDatabasePoolKey, PublicUser, RejectSqlAuditRequest,
+    SqlAuditRecord, SqlAuditStatus,
 };
 use liquid_storage::SqlAuditListFilters;
 use serde::{Deserialize, Serialize};
@@ -81,6 +82,15 @@ pub(crate) struct CreateDatapanelCardActionPayload {
     pub(crate) layout: Option<DatapanelCardLayout>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub(crate) result: Option<DatapanelQueryResult>,
+}
+
+#[derive(Debug, Clone, Deserialize, Serialize)]
+pub(crate) struct CreateDatabaseDiagramActionPayload {
+    pub(crate) managed_database_id: String,
+    pub(crate) managed_database_name: String,
+    pub(crate) title: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub(crate) description: Option<String>,
 }
 
 #[derive(Debug, Clone, Serialize)]
@@ -726,6 +736,17 @@ fn workbench_tool_display(name: &str, succeeded: bool) -> WorkbenchToolDisplay {
             },
             next_summary: "Waiting for confirmation",
         },
+        "propose_database_diagram_action" => WorkbenchToolDisplay {
+            stage: "proposing_action",
+            title: "Prepare database design",
+            started_summary: "Preparing a database design confirmation",
+            finished_summary: if succeeded {
+                "Database design is ready for confirmation"
+            } else {
+                finished_summary
+            },
+            next_summary: "Waiting for confirmation",
+        },
         "propose_sql_audit_decision" => WorkbenchToolDisplay {
             stage: "proposing_action",
             title: "Prepare audit decision",
@@ -892,6 +913,9 @@ async fn apply_agent_action_inner(
 
             Ok(datapanel_card_result(card, AgentEventType::ResourceCreated))
         }
+        AgentActionKind::CreateDatabaseDiagram => {
+            apply_create_database_diagram_action(state, owner_user_id, action).await
+        }
         AgentActionKind::ApproveSqlAudit => {
             let payload = sql_audit_payload(action)?;
             let record = state
@@ -970,6 +994,102 @@ async fn apply_agent_action_inner(
             "this agent action kind is not supported by the workbench API yet",
         )),
     }
+}
+
+async fn apply_create_database_diagram_action(
+    state: &ApiState,
+    owner_user_id: &str,
+    action: &AgentAction,
+) -> Result<(AgentResourceKind, String, AgentEventType, Value), ApiError> {
+    let payload: CreateDatabaseDiagramActionPayload =
+        serde_json::from_value(action.payload.clone())
+            .map_err(|error| ApiError::bad_request(error.to_string()))?;
+    let pool = state
+        .managed_database_pools
+        .get_pool(ManagedDatabasePoolKey::new(
+            owner_user_id.to_owned(),
+            payload.managed_database_id.clone(),
+        ))
+        .await?;
+    let tool_id = format!("{}:database_diagram", action.id);
+    let started_at = Instant::now();
+
+    append_tool_started(
+        state,
+        owner_user_id,
+        &action.turn_id,
+        &tool_id,
+        "database_diagram_generation",
+        "Generate database design",
+        "Reading PostgreSQL catalog metadata",
+        "loading_context",
+    )
+    .await?;
+    let document = match state.database_diagram_generator.generate(pool).await {
+        Ok(document) => {
+            append_tool_finished(
+                state,
+                owner_user_id,
+                &action.turn_id,
+                ToolFinishedPayload {
+                    id: &tool_id,
+                    name: "database_diagram_generation",
+                    status: "succeeded",
+                    summary: "Database design document generated",
+                    elapsed_ms: started_at.elapsed().as_millis() as u64,
+                    output_preview: Some(format!(
+                        "{} table{} and {} relationship{}",
+                        document.tables.len(),
+                        if document.tables.len() == 1 { "" } else { "s" },
+                        document.relationships.len(),
+                        if document.relationships.len() == 1 {
+                            ""
+                        } else {
+                            "s"
+                        }
+                    )),
+                    next_summary: Some("Creating the database design record"),
+                },
+            )
+            .await?;
+            document
+        }
+        Err(error) => {
+            let message = error.to_string();
+            append_tool_finished(
+                state,
+                owner_user_id,
+                &action.turn_id,
+                ToolFinishedPayload {
+                    id: &tool_id,
+                    name: "database_diagram_generation",
+                    status: "failed",
+                    summary: "Database design generation failed",
+                    elapsed_ms: started_at.elapsed().as_millis() as u64,
+                    output_preview: Some(message.clone()),
+                    next_summary: Some("Preparing the failure response"),
+                },
+            )
+            .await?;
+            return Err(ApiError::internal(anyhow::anyhow!(message)));
+        }
+    };
+    let diagram = state
+        .store
+        .create_database_diagram(
+            owner_user_id,
+            CreateDatabaseDiagramRequest {
+                title: payload.title,
+                description: payload.description,
+                document: Some(document),
+            },
+        )
+        .await?;
+
+    Ok(database_diagram_result(
+        diagram,
+        AgentEventType::ResourceCreated,
+    ))
 }
 
 async fn apply_create_sql_audit_action(
@@ -1496,6 +1616,22 @@ fn datapanel_card_result(
             "resource_kind": "datapanel_card",
             "resource_id": card.id,
             "record": card,
+        }),
+    )
+}
+
+fn database_diagram_result(
+    diagram: DatabaseDiagram,
+    event_type: AgentEventType,
+) -> (AgentResourceKind, String, AgentEventType, Value) {
+    (
+        AgentResourceKind::DatabaseDiagram,
+        diagram.id.clone(),
+        event_type,
+        json!({
+            "resource_kind": "database_diagram",
+            "resource_id": diagram.id,
+            "record": diagram,
         }),
     )
 }

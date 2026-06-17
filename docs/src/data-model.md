@@ -145,6 +145,25 @@ Datapanel cards store:
 The frontend renders layout using a 12-column grid. Card layout is stored as
 `x`, `y`, `w`, and `h`.
 
+## Database Diagram Tables
+
+| Table | Purpose |
+| --- | --- |
+| `database_diagrams` | User-owned database design records with title, optional description, and document JSON. |
+
+Database diagram documents store canvas-ready database design metadata:
+
+- `tables` with schema, position, columns, and indexes,
+- `relationships` with source/target endpoints, cardinality, and referential
+  actions,
+- `enums`,
+- optional freeform `notes` and `areas`.
+
+The table is intentionally decoupled from `managed_databases`. Chat-generated
+database designs record the source database in the agent action payload and the
+diagram title/description, but the persisted diagram record does not keep a
+foreign key to the managed database.
+
 ## Database Backup Tables
 
 | Table | Purpose |

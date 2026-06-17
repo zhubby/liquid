@@ -13,8 +13,8 @@ use crate::{
 use super::{
     LlmWorkbenchContext,
     actions::{
-        DatapanelCardSuggestionInput, datapanel_card_suggestion, sql_audit_llm_action,
-        sql_operation_suggestion,
+        DatapanelCardSuggestionInput, database_diagram_suggestion, datapanel_card_suggestion,
+        sql_audit_llm_action, sql_operation_suggestion,
     },
     response::WorkbenchActionSuggestion,
 };
@@ -22,6 +22,7 @@ use super::{
 const WORKBENCH_PROPOSAL_TOOL_NAMES: &[&str] = &[
     "propose_sql_operation",
     "propose_datapanel_card_action",
+    "propose_database_diagram_action",
     "propose_sql_audit_decision",
     "propose_database_restore",
 ];
@@ -29,6 +30,7 @@ const WORKBENCH_PROPOSAL_TOOL_NAMES: &[&str] = &[
 pub(super) fn register_workbench_proposal_tools(tools: &mut ToolRegistry) {
     tools.register(ProposeSqlOperationTool);
     tools.register(ProposeDatapanelCardActionTool);
+    tools.register(ProposeDatabaseDiagramActionTool);
     tools.register(ProposeSqlAuditDecisionTool);
     tools.register(ProposeDatabaseRestoreTool);
 }
@@ -69,6 +71,11 @@ pub(super) fn proposal_tool_call_to_suggestion(
 
             datapanel_card_suggestion(context, args)
         }
+        "propose_database_diagram_action" => {
+            let args: ProposeDatabaseDiagramArgs = serde_json::from_str(&call.arguments)?;
+
+            database_diagram_suggestion(context, args.title, args.description)
+        }
         "propose_sql_audit_decision" => {
             let args: ProposeSqlAuditDecisionArgs = serde_json::from_str(&call.arguments)?;
             let kind = match args.decision {
@@ -107,6 +114,46 @@ pub(super) fn proposal_tool_call_to_suggestion(
             })
         }
         _ => bail!("unsupported workbench proposal tool: {}", call.name),
+    }
+}
+
+#[derive(Debug, Default, Clone)]
+struct ProposeDatabaseDiagramActionTool;
+
+#[async_trait]
+impl AgentTool for ProposeDatabaseDiagramActionTool {
+    fn definition(&self) -> ToolDefinition {
+        ToolDefinition::new(
+            "propose_database_diagram_action",
+            "Create a user-confirmed database design proposal from the selected managed database catalog. This does not create the diagram until confirmation.",
+            json!({
+                "type": "object",
+                "properties": {
+                    "title": {
+                        "type": "string",
+                        "description": "Short title for the generated database design."
+                    },
+                    "description": {
+                        "type": "string",
+                        "description": "Optional description for the generated database design."
+                    }
+                },
+                "required": ["title"],
+                "additionalProperties": false
+            }),
+        )
+    }
+
+    async fn execute(&self, arguments: Value) -> Result<ToolOutput> {
+        let args: ProposeDatabaseDiagramArgs = serde_json::from_value(arguments)?;
+
+        Ok(ToolOutput::json(json!({
+            "ok": true,
+            "type": "action_proposal",
+            "kind": "create_database_diagram",
+            "title": args.title,
+            "description": args.description,
+        })))
     }
 }
 
@@ -387,6 +434,14 @@ struct ProposeSqlAuditDecisionArgs {
     title: String,
     description: String,
     sql_audit_id: String,
+}
+
+#[derive(Debug, Deserialize)]
+#[serde(deny_unknown_fields)]
+struct ProposeDatabaseDiagramArgs {
+    title: String,
+    #[serde(default)]
+    description: Option<String>,
 }
 
 #[derive(Debug, Deserialize)]

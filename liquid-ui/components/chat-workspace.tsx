@@ -2150,10 +2150,14 @@ function ActionCard({
       ? t.workspace.retry
       : action.preview?.kind === "datapanel_card"
         ? t.workspace.importToDatapanel
+        : action.preview?.kind === "database_diagram"
+          ? t.workspace.generateDatabaseDesign
         : t.workspace.confirm;
   const applyingLabel =
     action.preview?.kind === "datapanel_card"
       ? t.workspace.importingToDatapanel
+      : action.preview?.kind === "database_diagram"
+        ? t.workspace.generatingDatabaseDesign
       : t.workspace.confirming;
 
   return (
@@ -2209,6 +2213,10 @@ function ActionCard({
         <DatapanelActionPreview action={action} />
       ) : null}
 
+      {action.preview?.kind === "database_diagram" ? (
+        <DatabaseDiagramActionPreview action={action} />
+      ) : null}
+
       <div className="mt-3 flex flex-wrap gap-2">
         {isActionable ? (
           <>
@@ -2222,6 +2230,8 @@ function ActionCard({
                 <Loader2 className="size-4 animate-spin" aria-hidden />
               ) : action.preview?.kind === "datapanel_card" ? (
                 <PanelRightOpen className="size-4" aria-hidden />
+              ) : action.preview?.kind === "database_diagram" ? (
+                <FileJson className="size-4" aria-hidden />
               ) : (
                 <CheckCircle2 className="size-4" aria-hidden />
               )}
@@ -2302,6 +2312,41 @@ function DatapanelActionPreview({ action }: { action: ChatAction }) {
         </div>
       </div>
       <CodeBlock code={preview.sql} language="sql" />
+    </div>
+  );
+}
+
+function DatabaseDiagramActionPreview({ action }: { action: ChatAction }) {
+  const { t } = useI18n();
+
+  if (action.preview?.kind !== "database_diagram") {
+    return null;
+  }
+
+  const preview = action.preview;
+
+  return (
+    <div className="mt-3 space-y-2 border-l pl-3">
+      <div className="flex flex-wrap items-center gap-2 text-xs text-muted-foreground">
+        <FileJson className="size-3.5" aria-hidden />
+        <span>{t.workspace.databaseDiagramPreview}</span>
+        {preview.database_name ? (
+          <Badge variant="outline" className="h-5 rounded-md px-1.5 text-[11px]">
+            <Database className="size-3" aria-hidden />
+            {preview.database_name}
+          </Badge>
+        ) : null}
+      </div>
+      <div className="min-w-0">
+        <p className="truncate text-sm font-medium text-foreground">
+          {preview.title}
+        </p>
+        {preview.description ? (
+          <p className="mt-1 text-xs leading-5 text-muted-foreground">
+            {preview.description}
+          </p>
+        ) : null}
+      </div>
     </div>
   );
 }

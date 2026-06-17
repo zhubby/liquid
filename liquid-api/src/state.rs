@@ -14,6 +14,9 @@ use liquid_storage::{LiquidStore, ManagedDatabasePoolManager};
 use sqlx::PgPool;
 
 use crate::chat_sql::{ChatSqlExecutor, DefaultChatSqlExecutor};
+use crate::database_diagram_generation::{
+    DatabaseDiagramGenerator, PostgresDatabaseDiagramGenerator,
+};
 
 pub type ApprovedSqlExecutionFuture<'a> =
     Pin<Box<dyn Future<Output = anyhow::Result<ApprovedWriteExecutionResult>> + Send + 'a>>;
@@ -74,6 +77,7 @@ pub struct ApiState {
     pub(crate) approved_sql_executor: Arc<dyn ApprovedSqlExecutor>,
     pub(crate) chat_sql_executor: Arc<dyn ChatSqlExecutor>,
     pub(crate) managed_database_connection_tester: Arc<dyn ManagedDatabaseConnectionTester>,
+    pub(crate) database_diagram_generator: Arc<dyn DatabaseDiagramGenerator>,
     pub(crate) workbench: WorkbenchConfig,
 }
 
@@ -188,6 +192,7 @@ impl ApiState {
             approved_sql_executor,
             chat_sql_executor,
             managed_database_connection_tester,
+            database_diagram_generator: Arc::new(PostgresDatabaseDiagramGenerator),
             workbench: WorkbenchConfig::default(),
             database_backups: Arc::new(UnsupportedDatabaseBackupStore),
         }
@@ -203,6 +208,14 @@ impl ApiState {
         database_backups: Arc<dyn DatabaseBackupMetadataStore>,
     ) -> Self {
         self.database_backups = database_backups;
+        self
+    }
+
+    pub fn with_database_diagram_generator(
+        mut self,
+        database_diagram_generator: Arc<dyn DatabaseDiagramGenerator>,
+    ) -> Self {
+        self.database_diagram_generator = database_diagram_generator;
         self
     }
 }

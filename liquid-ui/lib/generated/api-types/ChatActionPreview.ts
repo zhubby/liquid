@@ -16,4 +16,9 @@ export type ChatActionPreview = {
   sql: string;
   chart: DatapanelChartConfig | null;
   result: DatapanelQueryResult;
+} | {
+  "kind": "database_diagram";
+  title: string;
+  description: string | null;
+  database_name: string | null;
 };

@@ -1136,6 +1136,7 @@ fn parse_action_kind(value: &str) -> Result<AgentActionKind, StorageError> {
         "delete_managed_database" => Ok(AgentActionKind::DeleteManagedDatabase),
         "start_database_backup" => Ok(AgentActionKind::StartDatabaseBackup),
         "start_database_restore" => Ok(AgentActionKind::StartDatabaseRestore),
+        "create_database_diagram" => Ok(AgentActionKind::CreateDatabaseDiagram),
         other => Err(StorageError::Validation(format!(
             "unsupported agent action kind: {other}"
         ))),
@@ -1163,6 +1164,7 @@ fn parse_resource_kind(value: &str) -> Result<AgentResourceKind, StorageError> {
         "managed_database" => Ok(AgentResourceKind::ManagedDatabase),
         "database_backup" => Ok(AgentResourceKind::DatabaseBackup),
         "database_restore" => Ok(AgentResourceKind::DatabaseRestore),
+        "database_diagram" => Ok(AgentResourceKind::DatabaseDiagram),
         other => Err(StorageError::Validation(format!(
             "unsupported agent resource kind: {other}"
         ))),

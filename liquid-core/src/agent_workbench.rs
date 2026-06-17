@@ -260,6 +260,7 @@ pub enum AgentActionKind {
     DeleteManagedDatabase,
     StartDatabaseBackup,
     StartDatabaseRestore,
+    CreateDatabaseDiagram,
 }
 
 impl AgentActionKind {
@@ -275,6 +276,7 @@ impl AgentActionKind {
             Self::DeleteManagedDatabase => "delete_managed_database",
             Self::StartDatabaseBackup => "start_database_backup",
             Self::StartDatabaseRestore => "start_database_restore",
+            Self::CreateDatabaseDiagram => "create_database_diagram",
         }
     }
 }
@@ -313,6 +315,7 @@ pub enum AgentResourceKind {
     ManagedDatabase,
     DatabaseBackup,
     DatabaseRestore,
+    DatabaseDiagram,
 }
 
 impl AgentResourceKind {
@@ -323,6 +326,7 @@ impl AgentResourceKind {
             Self::ManagedDatabase => "managed_database",
             Self::DatabaseBackup => "database_backup",
             Self::DatabaseRestore => "database_restore",
+            Self::DatabaseDiagram => "database_diagram",
         }
     }
 }
@@ -397,4 +401,33 @@ pub struct AgentCapability {
 pub struct AgentCapabilitiesResponse {
     pub mode: String,
     pub capabilities: Vec<AgentCapability>,
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn database_diagram_action_kind_serializes_as_snake_case() {
+        assert_eq!(
+            serde_json::to_value(AgentActionKind::CreateDatabaseDiagram).unwrap(),
+            serde_json::json!("create_database_diagram")
+        );
+        assert_eq!(
+            AgentActionKind::CreateDatabaseDiagram.as_str(),
+            "create_database_diagram"
+        );
+    }
+
+    #[test]
+    fn database_diagram_resource_kind_serializes_as_snake_case() {
+        assert_eq!(
+            serde_json::to_value(AgentResourceKind::DatabaseDiagram).unwrap(),
+            serde_json::json!("database_diagram")
+        );
+        assert_eq!(
+            AgentResourceKind::DatabaseDiagram.as_str(),
+            "database_diagram"
+        );
+    }
 }
